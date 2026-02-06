@@ -71,23 +71,11 @@ int wolfSPDM_HkdfExpandLabel(byte spdmVersion, const byte* secret, word32 secret
     infoLen += SPDM_BIN_CONCAT_PREFIX_LEN;
 
     XMEMCPY(info + infoLen, label, XSTRLEN(label));
-    infoLen += XSTRLEN(label);
+    infoLen += (word32)XSTRLEN(label);
 
     if (context != NULL && contextSz > 0) {
         XMEMCPY(info + infoLen, context, contextSz);
         infoLen += contextSz;
-    }
-
-    /* Debug: print HKDF info parameter */
-    {
-        word32 i;
-        printf("[wolfSPDM] HKDF Label: \"%s\" outSz=%u\n", label, outSz);
-        printf("[wolfSPDM] HKDF info (%u bytes): ", infoLen);
-        for (i = 0; i < infoLen && i < 32; i++) {
-            printf("%02x ", info[i]);
-        }
-        if (infoLen > 32) printf("...");
-        printf("\n");
     }
 
     rc = wc_HKDF_Expand(WC_SHA384, secret, secretSz, info, infoLen, out, outSz);

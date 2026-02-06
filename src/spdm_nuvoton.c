@@ -349,7 +349,6 @@ int wolfSPDM_ParseTcgSecuredMessage(
 #define SPDM_VERSION_1_3              0x13
 #define SPDM_VENDOR_DEFINED_REQUEST   0xFE
 #define SPDM_VENDOR_DEFINED_RESPONSE  0x7E
-#define SPDM_ERROR                    0x7F
 
 int wolfSPDM_BuildVendorDefined(
     const char* vdCode,

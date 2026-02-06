@@ -267,6 +267,7 @@ byte wolfSPDM_GetVersion_Negotiated(WOLFSPDM_CTX* ctx)
     return ctx->spdmVersion;
 }
 
+#ifdef WOLFSPDM_NUVOTON
 word32 wolfSPDM_GetConnectionHandle(WOLFSPDM_CTX* ctx)
 {
     if (ctx == NULL) {
@@ -282,6 +283,7 @@ word16 wolfSPDM_GetFipsIndicator(WOLFSPDM_CTX* ctx)
     }
     return ctx->fipsIndicator;
 }
+#endif
 
 /* ==========================================================================
  * Session Establishment - Connect (Full Handshake)

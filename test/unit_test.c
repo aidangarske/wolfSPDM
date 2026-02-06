@@ -27,6 +27,15 @@ static int g_testsFailed = 0;
     return 0; \
 } while(0)
 
+/* Dummy I/O callback for testing */
+static int dummy_io_cb(WOLFSPDM_CTX* ctx, const byte* txBuf, word32 txSz,
+    byte* rxBuf, word32* rxSz, void* userCtx)
+{
+    (void)ctx; (void)txBuf; (void)txSz;
+    (void)rxBuf; (void)rxSz; (void)userCtx;
+    return -1;
+}
+
 /* ========================================================================== */
 /* Context Tests */
 /* ========================================================================== */
@@ -109,9 +118,9 @@ static int test_context_set_io(void)
     wolfSPDM_Init(ctx);
 
     /* Dummy callback for testing */
-    rc = wolfSPDM_SetIO(ctx, (WOLFSPDM_IO_CB)0x12345678, &dummy);
+    rc = wolfSPDM_SetIO(ctx, dummy_io_cb, &dummy);
     TEST_ASSERT(rc == WOLFSPDM_SUCCESS, "SetIO failed");
-    TEST_ASSERT(ctx->ioCb == (WOLFSPDM_IO_CB)0x12345678, "IO callback not set");
+    TEST_ASSERT(ctx->ioCb == dummy_io_cb, "IO callback not set");
     TEST_ASSERT(ctx->ioUserCtx == &dummy, "User context not set");
 
     /* NULL callback should fail */
@@ -363,85 +372,115 @@ static int test_build_get_version(void)
 
 static int test_build_get_capabilities(void)
 {
+    WOLFSPDM_CTX* ctx;
     byte buf[32];
     word32 bufSz = sizeof(buf);
     int rc;
 
     printf("test_build_get_capabilities...\n");
 
-    rc = wolfSPDM_BuildGetCapabilities(buf, &bufSz, WOLFSPDM_DEFAULT_REQ_CAPS);
+    ctx = wolfSPDM_New();
+    wolfSPDM_Init(ctx);
+    ctx->spdmVersion = SPDM_VERSION_12;
+
+    rc = wolfSPDM_BuildGetCapabilities(ctx, buf, &bufSz);
     TEST_ASSERT(rc == WOLFSPDM_SUCCESS, "BuildGetCapabilities failed");
     TEST_ASSERT(bufSz == 20, "GET_CAPABILITIES should be 20 bytes");
     TEST_ASSERT(buf[0] == SPDM_VERSION_12, "Version should be 0x12");
     TEST_ASSERT(buf[1] == SPDM_GET_CAPABILITIES, "Code should be 0xE1");
 
+    wolfSPDM_Free(ctx);
     TEST_PASS();
 }
 
 static int test_build_negotiate_algorithms(void)
 {
+    WOLFSPDM_CTX* ctx;
     byte buf[64];
     word32 bufSz = sizeof(buf);
     int rc;
 
     printf("test_build_negotiate_algorithms...\n");
 
-    rc = wolfSPDM_BuildNegotiateAlgorithms(buf, &bufSz);
+    ctx = wolfSPDM_New();
+    wolfSPDM_Init(ctx);
+    ctx->spdmVersion = SPDM_VERSION_12;
+
+    rc = wolfSPDM_BuildNegotiateAlgorithms(ctx, buf, &bufSz);
     TEST_ASSERT(rc == WOLFSPDM_SUCCESS, "BuildNegotiateAlgorithms failed");
     TEST_ASSERT(bufSz == 48, "NEGOTIATE_ALGORITHMS should be 48 bytes");
     TEST_ASSERT(buf[0] == SPDM_VERSION_12, "Version should be 0x12");
     TEST_ASSERT(buf[1] == SPDM_NEGOTIATE_ALGORITHMS, "Code should be 0xE3");
 
+    wolfSPDM_Free(ctx);
     TEST_PASS();
 }
 
 static int test_build_get_digests(void)
 {
+    WOLFSPDM_CTX* ctx;
     byte buf[16];
     word32 bufSz = sizeof(buf);
     int rc;
 
     printf("test_build_get_digests...\n");
 
-    rc = wolfSPDM_BuildGetDigests(buf, &bufSz);
+    ctx = wolfSPDM_New();
+    wolfSPDM_Init(ctx);
+    ctx->spdmVersion = SPDM_VERSION_12;
+
+    rc = wolfSPDM_BuildGetDigests(ctx, buf, &bufSz);
     TEST_ASSERT(rc == WOLFSPDM_SUCCESS, "BuildGetDigests failed");
     TEST_ASSERT(bufSz == 4, "GET_DIGESTS should be 4 bytes");
     TEST_ASSERT(buf[1] == SPDM_GET_DIGESTS, "Code should be 0x81");
 
+    wolfSPDM_Free(ctx);
     TEST_PASS();
 }
 
 static int test_build_get_certificate(void)
 {
+    WOLFSPDM_CTX* ctx;
     byte buf[16];
     word32 bufSz = sizeof(buf);
     int rc;
 
     printf("test_build_get_certificate...\n");
 
-    rc = wolfSPDM_BuildGetCertificate(buf, &bufSz, 0, 0, 1024);
+    ctx = wolfSPDM_New();
+    wolfSPDM_Init(ctx);
+    ctx->spdmVersion = SPDM_VERSION_12;
+
+    rc = wolfSPDM_BuildGetCertificate(ctx, buf, &bufSz, 0, 0, 1024);
     TEST_ASSERT(rc == WOLFSPDM_SUCCESS, "BuildGetCertificate failed");
     TEST_ASSERT(bufSz == 8, "GET_CERTIFICATE should be 8 bytes");
     TEST_ASSERT(buf[1] == SPDM_GET_CERTIFICATE, "Code should be 0x82");
     TEST_ASSERT(buf[2] == 0x00, "SlotID should be 0");
     TEST_ASSERT(buf[6] == 0x00 && buf[7] == 0x04, "Length should be 1024");
 
+    wolfSPDM_Free(ctx);
     TEST_PASS();
 }
 
 static int test_build_end_session(void)
 {
+    WOLFSPDM_CTX* ctx;
     byte buf[16];
     word32 bufSz = sizeof(buf);
     int rc;
 
     printf("test_build_end_session...\n");
 
-    rc = wolfSPDM_BuildEndSession(buf, &bufSz);
+    ctx = wolfSPDM_New();
+    wolfSPDM_Init(ctx);
+    ctx->spdmVersion = SPDM_VERSION_12;
+
+    rc = wolfSPDM_BuildEndSession(ctx, buf, &bufSz);
     TEST_ASSERT(rc == WOLFSPDM_SUCCESS, "BuildEndSession failed");
     TEST_ASSERT(bufSz == 4, "END_SESSION should be 4 bytes");
     TEST_ASSERT(buf[1] == SPDM_END_SESSION, "Code should be 0xEA");
 
+    wolfSPDM_Free(ctx);
     TEST_PASS();
 }
 

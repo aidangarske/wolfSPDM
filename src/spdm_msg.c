@@ -486,7 +486,8 @@ int wolfSPDM_ParseCapabilities(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufSz)
         return WOLFSPDM_E_CAPS_MISMATCH;
     }
 
-    ctx->rspCaps = buf[8] | (buf[9] << 8) | (buf[10] << 16) | (buf[11] << 24);
+    ctx->rspCaps = (word32)buf[8] | ((word32)buf[9] << 8) |
+                   ((word32)buf[10] << 16) | ((word32)buf[11] << 24);
     ctx->state = WOLFSPDM_STATE_CAPS;
 
     wolfSPDM_DebugPrint(ctx, "Responder caps: 0x%08x\n", ctx->rspCaps);
@@ -545,8 +546,8 @@ int wolfSPDM_ParseCertificate(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufSz,
         return WOLFSPDM_E_CERT_FAIL;
     }
 
-    *portionLen = buf[4] | (buf[5] << 8);
-    *remainderLen = buf[6] | (buf[7] << 8);
+    *portionLen = (word16)(buf[4] | (buf[5] << 8));
+    *remainderLen = (word16)(buf[6] | (buf[7] << 8));
 
     /* Add certificate chain data (starting at offset 8) */
     if (*portionLen > 0 && bufSz >= (word32)(8 + *portionLen)) {
@@ -590,8 +591,8 @@ int wolfSPDM_ParseKeyExchangeRsp(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufS
         return WOLFSPDM_E_KEY_EXCHANGE;
     }
 
-    ctx->rspSessionId = buf[4] | (buf[5] << 8);
-    ctx->sessionId = ctx->reqSessionId | (ctx->rspSessionId << 16);
+    ctx->rspSessionId = (word16)(buf[4] | (buf[5] << 8));
+    ctx->sessionId = (word32)ctx->reqSessionId | ((word32)ctx->rspSessionId << 16);
 
     wolfSPDM_DebugPrint(ctx, "RspSessionID: 0x%04x, SessionID: 0x%08x\n",
         ctx->rspSessionId, ctx->sessionId);
@@ -601,7 +602,7 @@ int wolfSPDM_ParseKeyExchangeRsp(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufS
     XMEMCPY(peerPubKeyY, &buf[88], WOLFSPDM_ECC_KEY_SIZE);
 
     /* OpaqueLen at offset 136 */
-    opaqueLen = buf[136] | (buf[137] << 8);
+    opaqueLen = (word16)(buf[136] | (buf[137] << 8));
     sigOffset = 138 + opaqueLen;
     keRspPartialLen = sigOffset;
 

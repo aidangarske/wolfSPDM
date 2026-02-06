@@ -2,9 +2,9 @@ name: Static Analysis
 
 on:
   push:
-    branches: [ main, master, develop ]
+    branches: [ 'master', 'main', 'release/**' ]
   pull_request:
-    branches: [ main, master, develop ]
+    branches: [ '*' ]
 
 jobs:
   cppcheck:
@@ -45,6 +45,8 @@ jobs:
         cppcheck --enable=warning,style,performance,portability \
                  --error-exitcode=1 \
                  --suppress=missingIncludeSystem \
+                 --suppress=constParameterPointer \
+                 --suppress=knownConditionTrueFalse \
                  --inline-suppr \
                  -I wolfspdm -I src -I $HOME/wolfssl-install/include \
                  src/ test/

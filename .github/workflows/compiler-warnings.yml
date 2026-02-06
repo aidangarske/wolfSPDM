@@ -2,9 +2,9 @@ name: Compiler Warnings
 
 on:
   push:
-    branches: [ main, master, develop ]
+    branches: [ 'master', 'main', 'release/**' ]
   pull_request:
-    branches: [ main, master, develop ]
+    branches: [ '*' ]
 
 jobs:
   gcc-strict:
@@ -42,9 +42,8 @@ jobs:
     - name: Build with strict warnings
       run: |
         ./autogen.sh
-        ./configure --with-wolfssl=$HOME/wolfssl-install --enable-nuvoton \
-                    CFLAGS="-Wall -Wextra -Wpedantic -Werror -Wconversion -Wshadow"
-        make -j$(nproc)
+        ./configure --with-wolfssl=$HOME/wolfssl-install --enable-nuvoton
+        make -j$(nproc) CFLAGS="-Wall -Wextra -Wpedantic -Werror -Wconversion -Wshadow"
 
   clang:
     name: Clang Build
@@ -81,9 +80,8 @@ jobs:
     - name: Build with clang
       run: |
         ./autogen.sh
-        CC=clang ./configure --with-wolfssl=$HOME/wolfssl-install --enable-nuvoton \
-                             CFLAGS="-Wall -Wextra -Werror"
-        make -j$(nproc)
+        CC=clang ./configure --with-wolfssl=$HOME/wolfssl-install --enable-nuvoton
+        make -j$(nproc) CFLAGS="-Wall -Wextra -Werror"
 
     - name: Run unit tests
       run: make check

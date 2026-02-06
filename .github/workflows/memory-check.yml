@@ -2,9 +2,9 @@ name: Memory Check
 
 on:
   push:
-    branches: [ main, master, develop ]
+    branches: [ 'master', 'main', 'release/**' ]
   pull_request:
-    branches: [ main, master, develop ]
+    branches: [ '*' ]
 
 jobs:
   valgrind:
@@ -44,6 +44,7 @@ jobs:
         ./autogen.sh
         ./configure --with-wolfssl=$HOME/wolfssl-install --enable-debug
         make -j$(nproc)
+        make -j$(nproc) check TESTS=
 
     - name: Run valgrind
       run: |
