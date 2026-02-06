@@ -389,6 +389,7 @@ word32 wolfSPDM_GetSessionId(WOLFSPDM_CTX* ctx);
  */
 byte wolfSPDM_GetVersion_Negotiated(WOLFSPDM_CTX* ctx);
 
+#ifdef WOLFSPDM_NUVOTON
 /**
  * Get the connection handle (Nuvoton TCG binding).
  *
@@ -404,6 +405,7 @@ word32 wolfSPDM_GetConnectionHandle(WOLFSPDM_CTX* ctx);
  * @return FIPS indicator value.
  */
 word16 wolfSPDM_GetFipsIndicator(WOLFSPDM_CTX* ctx);
+#endif
 
 /* ==========================================================================
  * Debug/Utility

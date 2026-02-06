@@ -1,0 +1,46 @@
+# Codespell test
+
+name: Codespell test
+
+# START OF COMMON SECTION
+on:
+  push:
+    branches: [ 'master', 'main', 'release/**' ]
+  pull_request:
+    branches: [ '*' ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+# END OF COMMON SECTION
+
+jobs:
+  codespell:
+    name: Check for spelling errors
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout wolfSPDM
+        uses: actions/checkout@v4
+
+      - name: Create exclude file if needed
+        run: |
+          if [ ! -f .codespellexcludelines ]; then
+            touch .codespellexcludelines
+          fi
+
+      - name: Run codespell
+        uses: codespell-project/actions-codespell@v2.1
+        with:
+          check_filenames: true
+          check_hidden: true
+          ignore_words_list: adin,aNULL,cLen,dout,haveA,inOut,inout,parm,parms,ser,siz,te,Te
+          exclude_file: '.codespellexcludelines'
+          skip: '*.der,*.pem,.git,*.txt'
+
+      - name: Print errors
+        if: ${{ failure() }}
+        run: |
+          if [ -f test-suite.log ] ; then
+            cat test-suite.log
+          fi

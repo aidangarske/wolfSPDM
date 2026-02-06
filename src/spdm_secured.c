@@ -67,9 +67,9 @@ int wolfSPDM_EncryptInternal(WOLFSPDM_CTX* ctx,
          * IV XOR: Rightmost 8 bytes (bytes 4-11) with 8-byte sequence number
          */
         word16 appDataLen = (word16)plainSz;
-        word16 unpadded = 2 + appDataLen;  /* AppDataLength + SPDM msg */
-        word16 padLen = (16 - (unpadded % 16)) % 16;  /* Pad to 16-byte boundary */
-        word16 encPayloadSz = unpadded + padLen;
+        word16 unpadded = (word16)(2 + appDataLen);  /* AppDataLength + SPDM msg */
+        word16 padLen = (word16)((16 - (unpadded % 16)) % 16);  /* Pad to 16-byte boundary */
+        word16 encPayloadSz = (word16)(unpadded + padLen);
 
         plainBufSz = encPayloadSz;
         /* Length field = ciphertext + MAC (per Nuvoton spec page 25: Length=160=144+16) */
@@ -127,8 +127,8 @@ int wolfSPDM_EncryptInternal(WOLFSPDM_CTX* ctx,
          * Header: SessionID(4 LE) + SeqNum(2 LE) + Length(2 LE) = 8 bytes
          * AAD = Header
          */
-        word16 appDataLen = 1 + plainSz;
-        word16 encDataLen = 2 + appDataLen;
+        word16 appDataLen = (word16)(1 + plainSz);
+        word16 encDataLen = (word16)(2 + appDataLen);
 
         plainBufSz = encDataLen;
         recordLen = (word16)(encDataLen + WOLFSPDM_AEAD_TAG_SIZE);
@@ -280,12 +280,13 @@ int wolfSPDM_DecryptInternal(WOLFSPDM_CTX* ctx,
         }
 
         /* Parse header: SessionID(4) + SeqNum(8) + Length(2) */
-        rspSessionId = enc[0] | (enc[1] << 8) | (enc[2] << 16) | (enc[3] << 24);
+        rspSessionId = (word32)enc[0] | ((word32)enc[1] << 8) |
+                       ((word32)enc[2] << 16) | ((word32)enc[3] << 24);
         rspSeqNum64 = (word64)enc[4] | ((word64)enc[5] << 8) |
                       ((word64)enc[6] << 16) | ((word64)enc[7] << 24) |
                       ((word64)enc[8] << 32) | ((word64)enc[9] << 40) |
                       ((word64)enc[10] << 48) | ((word64)enc[11] << 56);
-        rspLen = enc[12] | (enc[13] << 8);
+        rspLen = (word16)(enc[12] | (enc[13] << 8));
         rspSeqNum = (word16)(rspSeqNum64 & 0xFFFF);  /* For debug output */
 
         if (rspSessionId != ctx->sessionId) {
@@ -299,7 +300,7 @@ int wolfSPDM_DecryptInternal(WOLFSPDM_CTX* ctx,
             return WOLFSPDM_E_BUFFER_SMALL;
         }
 
-        cipherLen = rspLen - WOLFSPDM_AEAD_TAG_SIZE;
+        cipherLen = (word16)(rspLen - WOLFSPDM_AEAD_TAG_SIZE);
         ciphertext = enc + hdrSz;
         tag = enc + hdrSz + cipherLen;
 
@@ -335,7 +336,7 @@ int wolfSPDM_DecryptInternal(WOLFSPDM_CTX* ctx,
         }
 
         /* Parse decrypted: AppDataLen (2 LE) || SPDM message || RandomData */
-        appDataLen = decrypted[0] | (decrypted[1] << 8);
+        appDataLen = (word16)(decrypted[0] | (decrypted[1] << 8));
 
         wolfSPDM_DebugPrint(ctx, "Decrypted appDataLen: %u\n", appDataLen);
         wolfSPDM_DebugHex(ctx, "Decrypted data (first 32)", decrypted,
@@ -365,9 +366,10 @@ int wolfSPDM_DecryptInternal(WOLFSPDM_CTX* ctx,
         }
 
         /* Parse header */
-        rspSessionId = enc[0] | (enc[1] << 8) | (enc[2] << 16) | (enc[3] << 24);
-        rspSeqNum = enc[4] | (enc[5] << 8);
-        rspLen = enc[6] | (enc[7] << 8);
+        rspSessionId = (word32)enc[0] | ((word32)enc[1] << 8) |
+                       ((word32)enc[2] << 16) | ((word32)enc[3] << 24);
+        rspSeqNum = (word16)(enc[4] | (enc[5] << 8));
+        rspLen = (word16)(enc[6] | (enc[7] << 8));
 
         if (rspSessionId != ctx->sessionId) {
             wolfSPDM_DebugPrint(ctx, "Session ID mismatch: 0x%08x != 0x%08x\n",
@@ -379,7 +381,7 @@ int wolfSPDM_DecryptInternal(WOLFSPDM_CTX* ctx,
             return WOLFSPDM_E_BUFFER_SMALL;
         }
 
-        cipherLen = rspLen - WOLFSPDM_AEAD_TAG_SIZE;
+        cipherLen = (word16)(rspLen - WOLFSPDM_AEAD_TAG_SIZE);
         ciphertext = enc + hdrSz;
         tag = enc + hdrSz + cipherLen;
 
@@ -403,7 +405,7 @@ int wolfSPDM_DecryptInternal(WOLFSPDM_CTX* ctx,
         }
 
         /* Parse decrypted: AppDataLen (2) || MCTP (1) || SPDM msg */
-        appDataLen = decrypted[0] | (decrypted[1] << 8);
+        appDataLen = (word16)(decrypted[0] | (decrypted[1] << 8));
 
         if (appDataLen < 1 || cipherLen < (word32)(2 + appDataLen)) {
             return WOLFSPDM_E_BUFFER_SMALL;
