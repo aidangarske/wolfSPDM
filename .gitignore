@@ -1,0 +1,68 @@
+# Autotools generated files
+/aclocal.m4
+/autom4te.cache/
+/build-aux/
+/config.h
+/config.h.in~
+/config.log
+/config.status
+/configure
+/configure~
+/libtool
+/Makefile
+/Makefile.in
+/stamp-h1
+/m4/libtool.m4
+/m4/ltoptions.m4
+/m4/ltsugar.m4
+/m4/ltversion.m4
+/m4/lt~obsolete.m4
+
+# Compiled objects and libraries
+*.o
+*.lo
+*.la
+*.a
+*.so
+*.so.*
+*.dylib
+.libs/
+src/.libs/
+src/*.lo
+src/.dirstamp
+test/.libs/
+test/*.o
+test/unit_test
+test/test_spdm
+
+# pkg-config generated
+wolfspdm.pc
+
+# Editor and IDE files
+*~
+*.swp
+*.swo
+.vscode/
+.idea/
+*.sublime-*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Test artifacts
+*.log
+test-suite.log
+test/*.log
+test/*.trs
+
+# Dependency files
+.deps/
+src/.deps/
+test/.deps/
+
+# Distribution archives
+*.tar.gz
+*.tar.bz2
+*.zip
+test/.dirstamp

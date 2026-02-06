@@ -1,0 +1,91 @@
+name: Compiler Warnings
+
+on:
+  push:
+    branches: [ main, master, develop ]
+  pull_request:
+    branches: [ main, master, develop ]
+
+jobs:
+  gcc-strict:
+    name: GCC Strict Warnings
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y autoconf automake libtool
+
+    - name: Cache wolfSSL
+      id: cache-wolfssl
+      uses: actions/cache@v4
+      with:
+        path: ~/wolfssl-install
+        key: wolfssl-ubuntu-latest-v1
+
+    - name: Build wolfSSL
+      if: steps.cache-wolfssl.outputs.cache-hit != 'true'
+      run: |
+        cd ~
+        git clone --depth 1 https://github.com/wolfSSL/wolfssl.git
+        cd wolfssl
+        ./autogen.sh
+        ./configure --enable-ecc --enable-sha384 --enable-aesgcm --enable-hkdf \
+                    --enable-ecccustcurves --enable-keygen \
+                    --prefix=$HOME/wolfssl-install
+        make -j$(nproc)
+        make install
+
+    - name: Build with strict warnings
+      run: |
+        ./autogen.sh
+        ./configure --with-wolfssl=$HOME/wolfssl-install --enable-nuvoton \
+                    CFLAGS="-Wall -Wextra -Wpedantic -Werror -Wconversion -Wshadow"
+        make -j$(nproc)
+
+  clang:
+    name: Clang Build
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y clang autoconf automake libtool
+
+    - name: Cache wolfSSL
+      id: cache-wolfssl
+      uses: actions/cache@v4
+      with:
+        path: ~/wolfssl-install
+        key: wolfssl-clang-v1
+
+    - name: Build wolfSSL with clang
+      if: steps.cache-wolfssl.outputs.cache-hit != 'true'
+      run: |
+        cd ~
+        git clone --depth 1 https://github.com/wolfSSL/wolfssl.git
+        cd wolfssl
+        ./autogen.sh
+        CC=clang ./configure --enable-ecc --enable-sha384 --enable-aesgcm --enable-hkdf \
+                             --enable-ecccustcurves --enable-keygen \
+                             --prefix=$HOME/wolfssl-install
+        make -j$(nproc)
+        make install
+
+    - name: Build with clang
+      run: |
+        ./autogen.sh
+        CC=clang ./configure --with-wolfssl=$HOME/wolfssl-install --enable-nuvoton \
+                             CFLAGS="-Wall -Wextra -Werror"
+        make -j$(nproc)
+
+    - name: Run unit tests
+      run: make check
+      env:
+        LD_LIBRARY_PATH: ${{ github.workspace }}/src/.libs:$HOME/wolfssl-install/lib

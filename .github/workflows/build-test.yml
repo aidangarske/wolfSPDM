@@ -1,0 +1,72 @@
+name: Build and Test
+
+on:
+  push:
+    branches: [ main, master, develop ]
+  pull_request:
+    branches: [ main, master, develop ]
+
+jobs:
+  build:
+    name: ${{ matrix.os }} / debug=${{ matrix.debug }} / nuvoton=${{ matrix.nuvoton }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-22.04]
+        debug: [yes, no]
+        nuvoton: [yes, no]
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y autoconf automake libtool
+
+    - name: Cache wolfSSL
+      id: cache-wolfssl
+      uses: actions/cache@v4
+      with:
+        path: ~/wolfssl-install
+        key: wolfssl-${{ matrix.os }}-v1
+
+    - name: Build wolfSSL
+      if: steps.cache-wolfssl.outputs.cache-hit != 'true'
+      run: |
+        cd ~
+        git clone --depth 1 https://github.com/wolfSSL/wolfssl.git
+        cd wolfssl
+        ./autogen.sh
+        ./configure --enable-ecc --enable-sha384 --enable-aesgcm --enable-hkdf \
+                    --enable-ecccustcurves --enable-keygen \
+                    --prefix=$HOME/wolfssl-install
+        make -j$(nproc)
+        make install
+
+    - name: Generate configure
+      run: ./autogen.sh
+
+    - name: Configure
+      run: |
+        ./configure --with-wolfssl=$HOME/wolfssl-install \
+                    ${{ matrix.debug == 'yes' && '--enable-debug' || '' }} \
+                    ${{ matrix.nuvoton == 'yes' && '--enable-nuvoton' || '' }}
+
+    - name: Build
+      run: make -j$(nproc)
+
+    - name: Run unit tests
+      run: make check
+      env:
+        LD_LIBRARY_PATH: ${{ github.workspace }}/src/.libs:$HOME/wolfssl-install/lib
+
+    - name: Upload test logs on failure
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: test-logs-${{ matrix.os }}-debug-${{ matrix.debug }}-nuvoton-${{ matrix.nuvoton }}
+        path: |
+          test/*.log
+          config.log

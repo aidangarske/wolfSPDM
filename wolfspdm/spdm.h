@@ -1,0 +1,424 @@
+/* spdm.h
+ *
+ * Copyright (C) 2006-2025 wolfSSL Inc.
+ *
+ * This file is part of wolfSPDM.
+ *
+ * wolfSPDM is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * wolfSPDM is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1335, USA
+ */
+
+#ifndef WOLFSPDM_SPDM_H
+#define WOLFSPDM_SPDM_H
+
+#include <wolfspdm/spdm_types.h>
+#include <wolfspdm/spdm_error.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* ==========================================================================
+ * Protocol Mode Selection
+ * ==========================================================================
+ *
+ * wolfSPDM supports two protocol modes:
+ *
+ * WOLFSPDM_MODE_STANDARD (default):
+ *   Standard SPDM 1.2 protocol per DMTF DSP0274/DSP0277.
+ *   Flow: GET_VERSION -> GET_CAPABILITIES -> NEGOTIATE_ALGORITHMS ->
+ *         GET_DIGESTS -> GET_CERTIFICATE -> KEY_EXCHANGE -> FINISH
+ *   Use with: libspdm emulator, standard SPDM responders
+ *
+ * WOLFSPDM_MODE_NUVOTON (requires --enable-nuvoton):
+ *   Nuvoton TPM-specific protocol with TCG binding headers.
+ *   Flow: GET_VERSION -> GET_PUB_KEY -> KEY_EXCHANGE -> GIVE_PUB_KEY -> FINISH
+ *   Use with: Nuvoton NPCT75x TPMs (FW 7.2+)
+ *
+ * ========================================================================== */
+
+typedef enum {
+    WOLFSPDM_MODE_STANDARD = 0,    /* Standard SPDM 1.2 (default) */
+    WOLFSPDM_MODE_NUVOTON  = 1,    /* Nuvoton TCG binding + vendor commands */
+} WOLFSPDM_MODE;
+
+/* ==========================================================================
+ * wolfSPDM Overview
+ * ==========================================================================
+ *
+ * wolfSPDM is a lightweight SPDM (Security Protocol and Data Model)
+ * implementation using wolfCrypt for all cryptographic operations.
+ *
+ * Key Features:
+ *   - Requester-only (initiator) implementation
+ *   - Algorithm Set B fixed: P-384/SHA-384/AES-256-GCM
+ *   - Full transcript tracking for proper TH1/TH2 computation
+ *   - Compatible with libspdm emulator for testing
+ *   - No external dependencies beyond wolfCrypt
+ *
+ * Typical Usage:
+ *   1. Create context:     ctx = wolfSPDM_New()
+ *   2. Set I/O callback:   wolfSPDM_SetIO(ctx, callback, userPtr)
+ *   3. Initialize:         wolfSPDM_Init(ctx)
+ *   4. Connect:            wolfSPDM_Connect(ctx)
+ *   5. Send/Receive:       wolfSPDM_SecuredExchange(ctx, ...)
+ *   6. Disconnect:         wolfSPDM_Disconnect(ctx)
+ *   7. Free:               wolfSPDM_Free(ctx)
+ *
+ * ========================================================================== */
+
+/* Forward declaration */
+struct WOLFSPDM_CTX;
+typedef struct WOLFSPDM_CTX WOLFSPDM_CTX;
+
+/* Include Nuvoton support if enabled (must be after WOLFSPDM_CTX forward declaration) */
+#ifdef WOLFSPDM_NUVOTON
+    #include <wolfspdm/spdm_nuvoton.h>
+#endif
+
+/* ==========================================================================
+ * I/O Callback
+ * ==========================================================================
+ *
+ * The I/O callback is called by wolfSPDM to send and receive raw SPDM
+ * messages. The transport layer (SPI, I2C, TCP, etc.) is handled externally.
+ *
+ * Parameters:
+ *   ctx      - wolfSPDM context
+ *   txBuf    - Data to transmit (raw SPDM message, no transport headers)
+ *   txSz     - Size of transmit data
+ *   rxBuf    - Buffer to receive response
+ *   rxSz     - [in] Size of receive buffer, [out] Actual received size
+ *   userCtx  - User context pointer from wolfSPDM_SetIO()
+ *
+ * Returns:
+ *   0 on success, negative on error
+ *
+ * Notes:
+ *   - For MCTP transport, the callback should handle MCTP encapsulation
+ *   - For secured messages (after KEY_EXCHANGE), the callback receives
+ *     already-encrypted data including the session header
+ * ========================================================================== */
+typedef int (*WOLFSPDM_IO_CB)(
+    WOLFSPDM_CTX* ctx,
+    const byte* txBuf, word32 txSz,
+    byte* rxBuf, word32* rxSz,
+    void* userCtx
+);
+
+/* ==========================================================================
+ * Context Management
+ * ========================================================================== */
+
+/**
+ * Allocate and return a new wolfSPDM context.
+ *
+ * @return Pointer to new context, or NULL on failure.
+ */
+WOLFSPDM_CTX* wolfSPDM_New(void);
+
+/**
+ * Initialize a wolfSPDM context for use.
+ * Must be called before wolfSPDM_Connect().
+ *
+ * @param ctx  The wolfSPDM context.
+ * @return WOLFSPDM_SUCCESS or negative error code.
+ */
+int wolfSPDM_Init(WOLFSPDM_CTX* ctx);
+
+/**
+ * Free a wolfSPDM context and all associated resources.
+ *
+ * @param ctx  The wolfSPDM context to free.
+ */
+void wolfSPDM_Free(WOLFSPDM_CTX* ctx);
+
+/**
+ * Get the size of the WOLFSPDM_CTX structure.
+ * Useful for static allocation.
+ *
+ * @return Size in bytes.
+ */
+int wolfSPDM_GetCtxSize(void);
+
+/**
+ * Initialize a statically-allocated context.
+ *
+ * @param ctx   Pointer to pre-allocated memory of at least wolfSPDM_GetCtxSize().
+ * @param size  Size of the provided buffer.
+ * @return WOLFSPDM_SUCCESS or negative error code.
+ */
+int wolfSPDM_InitStatic(WOLFSPDM_CTX* ctx, int size);
+
+/* ==========================================================================
+ * Configuration
+ * ========================================================================== */
+
+/**
+ * Set the I/O callback for sending/receiving SPDM messages.
+ *
+ * @param ctx      The wolfSPDM context.
+ * @param ioCb     The I/O callback function.
+ * @param userCtx  User context pointer passed to callback.
+ * @return WOLFSPDM_SUCCESS or negative error code.
+ */
+int wolfSPDM_SetIO(WOLFSPDM_CTX* ctx, WOLFSPDM_IO_CB ioCb, void* userCtx);
+
+/**
+ * Set the protocol mode (standard SPDM or Nuvoton-specific).
+ * Must be called before wolfSPDM_Connect().
+ *
+ * @param ctx   The wolfSPDM context.
+ * @param mode  WOLFSPDM_MODE_STANDARD or WOLFSPDM_MODE_NUVOTON.
+ * @return WOLFSPDM_SUCCESS or negative error code.
+ *         Returns WOLFSPDM_E_INVALID_ARG if NUVOTON mode requested
+ *         but wolfSPDM was not built with --enable-nuvoton.
+ */
+int wolfSPDM_SetMode(WOLFSPDM_CTX* ctx, WOLFSPDM_MODE mode);
+
+/**
+ * Get the current protocol mode.
+ *
+ * @param ctx  The wolfSPDM context.
+ * @return Current mode (WOLFSPDM_MODE_STANDARD or WOLFSPDM_MODE_NUVOTON).
+ */
+WOLFSPDM_MODE wolfSPDM_GetMode(WOLFSPDM_CTX* ctx);
+
+/**
+ * Set the responder's public key for certificate-less operation.
+ * Used when the responder doesn't send a certificate chain (e.g., Nuvoton TPM).
+ *
+ * @param ctx       The wolfSPDM context.
+ * @param pubKey    Raw public key bytes (96 bytes for P-384: X||Y).
+ * @param pubKeySz  Size of public key (must be 96 for P-384).
+ * @return WOLFSPDM_SUCCESS or negative error code.
+ */
+int wolfSPDM_SetResponderPubKey(WOLFSPDM_CTX* ctx,
+    const byte* pubKey, word32 pubKeySz);
+
+/**
+ * Set the requester's key pair for mutual authentication.
+ * Optional - only needed if responder requires mutual auth.
+ *
+ * @param ctx        The wolfSPDM context.
+ * @param privKey    Raw private key bytes (48 bytes for P-384).
+ * @param privKeySz  Size of private key.
+ * @param pubKey     Raw public key bytes (96 bytes for P-384: X||Y).
+ * @param pubKeySz   Size of public key.
+ * @return WOLFSPDM_SUCCESS or negative error code.
+ */
+int wolfSPDM_SetRequesterKeyPair(WOLFSPDM_CTX* ctx,
+    const byte* privKey, word32 privKeySz,
+    const byte* pubKey, word32 pubKeySz);
+
+/* ==========================================================================
+ * Session Establishment
+ * ========================================================================== */
+
+/**
+ * Establish an SPDM session (full handshake).
+ * Performs: GET_VERSION -> GET_CAPABILITIES -> NEGOTIATE_ALGORITHMS ->
+ *           GET_DIGESTS -> GET_CERTIFICATE -> KEY_EXCHANGE -> FINISH
+ *
+ * After successful completion, use wolfSPDM_SecuredExchange() for
+ * encrypted communication.
+ *
+ * @param ctx  The wolfSPDM context.
+ * @return WOLFSPDM_SUCCESS or negative error code.
+ */
+int wolfSPDM_Connect(WOLFSPDM_CTX* ctx);
+
+/**
+ * Check if an SPDM session is established.
+ *
+ * @param ctx  The wolfSPDM context.
+ * @return 1 if connected, 0 if not.
+ */
+int wolfSPDM_IsConnected(WOLFSPDM_CTX* ctx);
+
+/**
+ * End the SPDM session gracefully.
+ *
+ * @param ctx  The wolfSPDM context.
+ * @return WOLFSPDM_SUCCESS or negative error code.
+ */
+int wolfSPDM_Disconnect(WOLFSPDM_CTX* ctx);
+
+/* ==========================================================================
+ * Individual Handshake Steps (for fine-grained control)
+ * ========================================================================== */
+
+/**
+ * Send GET_VERSION and receive VERSION response.
+ * First step in SPDM handshake (VCA part 1).
+ *
+ * @param ctx  The wolfSPDM context.
+ * @return WOLFSPDM_SUCCESS or negative error code.
+ */
+int wolfSPDM_GetVersion(WOLFSPDM_CTX* ctx);
+
+/**
+ * Send GET_CAPABILITIES and receive CAPABILITIES response.
+ * Second step in SPDM handshake (VCA part 2).
+ *
+ * @param ctx  The wolfSPDM context.
+ * @return WOLFSPDM_SUCCESS or negative error code.
+ */
+int wolfSPDM_GetCapabilities(WOLFSPDM_CTX* ctx);
+
+/**
+ * Send NEGOTIATE_ALGORITHMS and receive ALGORITHMS response.
+ * Third step in SPDM handshake (VCA part 3).
+ *
+ * @param ctx  The wolfSPDM context.
+ * @return WOLFSPDM_SUCCESS or negative error code.
+ */
+int wolfSPDM_NegotiateAlgorithms(WOLFSPDM_CTX* ctx);
+
+/**
+ * Send GET_DIGESTS and receive DIGESTS response.
+ *
+ * @param ctx  The wolfSPDM context.
+ * @return WOLFSPDM_SUCCESS or negative error code.
+ */
+int wolfSPDM_GetDigests(WOLFSPDM_CTX* ctx);
+
+/**
+ * Send GET_CERTIFICATE and receive full certificate chain.
+ * May require multiple requests for large chains.
+ *
+ * @param ctx     The wolfSPDM context.
+ * @param slotId  Certificate slot (0-7, typically 0).
+ * @return WOLFSPDM_SUCCESS or negative error code.
+ */
+int wolfSPDM_GetCertificate(WOLFSPDM_CTX* ctx, int slotId);
+
+/**
+ * Send KEY_EXCHANGE and receive KEY_EXCHANGE_RSP.
+ * Performs ECDHE key exchange and derives handshake keys.
+ *
+ * @param ctx  The wolfSPDM context.
+ * @return WOLFSPDM_SUCCESS or negative error code.
+ */
+int wolfSPDM_KeyExchange(WOLFSPDM_CTX* ctx);
+
+/**
+ * Send FINISH and receive FINISH_RSP (encrypted).
+ * Completes the handshake and establishes the secure session.
+ *
+ * @param ctx  The wolfSPDM context.
+ * @return WOLFSPDM_SUCCESS or negative error code.
+ */
+int wolfSPDM_Finish(WOLFSPDM_CTX* ctx);
+
+/* ==========================================================================
+ * Secured Messaging
+ * ========================================================================== */
+
+/**
+ * Encrypt a message for sending over the established session.
+ *
+ * @param ctx       The wolfSPDM context.
+ * @param plain     Plaintext message to encrypt.
+ * @param plainSz   Size of plaintext.
+ * @param enc       Buffer for encrypted output (includes header and tag).
+ * @param encSz     [in] Size of enc buffer, [out] Actual encrypted size.
+ * @return WOLFSPDM_SUCCESS or negative error code.
+ */
+int wolfSPDM_EncryptMessage(WOLFSPDM_CTX* ctx,
+    const byte* plain, word32 plainSz,
+    byte* enc, word32* encSz);
+
+/**
+ * Decrypt a message received over the established session.
+ *
+ * @param ctx       The wolfSPDM context.
+ * @param enc       Encrypted message (includes header and tag).
+ * @param encSz     Size of encrypted message.
+ * @param plain     Buffer for decrypted output.
+ * @param plainSz   [in] Size of plain buffer, [out] Actual decrypted size.
+ * @return WOLFSPDM_SUCCESS or negative error code.
+ */
+int wolfSPDM_DecryptMessage(WOLFSPDM_CTX* ctx,
+    const byte* enc, word32 encSz,
+    byte* plain, word32* plainSz);
+
+/**
+ * Perform a secured message exchange (encrypt, send, receive, decrypt).
+ * Convenience function combining encrypt, I/O, and decrypt.
+ *
+ * @param ctx         The wolfSPDM context.
+ * @param cmdPlain    Plaintext command to send.
+ * @param cmdSz       Size of command.
+ * @param rspPlain    Buffer for plaintext response.
+ * @param rspSz       [in] Size of response buffer, [out] Actual response size.
+ * @return WOLFSPDM_SUCCESS or negative error code.
+ */
+int wolfSPDM_SecuredExchange(WOLFSPDM_CTX* ctx,
+    const byte* cmdPlain, word32 cmdSz,
+    byte* rspPlain, word32* rspSz);
+
+/* ==========================================================================
+ * Session Information
+ * ========================================================================== */
+
+/**
+ * Get the current session ID.
+ *
+ * @param ctx  The wolfSPDM context.
+ * @return Session ID (combined reqSessionId | rspSessionId << 16), or 0 if not connected.
+ */
+word32 wolfSPDM_GetSessionId(WOLFSPDM_CTX* ctx);
+
+/**
+ * Get negotiated SPDM version.
+ *
+ * @param ctx  The wolfSPDM context.
+ * @return Version (e.g., 0x12 for SPDM 1.2), or 0 if not negotiated.
+ */
+byte wolfSPDM_GetVersion_Negotiated(WOLFSPDM_CTX* ctx);
+
+/**
+ * Get the connection handle (Nuvoton TCG binding).
+ *
+ * @param ctx  The wolfSPDM context.
+ * @return Connection handle value.
+ */
+word32 wolfSPDM_GetConnectionHandle(WOLFSPDM_CTX* ctx);
+
+/**
+ * Get the FIPS indicator (Nuvoton TCG binding).
+ *
+ * @param ctx  The wolfSPDM context.
+ * @return FIPS indicator value.
+ */
+word16 wolfSPDM_GetFipsIndicator(WOLFSPDM_CTX* ctx);
+
+/* ==========================================================================
+ * Debug/Utility
+ * ========================================================================== */
+
+/**
+ * Enable or disable debug output.
+ *
+ * @param ctx    The wolfSPDM context.
+ * @param enable Non-zero to enable, 0 to disable.
+ */
+void wolfSPDM_SetDebug(WOLFSPDM_CTX* ctx, int enable);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* WOLFSPDM_SPDM_H */
