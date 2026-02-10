@@ -128,11 +128,6 @@ int wolfSPDM_DeriveHandshakeKeys(WOLFSPDM_CTX* ctx, const byte* th1Hash)
         return WOLFSPDM_E_CRYPTO_FAIL;
     }
 
-    wolfSPDM_DebugHex(ctx, "HandshakeSecret", ctx->handshakeSecret,
-        WOLFSPDM_HASH_SIZE);
-    wolfSPDM_DebugHex(ctx, "TH1 context for key derivation", th1Hash,
-        WOLFSPDM_HASH_SIZE);
-
     /* reqHsSecret = HKDF-Expand(HS, "req hs data" || TH1, 48) */
     rc = wolfSPDM_HkdfExpandLabel(ctx->spdmVersion, ctx->handshakeSecret,
         WOLFSPDM_HASH_SIZE, SPDM_LABEL_REQ_HS_DATA, th1Hash, WOLFSPDM_HASH_SIZE,
@@ -140,9 +135,6 @@ int wolfSPDM_DeriveHandshakeKeys(WOLFSPDM_CTX* ctx, const byte* th1Hash)
     if (rc != WOLFSPDM_SUCCESS) {
         return rc;
     }
-    wolfSPDM_DebugHex(ctx, "reqHsSecret (intermediate)", ctx->reqHsSecret,
-        WOLFSPDM_HASH_SIZE);
-
     /* rspHsSecret = HKDF-Expand(HS, "rsp hs data" || TH1, 48) */
     rc = wolfSPDM_HkdfExpandLabel(ctx->spdmVersion, ctx->handshakeSecret,
         WOLFSPDM_HASH_SIZE, SPDM_LABEL_RSP_HS_DATA, th1Hash, WOLFSPDM_HASH_SIZE,
@@ -150,9 +142,6 @@ int wolfSPDM_DeriveHandshakeKeys(WOLFSPDM_CTX* ctx, const byte* th1Hash)
     if (rc != WOLFSPDM_SUCCESS) {
         return rc;
     }
-    wolfSPDM_DebugHex(ctx, "rspHsSecret (intermediate)", ctx->rspHsSecret,
-        WOLFSPDM_HASH_SIZE);
-
     /* Finished keys (used for VerifyData HMAC) */
     rc = wolfSPDM_HkdfExpandLabel(ctx->spdmVersion, ctx->reqHsSecret,
         WOLFSPDM_HASH_SIZE, SPDM_LABEL_FINISHED, NULL, 0,
@@ -169,8 +158,6 @@ int wolfSPDM_DeriveHandshakeKeys(WOLFSPDM_CTX* ctx, const byte* th1Hash)
     }
 
     /* Data encryption keys (AES-256-GCM) */
-    wolfSPDM_DebugHex(ctx, "PRK for reqDataKey (reqHsSecret)", ctx->reqHsSecret,
-        WOLFSPDM_HASH_SIZE);
     rc = wolfSPDM_HkdfExpandLabel(ctx->spdmVersion, ctx->reqHsSecret,
         WOLFSPDM_HASH_SIZE, SPDM_LABEL_KEY, NULL, 0,
         ctx->reqDataKey, WOLFSPDM_AEAD_KEY_SIZE);
@@ -200,10 +187,95 @@ int wolfSPDM_DeriveHandshakeKeys(WOLFSPDM_CTX* ctx, const byte* th1Hash)
         return rc;
     }
 
-    wolfSPDM_DebugHex(ctx, "reqDataKey", ctx->reqDataKey, WOLFSPDM_AEAD_KEY_SIZE);
-    wolfSPDM_DebugHex(ctx, "reqDataIV", ctx->reqDataIv, WOLFSPDM_AEAD_IV_SIZE);
-    wolfSPDM_DebugHex(ctx, "reqFinishedKey", ctx->reqFinishedKey, WOLFSPDM_HASH_SIZE);
-    wolfSPDM_DebugHex(ctx, "rspFinishedKey", ctx->rspFinishedKey, WOLFSPDM_HASH_SIZE);
+    return WOLFSPDM_SUCCESS;
+}
+
+int wolfSPDM_DeriveAppDataKeys(WOLFSPDM_CTX* ctx)
+{
+    byte th2Hash[WOLFSPDM_HASH_SIZE];
+    byte salt[WOLFSPDM_HASH_SIZE];
+    byte masterSecret[WOLFSPDM_HASH_SIZE];
+    byte reqAppSecret[WOLFSPDM_HASH_SIZE];
+    byte rspAppSecret[WOLFSPDM_HASH_SIZE];
+    byte zeroIkm[WOLFSPDM_HASH_SIZE];
+    int rc;
+
+    if (ctx == NULL) {
+        return WOLFSPDM_E_INVALID_ARG;
+    }
+
+    /* Compute TH2_final = Hash(full transcript including FINISH + FINISH_RSP) */
+    rc = wolfSPDM_TranscriptHash(ctx, th2Hash);
+    if (rc != WOLFSPDM_SUCCESS) {
+        return rc;
+    }
+    /* salt = HKDF-Expand(HandshakeSecret, BinConcat("derived"), 48)
+     * Per DSP0277: "derived" label has NO context (unlike TLS 1.3 which uses Hash(""))
+     * libspdm confirms: bin_concat("derived", context=NULL) */
+    rc = wolfSPDM_HkdfExpandLabel(ctx->spdmVersion, ctx->handshakeSecret,
+        WOLFSPDM_HASH_SIZE, "derived", NULL, 0,
+        salt, WOLFSPDM_HASH_SIZE);
+    if (rc != WOLFSPDM_SUCCESS) {
+        return rc;
+    }
+
+    /* MasterSecret = HKDF-Extract(salt, 0^hashSize) */
+    XMEMSET(zeroIkm, 0, sizeof(zeroIkm));
+    rc = wc_HKDF_Extract(WC_SHA384, salt, WOLFSPDM_HASH_SIZE,
+        zeroIkm, WOLFSPDM_HASH_SIZE, masterSecret);
+    if (rc != 0) {
+        return WOLFSPDM_E_CRYPTO_FAIL;
+    }
+    /* reqAppSecret = HKDF-Expand(MasterSecret, "req app data" || TH2, 48) */
+    rc = wolfSPDM_HkdfExpandLabel(ctx->spdmVersion, masterSecret,
+        WOLFSPDM_HASH_SIZE, SPDM_LABEL_REQ_DATA, th2Hash, WOLFSPDM_HASH_SIZE,
+        reqAppSecret, WOLFSPDM_HASH_SIZE);
+    if (rc != WOLFSPDM_SUCCESS) {
+        return rc;
+    }
+
+    /* rspAppSecret = HKDF-Expand(MasterSecret, "rsp app data" || TH2, 48) */
+    rc = wolfSPDM_HkdfExpandLabel(ctx->spdmVersion, masterSecret,
+        WOLFSPDM_HASH_SIZE, SPDM_LABEL_RSP_DATA, th2Hash, WOLFSPDM_HASH_SIZE,
+        rspAppSecret, WOLFSPDM_HASH_SIZE);
+    if (rc != WOLFSPDM_SUCCESS) {
+        return rc;
+    }
+
+    /* Derive new encryption keys from app data secrets */
+    rc = wolfSPDM_HkdfExpandLabel(ctx->spdmVersion, reqAppSecret,
+        WOLFSPDM_HASH_SIZE, SPDM_LABEL_KEY, NULL, 0,
+        ctx->reqDataKey, WOLFSPDM_AEAD_KEY_SIZE);
+    if (rc != WOLFSPDM_SUCCESS) {
+        return rc;
+    }
+
+    rc = wolfSPDM_HkdfExpandLabel(ctx->spdmVersion, rspAppSecret,
+        WOLFSPDM_HASH_SIZE, SPDM_LABEL_KEY, NULL, 0,
+        ctx->rspDataKey, WOLFSPDM_AEAD_KEY_SIZE);
+    if (rc != WOLFSPDM_SUCCESS) {
+        return rc;
+    }
+
+    rc = wolfSPDM_HkdfExpandLabel(ctx->spdmVersion, reqAppSecret,
+        WOLFSPDM_HASH_SIZE, SPDM_LABEL_IV, NULL, 0,
+        ctx->reqDataIv, WOLFSPDM_AEAD_IV_SIZE);
+    if (rc != WOLFSPDM_SUCCESS) {
+        return rc;
+    }
+
+    rc = wolfSPDM_HkdfExpandLabel(ctx->spdmVersion, rspAppSecret,
+        WOLFSPDM_HASH_SIZE, SPDM_LABEL_IV, NULL, 0,
+        ctx->rspDataIv, WOLFSPDM_AEAD_IV_SIZE);
+    if (rc != WOLFSPDM_SUCCESS) {
+        return rc;
+    }
+
+    /* Reset sequence numbers for application phase */
+    ctx->reqSeqNum = 0;
+    ctx->rspSeqNum = 0;
+
+    wolfSPDM_DebugPrint(ctx, "App data keys derived, seq nums reset to 0\n");
 
     return WOLFSPDM_SUCCESS;
 }

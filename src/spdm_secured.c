@@ -23,21 +23,81 @@
 #include <string.h>
 
 /*
- * SPDM Secured Message Format (MCTP transport - DSP0277):
+ * SPDM Secured Message Format (DSP0277):
  *
- * Header (AAD):
- *   SessionID (4, LE) || SeqNum (2, LE) || Length (2, LE)
+ * MCTP transport:
+ *   Header/AAD: SessionID(4 LE) + SeqNum(2 LE) + Length(2 LE) = 8 bytes
+ *   IV XOR: Rightmost 2 bytes (bytes 10-11) with 2-byte sequence number
  *
- * Encrypted payload:
- *   ApplicationDataLength (2, LE) || ApplicationData
- *
- * For MCTP, ApplicationData includes inner MCTP header (0x05 for SPDM).
- *
- * IV = BaseIV XOR (0-padded sequence number)
- * AAD = Header (8 bytes)
+ * Nuvoton TCG binding (Rev 1.11):
+ *   Header/AAD: SessionID(4 LE) + SeqNum(8 LE) + Length(2 LE) = 14 bytes
+ *   IV XOR: Leftmost 8 bytes (bytes 0-7) with 8-byte LE sequence number (DSP0277 1.2)
+ *   Plaintext: AppDataLength(2 LE) + SPDM msg + RandomData (pad to 16)
  *
  * Full message: Header || Ciphertext || Tag (16)
  */
+
+#ifdef WOLFSPDM_NUVOTON
+/* Self-test: verify AES-GCM encrypt/decrypt round-trip with current keys.
+ * Called before first encrypted message to confirm crypto parameters. */
+static int wolfSPDM_AesGcmSelfTest(WOLFSPDM_CTX* ctx)
+{
+    Aes aesEnc, aesDec;
+    byte testPlain[] = "wolfSPDM AES-GCM self-test 1234";  /* 31 bytes */
+    byte testCipher[32];
+    byte testDecrypted[32];
+    byte testTag[WOLFSPDM_AEAD_TAG_SIZE];
+    byte testAad[14];
+    word32 testPlainSz = sizeof(testPlain);
+    int rc;
+
+    /* Build AAD matching what we'd use for SeqNum=0 */
+    testAad[0] = (byte)(ctx->sessionId & 0xFF);
+    testAad[1] = (byte)((ctx->sessionId >> 8) & 0xFF);
+    testAad[2] = (byte)((ctx->sessionId >> 16) & 0xFF);
+    testAad[3] = (byte)((ctx->sessionId >> 24) & 0xFF);
+    XMEMSET(&testAad[4], 0, 8);  /* SeqNum = 0 */
+    testAad[12] = (byte)((testPlainSz + 16) & 0xFF);
+    testAad[13] = (byte)(((testPlainSz + 16) >> 8) & 0xFF);
+
+    /* Encrypt */
+    rc = wc_AesGcmSetKey(&aesEnc, ctx->reqDataKey, WOLFSPDM_AEAD_KEY_SIZE);
+    if (rc != 0) {
+        wolfSPDM_DebugPrint(ctx, "Self-test: AesGcmSetKey (enc) failed: %d\n", rc);
+        return rc;
+    }
+    rc = wc_AesGcmEncrypt(&aesEnc, testCipher, testPlain, testPlainSz,
+        ctx->reqDataIv, WOLFSPDM_AEAD_IV_SIZE,
+        testTag, WOLFSPDM_AEAD_TAG_SIZE, testAad, 14);
+    if (rc != 0) {
+        wolfSPDM_DebugPrint(ctx, "Self-test: AesGcmEncrypt failed: %d\n", rc);
+        return rc;
+    }
+
+    /* Decrypt with same key */
+    rc = wc_AesGcmSetKey(&aesDec, ctx->reqDataKey, WOLFSPDM_AEAD_KEY_SIZE);
+    if (rc != 0) {
+        wolfSPDM_DebugPrint(ctx, "Self-test: AesGcmSetKey (dec) failed: %d\n", rc);
+        return rc;
+    }
+    rc = wc_AesGcmDecrypt(&aesDec, testDecrypted, testCipher, testPlainSz,
+        ctx->reqDataIv, WOLFSPDM_AEAD_IV_SIZE,
+        testTag, WOLFSPDM_AEAD_TAG_SIZE, testAad, 14);
+    if (rc != 0) {
+        wolfSPDM_DebugPrint(ctx, "Self-test: AesGcmDecrypt FAILED: %d\n", rc);
+        return rc;
+    }
+
+    /* Verify plaintext matches */
+    if (XMEMCMP(testPlain, testDecrypted, testPlainSz) != 0) {
+        wolfSPDM_DebugPrint(ctx, "Self-test: Plaintext mismatch!\n");
+        return -1;
+    }
+
+    wolfSPDM_DebugPrint(ctx, "Self-test: AES-GCM round-trip PASSED\n");
+    return 0;
+}
+#endif /* WOLFSPDM_NUVOTON */
 
 int wolfSPDM_EncryptInternal(WOLFSPDM_CTX* ctx,
     const byte* plain, word32 plainSz,
@@ -67,6 +127,15 @@ int wolfSPDM_EncryptInternal(WOLFSPDM_CTX* ctx,
          * IV XOR: Rightmost 8 bytes (bytes 4-11) with 8-byte sequence number
          */
         word16 appDataLen = (word16)plainSz;
+
+        /* Run self-test before first encrypted message */
+        if (ctx->reqSeqNum == 0) {
+            rc = wolfSPDM_AesGcmSelfTest(ctx);
+            if (rc != 0) {
+                wolfSPDM_DebugPrint(ctx, "AES-GCM self-test FAILED: %d\n", rc);
+                return WOLFSPDM_E_CRYPTO_FAIL;
+            }
+        }
         word16 unpadded = (word16)(2 + appDataLen);  /* AppDataLength + SPDM msg */
         word16 padLen = (word16)((16 - (unpadded % 16)) % 16);  /* Pad to 16-byte boundary */
         word16 encPayloadSz = (word16)(unpadded + padLen);
@@ -163,18 +232,19 @@ int wolfSPDM_EncryptInternal(WOLFSPDM_CTX* ctx,
     XMEMCPY(iv, ctx->reqDataIv, WOLFSPDM_AEAD_IV_SIZE);
 #ifdef WOLFSPDM_NUVOTON
     if (ctx->mode == WOLFSPDM_MODE_NUVOTON) {
-        /* Nuvoton TCG binding per Rev 1.11 spec page 25:
-         * XOR rightmost 8 bytes of IV (bytes 4-11) with 64-bit SequenceNumber.
-         * Sequence number is in little-endian format.
+        /* DSP0277 1.2 IV construction:
+         * Zero-extend 8-byte LE sequence number to iv_length (12 bytes),
+         * then XOR with base IV. Seq occupies leftmost bytes (0-7),
+         * zero-padding at bytes 8-11.
          */
-        iv[4]  ^= (byte)(ctx->reqSeqNum & 0xFF);
-        iv[5]  ^= (byte)((ctx->reqSeqNum >> 8) & 0xFF);
-        iv[6]  ^= (byte)((ctx->reqSeqNum >> 16) & 0xFF);
-        iv[7]  ^= (byte)((ctx->reqSeqNum >> 24) & 0xFF);
-        iv[8]  ^= (byte)((ctx->reqSeqNum >> 32) & 0xFF);
-        iv[9]  ^= (byte)((ctx->reqSeqNum >> 40) & 0xFF);
-        iv[10] ^= (byte)((ctx->reqSeqNum >> 48) & 0xFF);
-        iv[11] ^= (byte)((ctx->reqSeqNum >> 56) & 0xFF);
+        iv[0]  ^= (byte)(ctx->reqSeqNum & 0xFF);
+        iv[1]  ^= (byte)((ctx->reqSeqNum >> 8) & 0xFF);
+        iv[2]  ^= (byte)((ctx->reqSeqNum >> 16) & 0xFF);
+        iv[3]  ^= (byte)((ctx->reqSeqNum >> 24) & 0xFF);
+        iv[4]  ^= (byte)((ctx->reqSeqNum >> 32) & 0xFF);
+        iv[5]  ^= (byte)((ctx->reqSeqNum >> 40) & 0xFF);
+        iv[6]  ^= (byte)((ctx->reqSeqNum >> 48) & 0xFF);
+        iv[7]  ^= (byte)((ctx->reqSeqNum >> 56) & 0xFF);
     }
     else
 #endif
@@ -183,35 +253,6 @@ int wolfSPDM_EncryptInternal(WOLFSPDM_CTX* ctx,
         iv[10] ^= (byte)(ctx->reqSeqNum & 0xFF);
         iv[11] ^= (byte)((ctx->reqSeqNum >> 8) & 0xFF);
     }
-
-    /* Debug: print encryption parameters */
-    wolfSPDM_DebugHex(ctx, "reqDataKey", ctx->reqDataKey, WOLFSPDM_AEAD_KEY_SIZE);
-    wolfSPDM_DebugHex(ctx, "rspDataKey", ctx->rspDataKey, WOLFSPDM_AEAD_KEY_SIZE);
-    wolfSPDM_DebugHex(ctx, "reqDataIv (base)", ctx->reqDataIv, WOLFSPDM_AEAD_IV_SIZE);
-    wolfSPDM_DebugHex(ctx, "rspDataIv (base)", ctx->rspDataIv, WOLFSPDM_AEAD_IV_SIZE);
-    wolfSPDM_DebugHex(ctx, "Using IV (after XOR)", iv, WOLFSPDM_AEAD_IV_SIZE);
-    wolfSPDM_DebugHex(ctx, "Using AAD", aad, aadSz);
-#ifdef WOLFSPDM_NUVOTON
-    if (ctx->mode == WOLFSPDM_MODE_NUVOTON) {
-        /* 14-byte AAD: SessionID(4) + SeqNum(8) + Length(2) */
-        wolfSPDM_DebugPrint(ctx, "AAD breakdown (Nuvoton): SessionID=%02x%02x%02x%02x "
-            "SeqNum=%02x%02x%02x%02x%02x%02x%02x%02x Length=%02x%02x\n",
-            aad[0], aad[1], aad[2], aad[3],
-            aad[4], aad[5], aad[6], aad[7], aad[8], aad[9], aad[10], aad[11],
-            aad[12], aad[13]);
-    }
-    else
-#endif
-    {
-        /* 8-byte AAD: SessionID(4) + SeqNum(2) + Length(2) */
-        wolfSPDM_DebugPrint(ctx, "AAD breakdown: SessionID=%02x%02x%02x%02x SeqNum=%02x%02x Length=%02x%02x\n",
-            aad[0], aad[1], aad[2], aad[3],
-            aad[4], aad[5],
-            aad[6], aad[7]);
-    }
-    wolfSPDM_DebugPrint(ctx, "Plaintext size: %u bytes (SPDM msg: %u, padding: %u)\n",
-        plainBufSz, plainSz, plainBufSz - 2 - plainSz);
-    wolfSPDM_DebugHex(ctx, "Plaintext (full)", plainBuf, plainBufSz);
 
     rc = wc_AesGcmSetKey(&aes, ctx->reqDataKey, WOLFSPDM_AEAD_KEY_SIZE);
     if (rc != 0) {
@@ -227,11 +268,6 @@ int wolfSPDM_EncryptInternal(WOLFSPDM_CTX* ctx,
     XMEMCPY(&enc[hdrSz], ciphertext, plainBufSz);
     XMEMCPY(&enc[hdrSz + plainBufSz], tag, WOLFSPDM_AEAD_TAG_SIZE);
     *encSz = hdrSz + plainBufSz + WOLFSPDM_AEAD_TAG_SIZE;
-
-    wolfSPDM_DebugHex(ctx, "Ciphertext (first 32)", ciphertext, 32);
-    wolfSPDM_DebugHex(ctx, "MAC Tag", tag, WOLFSPDM_AEAD_TAG_SIZE);
-    wolfSPDM_DebugHex(ctx, "Full encrypted output (first 48)", enc, 48);
-    wolfSPDM_DebugHex(ctx, "Last 20 bytes of output", enc + *encSz - 20, 20);
 
     ctx->reqSeqNum++;
 
@@ -306,21 +342,19 @@ int wolfSPDM_DecryptInternal(WOLFSPDM_CTX* ctx,
 
         XMEMCPY(aad, enc, aadSz);
 
-        /* Build IV: XOR bytes 4-11 with sequence number (per Nuvoton spec) */
+        /* DSP0277 1.2 IV construction:
+         * Zero-extend 8-byte LE sequence number to iv_length (12 bytes),
+         * then XOR with base IV. Seq occupies leftmost bytes (0-7).
+         * SeqNum bytes are at enc[4]-enc[11] in the record header. */
         XMEMCPY(iv, ctx->rspDataIv, WOLFSPDM_AEAD_IV_SIZE);
-        iv[4]  ^= enc[4];   /* SeqNum byte 0 */
-        iv[5]  ^= enc[5];   /* SeqNum byte 1 */
-        iv[6]  ^= enc[6];   /* SeqNum byte 2 */
-        iv[7]  ^= enc[7];   /* SeqNum byte 3 */
-        iv[8]  ^= enc[8];   /* SeqNum byte 4 */
-        iv[9]  ^= enc[9];   /* SeqNum byte 5 */
-        iv[10] ^= enc[10];  /* SeqNum byte 6 */
-        iv[11] ^= enc[11];  /* SeqNum byte 7 */
-
-        wolfSPDM_DebugHex(ctx, "Decrypt AAD (14 bytes)", aad, aadSz);
-        wolfSPDM_DebugHex(ctx, "Decrypt IV (after XOR)", iv, WOLFSPDM_AEAD_IV_SIZE);
-        wolfSPDM_DebugPrint(ctx, "Ciphertext len: %u, Tag at offset: %u\n",
-            cipherLen, hdrSz + cipherLen);
+        iv[0]  ^= enc[4];   /* SeqNum byte 0 */
+        iv[1]  ^= enc[5];   /* SeqNum byte 1 */
+        iv[2]  ^= enc[6];   /* SeqNum byte 2 */
+        iv[3]  ^= enc[7];   /* SeqNum byte 3 */
+        iv[4]  ^= enc[8];   /* SeqNum byte 4 */
+        iv[5]  ^= enc[9];   /* SeqNum byte 5 */
+        iv[6]  ^= enc[10];  /* SeqNum byte 6 */
+        iv[7]  ^= enc[11];  /* SeqNum byte 7 */
 
         rc = wc_AesGcmSetKey(&aes, ctx->rspDataKey, WOLFSPDM_AEAD_KEY_SIZE);
         if (rc != 0) {
@@ -331,16 +365,11 @@ int wolfSPDM_DecryptInternal(WOLFSPDM_CTX* ctx,
             iv, WOLFSPDM_AEAD_IV_SIZE, tag, WOLFSPDM_AEAD_TAG_SIZE, aad, aadSz);
         if (rc != 0) {
             wolfSPDM_DebugPrint(ctx, "AES-GCM decrypt failed: %d\n", rc);
-            wolfSPDM_DebugHex(ctx, "Received tag", tag, WOLFSPDM_AEAD_TAG_SIZE);
             return WOLFSPDM_E_DECRYPT_FAIL;
         }
 
         /* Parse decrypted: AppDataLen (2 LE) || SPDM message || RandomData */
         appDataLen = (word16)(decrypted[0] | (decrypted[1] << 8));
-
-        wolfSPDM_DebugPrint(ctx, "Decrypted appDataLen: %u\n", appDataLen);
-        wolfSPDM_DebugHex(ctx, "Decrypted data (first 32)", decrypted,
-            cipherLen > 32 ? 32 : cipherLen);
 
         if (cipherLen < (word32)(2 + appDataLen)) {
             return WOLFSPDM_E_BUFFER_SMALL;

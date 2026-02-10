@@ -494,16 +494,12 @@ static int wolfSPDM_Nuvoton_SendClear(
         return txSz;
     }
 
-    wolfSPDM_DebugHex(ctx, "Nuvoton TX", txBuf, (word32)txSz);
-
     /* Send via IO callback and receive response */
     rc = ctx->ioCb(ctx, txBuf, (word32)txSz, rxBuf, rxSz, ctx->ioUserCtx);
     if (rc != 0) {
         wolfSPDM_DebugPrint(ctx, "Nuvoton I/O failed: %d\n", rc);
         return WOLFSPDM_E_IO_FAIL;
     }
-
-    wolfSPDM_DebugHex(ctx, "Nuvoton RX", rxBuf, *rxSz);
 
     return WOLFSPDM_SUCCESS;
 }
@@ -763,9 +759,6 @@ int wolfSPDM_Nuvoton_GetStatus(
     wolfSPDM_DebugPrint(ctx, "GET_STS_: VdCode='%.8s', %u bytes\n",
         rspVdCode, rspPayloadSz);
 
-    /* Debug: dump raw response payload using hex dump function */
-    wolfSPDM_DebugHex(ctx, "GET_STS_ payload", rspPayload, rspPayloadSz);
-
     /* Parse status fields per Nuvoton spec page 9:
      * Byte 0: SpecVersionMajor (0 for SPDM 1.x)
      * Byte 1: SpecVersionMinor (1 = SPDM 1.1, 3 = SPDM 1.3)
@@ -774,7 +767,6 @@ int wolfSPDM_Nuvoton_GetStatus(
     if (rspPayloadSz >= 4) {
         byte specMajor = rspPayload[0];
         byte specMinor = rspPayload[1];
-        /* byte reserved = rspPayload[2]; */
         byte spdmOnly = rspPayload[3];
 
         status->specVersionMajor = specMajor;
@@ -796,7 +788,6 @@ int wolfSPDM_Nuvoton_GetStatus(
         wolfSPDM_DebugPrint(ctx, "GET_STS_: SPDMOnly=%s (minimal response)\n",
             status->spdmOnlyLocked ? "LOCKED" : "unlocked");
     }
-
     return WOLFSPDM_SUCCESS;
 }
 
@@ -964,9 +955,6 @@ int wolfSPDM_ConnectNuvoton(WOLFSPDM_CTX* ctx)
             ctx->state = WOLFSPDM_STATE_ERROR;
             return WOLFSPDM_E_CRYPTO_FAIL;
         }
-
-        wolfSPDM_DebugHex(ctx, "Ct (TPMT_PUBLIC hash)", ctx->certChainHash,
-            WOLFSPDM_HASH_SIZE);
 
         /* Add Ct to transcript */
         rc = wolfSPDM_TranscriptAdd(ctx, ctx->certChainHash, WOLFSPDM_HASH_SIZE);
