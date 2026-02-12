@@ -101,6 +101,8 @@ struct WOLFSPDM_CTX {
     byte spdmVersion;           /* Negotiated SPDM version */
     word32 rspCaps;             /* Responder capabilities */
     word32 reqCaps;             /* Our (requester) capabilities */
+    byte mutAuthRequested;      /* MutAuthRequested from KEY_EXCHANGE_RSP (offset 6) */
+    byte reqSlotId;             /* ReqSlotIDParam from KEY_EXCHANGE_RSP (offset 7) */
 
     /* Ephemeral ECDHE key (generated for KEY_EXCHANGE) */
     ecc_key ephemeralKey;
@@ -210,6 +212,9 @@ int wolfSPDM_SignHash(WOLFSPDM_CTX* ctx, const byte* hash, word32 hashSz,
 
 /* Derive all keys from shared secret and TH1 */
 int wolfSPDM_DeriveHandshakeKeys(WOLFSPDM_CTX* ctx, const byte* th1Hash);
+
+/* Derive application data keys from MasterSecret and TH2_final */
+int wolfSPDM_DeriveAppDataKeys(WOLFSPDM_CTX* ctx);
 
 /* HKDF-Expand with SPDM BinConcat format (uses version-specific prefix) */
 int wolfSPDM_HkdfExpandLabel(byte spdmVersion, const byte* secret, word32 secretSz,

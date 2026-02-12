@@ -113,8 +113,6 @@ int wolfSPDM_TranscriptHash(WOLFSPDM_CTX* ctx, byte* hash)
         return WOLFSPDM_E_CRYPTO_FAIL;
     }
 
-    wolfSPDM_DebugHex(ctx, "Transcript Hash", hash, WOLFSPDM_HASH_SIZE);
-
     return WOLFSPDM_SUCCESS;
 }
 
@@ -152,7 +150,6 @@ int wolfSPDM_ComputeCertChainHash(WOLFSPDM_CTX* ctx)
     }
 
     wolfSPDM_DebugPrint(ctx, "Ct = Hash(cert_chain[%u])\n", ctx->certChainLen);
-    wolfSPDM_DebugHex(ctx, "Ct", ctx->certChainHash, WOLFSPDM_HASH_SIZE);
 
     return WOLFSPDM_SUCCESS;
 }

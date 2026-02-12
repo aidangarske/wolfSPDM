@@ -206,15 +206,6 @@ int wolfSPDM_Finish(WOLFSPDM_CTX* ctx)
         return rc;
     }
 
-    wolfSPDM_DebugPrint(ctx, "\n=== FINISH Debug ===\n");
-    wolfSPDM_DebugPrint(ctx, "Plaintext FINISH size: %u bytes\n", finishSz);
-    wolfSPDM_DebugHex(ctx, "Plaintext FINISH", finishBuf, finishSz);
-    wolfSPDM_DebugPrint(ctx, "Current transcript len: %u bytes\n", ctx->transcriptLen);
-    wolfSPDM_DebugPrint(ctx, "Session IDs: req=0x%04x rsp=0x%04x combined=0x%08x\n",
-        ctx->reqSessionId, ctx->rspSessionId, ctx->sessionId);
-    wolfSPDM_DebugPrint(ctx, "Sequence numbers: req=%llu rsp=%llu\n",
-        (unsigned long long)ctx->reqSeqNum, (unsigned long long)ctx->rspSeqNum);
-
     /* FINISH must be sent encrypted (HANDSHAKE_IN_THE_CLEAR not negotiated) */
     rc = wolfSPDM_EncryptInternal(ctx, finishBuf, finishSz, encBuf, &encSz);
     if (rc != WOLFSPDM_SUCCESS) {
@@ -222,17 +213,11 @@ int wolfSPDM_Finish(WOLFSPDM_CTX* ctx)
         return rc;
     }
 
-    wolfSPDM_DebugPrint(ctx, "Encrypted FINISH size: %u bytes\n", encSz);
-    wolfSPDM_DebugHex(ctx, "Encrypted FINISH (full)", encBuf, encSz);
-
     rc = wolfSPDM_SendReceive(ctx, encBuf, encSz, rxBuf, &rxSz);
     if (rc != WOLFSPDM_SUCCESS) {
         wolfSPDM_DebugPrint(ctx, "FINISH SendReceive failed: %d\n", rc);
         return rc;
     }
-
-    wolfSPDM_DebugPrint(ctx, "FINISH response: %u bytes\n", rxSz);
-    wolfSPDM_DebugHex(ctx, "FINISH response", rxBuf, rxSz);
 
     /* Check if response is unencrypted SPDM message
      * SPDM messages start with version byte (0x10-0x1F).
@@ -242,15 +227,15 @@ int wolfSPDM_Finish(WOLFSPDM_CTX* ctx)
         if (rxBuf[1] == 0x7F) {  /* SPDM_ERROR */
             wolfSPDM_DebugPrint(ctx, "FINISH: TPM returned unencrypted SPDM ERROR!\n");
             wolfSPDM_DebugPrint(ctx, "  Error code: 0x%02x (%s)\n", rxBuf[2],
-                rxBuf[2] == 0x01 ? "InvalidRequest" :
-                rxBuf[2] == 0x03 ? "Busy" :
-                rxBuf[2] == 0x05 ? "DecryptError" :
-                rxBuf[2] == 0x06 ? "UnsupportedRequest" :
-                rxBuf[2] == 0x41 ? "ResponseTooLarge" : "Unknown");
+                rxBuf[2] == SPDM_ERROR_INVALID_REQUEST ? "InvalidRequest" :
+                rxBuf[2] == SPDM_ERROR_BUSY ? "Busy" :
+                rxBuf[2] == SPDM_ERROR_UNEXPECTED_REQUEST ? "UnexpectedRequest" :
+                rxBuf[2] == SPDM_ERROR_UNSPECIFIED ? "Unspecified" :
+                rxBuf[2] == SPDM_ERROR_DECRYPT_ERROR ? "DecryptError" :
+                rxBuf[2] == SPDM_ERROR_UNSUPPORTED_REQUEST ? "UnsupportedRequest" :
+                rxBuf[2] == SPDM_ERROR_MAJOR_VERSION_MISMATCH ? "VersionMismatch" : "Unknown");
             wolfSPDM_DebugPrint(ctx, "  Error data: 0x%02x\n", (rxSz >= 4) ? rxBuf[3] : 0);
-            wolfSPDM_DebugPrint(ctx, "  NOTE: Unencrypted error suggests TPM rejected "
-                "message format, NOT crypto failure\n");
-            wolfSPDM_DebugPrint(ctx, "=== End FINISH Debug ===\n\n");
+    
             return WOLFSPDM_E_PEER_ERROR;
         }
         wolfSPDM_DebugPrint(ctx, "FINISH: Unexpected unencrypted response code 0x%02x\n",
@@ -261,13 +246,23 @@ int wolfSPDM_Finish(WOLFSPDM_CTX* ctx)
     rc = wolfSPDM_DecryptInternal(ctx, rxBuf, rxSz, decBuf, &decSz);
     if (rc != WOLFSPDM_SUCCESS) {
         wolfSPDM_DebugPrint(ctx, "FINISH decrypt failed: %d\n", rc);
-        wolfSPDM_DebugPrint(ctx, "=== End FINISH Debug ===\n\n");
+
         return rc;
     }
 
-    wolfSPDM_DebugPrint(ctx, "Decrypted FINISH_RSP: %u bytes\n", decSz);
-    wolfSPDM_DebugHex(ctx, "Decrypted FINISH_RSP", decBuf, decSz);
-    wolfSPDM_DebugPrint(ctx, "=== End FINISH Debug ===\n\n");
+    rc = wolfSPDM_ParseFinishRsp(ctx, decBuf, decSz);
+    if (rc != WOLFSPDM_SUCCESS) {
 
-    return wolfSPDM_ParseFinishRsp(ctx, decBuf, decSz);
+        return rc;
+    }
+
+    /* Derive application data keys (transition from handshake to app phase) */
+    rc = wolfSPDM_DeriveAppDataKeys(ctx);
+    if (rc != WOLFSPDM_SUCCESS) {
+        wolfSPDM_DebugPrint(ctx, "App data key derivation failed: %d\n", rc);
+
+        return rc;
+    }
+
+    return WOLFSPDM_SUCCESS;
 }

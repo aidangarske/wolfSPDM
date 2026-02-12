@@ -171,7 +171,6 @@ int wolfSPDM_ComputeSharedSecret(WOLFSPDM_CTX* ctx,
 
     wolfSPDM_DebugPrint(ctx, "ECDH shared secret computed (%u bytes)\n",
         ctx->sharedSecretSz);
-    wolfSPDM_DebugHex(ctx, "Z.x", ctx->sharedSecret, ctx->sharedSecretSz);
 
     rc = 0;
 
@@ -262,7 +261,6 @@ int wolfSPDM_SignHash(WOLFSPDM_CTX* ctx, const byte* hash, word32 hashSz,
     *sigSz = WOLFSPDM_ECC_POINT_SIZE; /* 96 bytes */
 
     wolfSPDM_DebugPrint(ctx, "Signed hash with P-384 key (sig=%u bytes)\n", *sigSz);
-    wolfSPDM_DebugHex(ctx, "Signature", sig, *sigSz);
 
     rc = 0;
 

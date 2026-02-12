@@ -259,40 +259,59 @@ int wolfSPDM_BuildFinish(WOLFSPDM_CTX* ctx, byte* buf, word32* bufSz)
     buf[1] = SPDM_FINISH;
     if (mutualAuth) {
         buf[2] = 0x01;  /* Param1: Signature field is included */
-        buf[3] = 0xFF;  /* Param2: 0xFF = Requester public key provisioned in trusted environment (per Nuvoton spec) */
+        buf[3] = 0xFF;  /* Param2: 0xFF = requester public key provisioned in trusted environment (GIVE_PUB_KEY) */
         wolfSPDM_DebugPrint(ctx, "FINISH: mutual auth with signature\n");
         wolfSPDM_DebugPrint(ctx, "  Header: version=0x%02x code=0x%02x param1=0x%02x param2=0x%02x\n",
             buf[0], buf[1], buf[2], buf[3]);
     }
     else {
         buf[2] = 0x00;  /* Param1: No signature */
-        buf[3] = 0x00;  /* Param2: SlotID */
+        buf[3] = 0x00;  /* Param2: SlotID = 0 when no signature */
         wolfSPDM_DebugPrint(ctx, "FINISH: no mutual auth\n");
         wolfSPDM_DebugPrint(ctx, "  Header: version=0x%02x code=0x%02x param1=0x%02x param2=0x%02x\n",
             buf[0], buf[1], buf[2], buf[3]);
     }
 
-    /* Debug: Show transcript state before adding FINISH header */
-    wolfSPDM_DebugPrint(ctx, "\n=== BuildFinish Transcript Debug ===\n");
-    wolfSPDM_DebugPrint(ctx, "Transcript before FINISH header: %u bytes\n", ctx->transcriptLen);
-    wolfSPDM_DebugPrint(ctx, "Expected components:\n");
-    wolfSPDM_DebugPrint(ctx, "  - VCA (GET_VERSION + VERSION): ~12 bytes\n");
-    wolfSPDM_DebugPrint(ctx, "  - Ct (cert chain hash): 48 bytes\n");
-    wolfSPDM_DebugPrint(ctx, "  - KEY_EXCHANGE: ~150 bytes\n");
-    wolfSPDM_DebugPrint(ctx, "  - KEY_EXCHANGE_RSP partial: ~146 bytes\n");
-    wolfSPDM_DebugPrint(ctx, "  - Signature: 96 bytes\n");
-    wolfSPDM_DebugPrint(ctx, "  - ResponderVerifyData: 48 bytes\n");
-    wolfSPDM_DebugPrint(ctx, "  Total expected: ~500 bytes\n");
-    wolfSPDM_DebugHex(ctx, "TH1 (from KEY_EXCHANGE)", ctx->th1, WOLFSPDM_HASH_SIZE);
-    wolfSPDM_DebugHex(ctx, "Transcript (first 64 bytes)", ctx->transcript, 64);
+    /* Per DSP0274 / libspdm: When mutual auth is requested, the transcript
+     * for TH2 must include Hash(Cm_requester) - the hash of the requester's
+     * public key/cert chain - BETWEEN message_k and message_f (FINISH header).
+     *
+     * TH2 = Hash(VCA || Ct || message_k || Hash(Cm_req) || FINISH_header)
+     *
+     * For Nuvoton with PUB_KEY_ID (SlotID=0xFF), Cm is the TPMT_PUBLIC
+     * structure that was sent via GIVE_PUB_KEY. */
+#ifdef WOLFSPDM_NUVOTON
+    if (mutualAuth && ctx->reqPubKeyTPMTLen > 0) {
+        byte cmHash[WOLFSPDM_HASH_SIZE];
+        wc_Sha384 shaCm;
+
+        rc = wc_InitSha384(&shaCm);
+        if (rc != 0) {
+            return WOLFSPDM_E_CRYPTO_FAIL;
+        }
+        rc = wc_Sha384Update(&shaCm, ctx->reqPubKeyTPMT, ctx->reqPubKeyTPMTLen);
+        if (rc != 0) {
+            wc_Sha384Free(&shaCm);
+            return WOLFSPDM_E_CRYPTO_FAIL;
+        }
+        rc = wc_Sha384Final(&shaCm, cmHash);
+        wc_Sha384Free(&shaCm);
+        if (rc != 0) {
+            return WOLFSPDM_E_CRYPTO_FAIL;
+        }
+
+        rc = wolfSPDM_TranscriptAdd(ctx, cmHash, WOLFSPDM_HASH_SIZE);
+        if (rc != WOLFSPDM_SUCCESS) {
+            return rc;
+        }
+    }
+#endif
 
     /* Add FINISH header to transcript for TH2 */
     rc = wolfSPDM_TranscriptAdd(ctx, buf, 4);
     if (rc != WOLFSPDM_SUCCESS) {
         return rc;
     }
-
-    wolfSPDM_DebugPrint(ctx, "Transcript after FINISH header: %u bytes\n", ctx->transcriptLen);
 
     /* TH2 = Hash(transcript with FINISH header) */
     rc = wolfSPDM_TranscriptHash(ctx, th2Hash);
@@ -301,49 +320,58 @@ int wolfSPDM_BuildFinish(WOLFSPDM_CTX* ctx, byte* buf, word32* bufSz)
     }
 
     XMEMCPY(ctx->th2, th2Hash, WOLFSPDM_HASH_SIZE);
-    wolfSPDM_DebugHex(ctx, "TH2", th2Hash, WOLFSPDM_HASH_SIZE);
-    wolfSPDM_DebugPrint(ctx, "=== End BuildFinish Transcript Debug ===\n\n");
 
     /* For mutual auth, use SPDM 1.2+ signing context format per DSP0274:
-     * M = SPDM_SIGNING_CONTEXT_PREFIX || SPDM_VERSION || SIGNING_CONTEXT || TH2
+     * M = combined_spdm_prefix || zero_pad || signing_context || TH2
      *
-     * Where:
-     * - SPDM_SIGNING_CONTEXT_PREFIX = 64 bytes of ASCII space (0x20)
-     * - SPDM_VERSION = "spdm1.3 " (8 bytes with trailing space, for v1.3)
-     * - SIGNING_CONTEXT = "requester-finish signing" (24 bytes)
+     * Where (per libspdm reference implementation):
+     * - combined_spdm_prefix = "dmtf-spdm-v1.3.*" repeated 4 times = 64 bytes
+     *   (16 bytes each, NOT including null terminator)
+     * - zero_pad = 12 bytes of 0x00 (36 - strlen("requester-finish signing"))
+     * - signing_context = "requester-finish signing" (24 bytes)
      * - TH2 = transcript hash (48 bytes for SHA-384)
      *
-     * Total: 64 + 8 + 24 + 48 = 144 bytes */
+     * Total: 64 + 12 + 24 + 48 = 148 bytes */
     if (mutualAuth) {
-        /* Build signing context per SPDM 1.2+ spec */
-        static const char spdm_version[] = "spdm1.3 ";  /* 8 bytes */
+        /* Build signing context per DSP0274 / libspdm */
         static const char context_str[] = "requester-finish signing";  /* 24 bytes */
-        byte signMsg[200];  /* 64 + 8 + 24 + 48 = 144 bytes */
+        /* 16 bytes per prefix (sizeof - 1, no null terminator) */
+        #define SPDM_SIGNING_PREFIX_SIZE 16
+        #define SPDM_SIGNING_CONTEXT_STR_SIZE 24
+        #define SPDM_SIGNING_ZERO_PAD_SIZE (36 - SPDM_SIGNING_CONTEXT_STR_SIZE) /* 12 */
+        byte signMsg[200];  /* 64 + 12 + 24 + 48 = 148 bytes */
         byte signMsgHash[WOLFSPDM_HASH_SIZE];
         word32 signMsgLen = 0;
         wc_Sha384 sha;
+        int i;
+        byte majorVer, minorVer;
 
-        /* 64 bytes of ASCII space (0x20) as signing context prefix */
-        XMEMSET(signMsg, 0x20, 64);
-        signMsgLen = 64;
+        /* Determine version digits from negotiated SPDM version byte (0x13 = 1.3) */
+        majorVer = (byte)('0' + ((ctx->spdmVersion >> 4) & 0xF));  /* '1' */
+        minorVer = (byte)('0' + (ctx->spdmVersion & 0xF));          /* '3' */
 
-        /* SPDM version string: "spdm1.3 " (8 bytes) */
-        XMEMCPY(&signMsg[signMsgLen], spdm_version, 8);
-        signMsgLen += 8;
+        /* combined_spdm_prefix: "dmtf-spdm-v1.3.*" repeated 4 times = 64 bytes
+         * Each copy is 16 bytes (no null terminator), matching libspdm's
+         * SPDM_VERSION_1_2_SIGNING_PREFIX_CONTEXT_SIZE = sizeof(...) - 1 = 16 */
+        for (i = 0; i < 4; i++) {
+            XMEMCPY(&signMsg[signMsgLen], "dmtf-spdm-v1.2.*", SPDM_SIGNING_PREFIX_SIZE);
+            signMsg[signMsgLen + 11] = majorVer;  /* Patch major version */
+            signMsg[signMsgLen + 13] = minorVer;  /* Patch minor version */
+            signMsg[signMsgLen + 15] = '*';        /* Wildcard for update version */
+            signMsgLen += SPDM_SIGNING_PREFIX_SIZE;
+        }
 
-        /* Append signing context string */
-        XMEMCPY(&signMsg[signMsgLen], context_str, 24);
-        signMsgLen += 24;
+        /* Zero padding: 36 - context_str_size = 12 bytes of 0x00 */
+        XMEMSET(&signMsg[signMsgLen], 0x00, SPDM_SIGNING_ZERO_PAD_SIZE);
+        signMsgLen += SPDM_SIGNING_ZERO_PAD_SIZE;
 
-        /* Append TH2 */
+        /* Signing context string: "requester-finish signing" (24 bytes) */
+        XMEMCPY(&signMsg[signMsgLen], context_str, SPDM_SIGNING_CONTEXT_STR_SIZE);
+        signMsgLen += SPDM_SIGNING_CONTEXT_STR_SIZE;
+
+        /* Append TH2 hash */
         XMEMCPY(&signMsg[signMsgLen], th2Hash, WOLFSPDM_HASH_SIZE);
         signMsgLen += WOLFSPDM_HASH_SIZE;
-
-        wolfSPDM_DebugPrint(ctx, "Using SPDM 1.2+ signing context (M = %u bytes)\n", signMsgLen);
-        wolfSPDM_DebugPrint(ctx, "  - 64 bytes 0x20 prefix, then \"spdm1.3 \" + context_str + TH2\n");
-        wolfSPDM_DebugHex(ctx, "Signing context M (first 64 = spaces)", signMsg, 64);
-        wolfSPDM_DebugHex(ctx, "Signing context M (bytes 64-96 = version+context)", &signMsg[64], 32);
-        wolfSPDM_DebugHex(ctx, "Signing context M (last 48 = TH2)", &signMsg[signMsgLen - 48], 48);
 
         /* Hash M to get the value to sign */
         rc = wc_InitSha384(&sha);
@@ -361,8 +389,6 @@ int wolfSPDM_BuildFinish(WOLFSPDM_CTX* ctx, byte* buf, word32* bufSz)
             return WOLFSPDM_E_CRYPTO_FAIL;
         }
 
-        wolfSPDM_DebugHex(ctx, "Hash(M) to sign", signMsgHash, WOLFSPDM_HASH_SIZE);
-
         /* Sign Hash(M) */
         rc = wolfSPDM_SignHash(ctx, signMsgHash, WOLFSPDM_HASH_SIZE, signature, &sigSz);
         if (rc != WOLFSPDM_SUCCESS) {
@@ -370,23 +396,42 @@ int wolfSPDM_BuildFinish(WOLFSPDM_CTX* ctx, byte* buf, word32* bufSz)
             return rc;
         }
 
-        wolfSPDM_DebugHex(ctx, "Signature", signature, WOLFSPDM_ECC_POINT_SIZE);
-
         /* Copy signature to buffer (96 bytes) */
         XMEMCPY(&buf[offset], signature, WOLFSPDM_ECC_POINT_SIZE);
         offset += WOLFSPDM_ECC_POINT_SIZE;
+
+        /* Per DSP0274: TH2 for RequesterVerifyData MUST include the signature.
+         * TH2_sign = Hash(transcript || FINISH_header[4])  - used above for signature
+         * TH2_hmac = Hash(transcript || FINISH_header[4] || Signature[96])  - used for HMAC
+         * Add signature to transcript and recompute TH2 for HMAC. */
+        rc = wolfSPDM_TranscriptAdd(ctx, signature, WOLFSPDM_ECC_POINT_SIZE);
+        if (rc != WOLFSPDM_SUCCESS) {
+            return rc;
+        }
+
+        rc = wolfSPDM_TranscriptHash(ctx, th2Hash);
+        if (rc != WOLFSPDM_SUCCESS) {
+            return rc;
+        }
+
     }
 
-    /* RequesterVerifyData = HMAC(reqFinishedKey, TH2) */
+    /* RequesterVerifyData = HMAC(reqFinishedKey, TH2_hmac)
+     * For mutual auth: th2Hash now includes the signature (TH2_hmac)
+     * For no mutual auth: th2Hash is just Hash(transcript || FINISH_header) */
     rc = wolfSPDM_ComputeVerifyData(ctx->reqFinishedKey, th2Hash, verifyData);
     if (rc != WOLFSPDM_SUCCESS) {
         return rc;
     }
 
-    wolfSPDM_DebugHex(ctx, "RequesterVerifyData", verifyData, WOLFSPDM_HASH_SIZE);
-
     XMEMCPY(&buf[offset], verifyData, WOLFSPDM_HASH_SIZE);
     offset += WOLFSPDM_HASH_SIZE;
+
+    /* Add RequesterVerifyData to transcript for TH2_final (app data key derivation) */
+    rc = wolfSPDM_TranscriptAdd(ctx, verifyData, WOLFSPDM_HASH_SIZE);
+    if (rc != WOLFSPDM_SUCCESS) {
+        return rc;
+    }
 
     *bufSz = offset;
     wolfSPDM_DebugPrint(ctx, "FINISH message size: %u bytes\n", *bufSz);
@@ -594,8 +639,14 @@ int wolfSPDM_ParseKeyExchangeRsp(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufS
     ctx->rspSessionId = (word16)(buf[4] | (buf[5] << 8));
     ctx->sessionId = (word32)ctx->reqSessionId | ((word32)ctx->rspSessionId << 16);
 
+    /* Parse MutAuthRequested (offset 6) and ReqSlotIDParam (offset 7) per DSP0274 */
+    ctx->mutAuthRequested = buf[6];
+    ctx->reqSlotId = buf[7];
+
     wolfSPDM_DebugPrint(ctx, "RspSessionID: 0x%04x, SessionID: 0x%08x\n",
         ctx->rspSessionId, ctx->sessionId);
+    wolfSPDM_DebugPrint(ctx, "MutAuthRequested: 0x%02x, ReqSlotIDParam: 0x%02x\n",
+        ctx->mutAuthRequested, ctx->reqSlotId);
 
     /* Extract responder's ephemeral public key (offset 40 = 4+2+1+1+32) */
     XMEMCPY(peerPubKeyX, &buf[40], WOLFSPDM_ECC_KEY_SIZE);
@@ -611,6 +662,7 @@ int wolfSPDM_ParseKeyExchangeRsp(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufS
     wolfSPDM_DebugPrint(ctx, "  Need: sigOffset(%u) + sig(%u) + hash(%u) = %u bytes\n",
         sigOffset, WOLFSPDM_ECC_SIG_SIZE, WOLFSPDM_HASH_SIZE,
         sigOffset + WOLFSPDM_ECC_SIG_SIZE + WOLFSPDM_HASH_SIZE);
+    (void)opaqueLen;
 
     if (bufSz < sigOffset + WOLFSPDM_ECC_SIG_SIZE + WOLFSPDM_HASH_SIZE) {
         wolfSPDM_DebugPrint(ctx, "  BUFFER_SMALL: have %u, need %u\n",
@@ -644,8 +696,6 @@ int wolfSPDM_ParseKeyExchangeRsp(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufS
     if (rc != WOLFSPDM_SUCCESS) {
         return rc;
     }
-    wolfSPDM_DebugHex(ctx, "TH1", ctx->th1, WOLFSPDM_HASH_SIZE);
-
     /* Derive all session keys */
     rc = wolfSPDM_DeriveHandshakeKeys(ctx, ctx->th1);
     if (rc != WOLFSPDM_SUCCESS) {
@@ -658,23 +708,10 @@ int wolfSPDM_ParseKeyExchangeRsp(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufS
         return rc;
     }
 
-    /* Debug output matching old code format for comparison */
-    wolfSPDM_DebugPrint(ctx, "\n=== ResponderVerifyData Debug ===\n");
-    wolfSPDM_DebugPrint(ctx, "Transcript total: %u bytes\n", ctx->transcriptLen);
-    wolfSPDM_DebugHex(ctx, "Transcript (first 64 bytes)", ctx->transcript,
-        ctx->transcriptLen > 64 ? 64 : ctx->transcriptLen);
-    wolfSPDM_DebugHex(ctx, "TH1 hash", ctx->th1, WOLFSPDM_HASH_SIZE);
-    wolfSPDM_DebugHex(ctx, "rspFinishedKey", ctx->rspFinishedKey, WOLFSPDM_HASH_SIZE);
-    wolfSPDM_DebugHex(ctx, "Expected HMAC", expectedHmac, WOLFSPDM_HASH_SIZE);
-    wolfSPDM_DebugHex(ctx, "Received ResponderVerifyData", rspVerifyData, WOLFSPDM_HASH_SIZE);
-
     if (XMEMCMP(expectedHmac, rspVerifyData, WOLFSPDM_HASH_SIZE) != 0) {
-        wolfSPDM_DebugPrint(ctx, "*** ResponderVerifyData MISMATCH ***\n");
-        wolfSPDM_DebugPrint(ctx, "=== End Debug ===\n\n");
-        /* Note: some implementations may use different transcript format */
+        wolfSPDM_DebugPrint(ctx, "ResponderVerifyData MISMATCH\n");
     } else {
         wolfSPDM_DebugPrint(ctx, "ResponderVerifyData VERIFIED OK\n");
-        wolfSPDM_DebugPrint(ctx, "=== End Debug ===\n\n");
     }
 
     /* Add ResponderVerifyData to transcript (per SPDM spec, always included) */
@@ -694,6 +731,12 @@ int wolfSPDM_ParseFinishRsp(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufSz)
     }
 
     if (buf[1] == SPDM_FINISH_RSP) {
+        int addRc;
+        /* Add FINISH_RSP to transcript for TH2_final (app data key derivation) */
+        addRc = wolfSPDM_TranscriptAdd(ctx, buf, 4);
+        if (addRc != WOLFSPDM_SUCCESS) {
+            return addRc;
+        }
         ctx->state = WOLFSPDM_STATE_FINISH;
         wolfSPDM_DebugPrint(ctx, "FINISH_RSP received - session established\n");
         return WOLFSPDM_SUCCESS;
