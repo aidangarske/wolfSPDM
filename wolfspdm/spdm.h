@@ -92,7 +92,7 @@ typedef enum {
  *     wolfSPDM_Disconnect(ctx);
  *     wolfSPDM_Free(ctx);         // Frees the allocation
  *
- *   Note: WOLFSPDM_CTX is approximately 12KB. On embedded systems with
+ *   Note: WOLFSPDM_CTX is approximately 22KB. On embedded systems with
  *   small stacks, declare it as a static global rather than a local variable.
  *
  * ========================================================================== */
@@ -100,9 +100,11 @@ typedef enum {
 /* Compile-time size for static allocation of WOLFSPDM_CTX.
  * Use this when you need a buffer large enough to hold WOLFSPDM_CTX
  * without access to the struct definition (e.g., in wolfTPM).
- * Must be >= sizeof(WOLFSPDM_CTX). Verified at runtime by
- * wolfSPDM_InitStatic(). */
-#define WOLFSPDM_CTX_STATIC_SIZE  24576
+ * Actual struct size: ~21.2 KB (base) / ~21.3 KB (with Nuvoton).
+ * Rounded up to 22 KB for platform alignment and minor future growth.
+ * wolfSPDM_InitStatic() verifies at runtime that the provided buffer
+ * is large enough; returns WOLFSPDM_E_BUFFER_SMALL if not. */
+#define WOLFSPDM_CTX_STATIC_SIZE  22528
 
 /* Forward declaration */
 struct WOLFSPDM_CTX;
