@@ -19,11 +19,22 @@ endif
 libwolfspdm_la_CPPFLAGS = -I$(srcdir)/wolfspdm -I$(srcdir)/src
 libwolfspdm_la_LIBADD = -lwolfssl
 
+# Generate options.h from config.h (propagate WOLFSPDM_ defines to consumers)
+BUILT_SOURCES = wolfspdm/options.h
+wolfspdm/options.h: config.h
+	@mkdir -p wolfspdm
+	@echo '/* wolfspdm/options.h — auto-generated from config.h, do not edit */' > $@
+	@echo '#ifndef WOLFSPDM_OPTIONS_H' >> $@
+	@echo '#define WOLFSPDM_OPTIONS_H' >> $@
+	@grep '^\#define WOLFSPDM_' config.h >> $@ || true
+	@echo '#endif /* WOLFSPDM_OPTIONS_H */' >> $@
+
 # Public headers
 nobase_include_HEADERS = \
     wolfspdm/spdm.h \
     wolfspdm/spdm_types.h \
-    wolfspdm/spdm_error.h
+    wolfspdm/spdm_error.h \
+    wolfspdm/options.h
 
 # Nuvoton header (always installed, conditionally useful)
 if BUILD_NUVOTON
@@ -53,4 +64,4 @@ EXTRA_DIST = \
     LICENSE \
     wolfspdm.pc.in
 
-CLEANFILES = wolfspdm.pc
+CLEANFILES = wolfspdm.pc wolfspdm/options.h

@@ -44,6 +44,7 @@
 #include <wolfssl/wolfcrypt/hmac.h>
 #include <wolfssl/wolfcrypt/kdf.h>
 #include <wolfssl/wolfcrypt/aes.h>
+#include <wolfssl/wolfcrypt/memory.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -75,6 +76,7 @@ struct WOLFSPDM_CTX {
     /* Configuration flags */
     int debug;
     int initialized;
+    int isDynamic;          /* Set by wolfSPDM_New(), checked by wolfSPDM_Free() */
 
     /* Protocol mode (standard SPDM or Nuvoton) */
     WOLFSPDM_MODE mode;

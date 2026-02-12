@@ -139,15 +139,26 @@ static void tcp_disconnect(void)
     }
 }
 
+/* Static context buffer — sized via wolfSPDM_GetCtxSize() at runtime,
+ * but we need a compile-time upper bound. 16KB is generous. */
+#define CTX_BUF_SIZE 16384
+static byte g_ctxBuf[CTX_BUF_SIZE];
+
 int main(int argc, char* argv[])
 {
-    WOLFSPDM_CTX* ctx;
+    WOLFSPDM_CTX* ctx = (WOLFSPDM_CTX*)g_ctxBuf;
     int rc;
 
     (void)argc;
     (void)argv;
 
     printf("wolfSPDM Test - Connecting to %s:%d\n", EMU_HOST, EMU_PORT);
+
+    if (wolfSPDM_GetCtxSize() > CTX_BUF_SIZE) {
+        printf("ERROR: CTX_BUF_SIZE too small (%d needed)\n",
+            wolfSPDM_GetCtxSize());
+        return 1;
+    }
 
     if (tcp_connect(EMU_HOST, EMU_PORT) < 0) {
         printf("ERROR: Cannot connect to emulator.\n");
@@ -156,17 +167,10 @@ int main(int argc, char* argv[])
         return 1;
     }
 
-    ctx = wolfSPDM_New();
-    if (ctx == NULL) {
-        printf("ERROR: wolfSPDM_New failed\n");
-        tcp_disconnect();
-        return 1;
-    }
-
-    rc = wolfSPDM_Init(ctx);
+    rc = wolfSPDM_InitStatic(ctx, CTX_BUF_SIZE);
     if (rc != WOLFSPDM_SUCCESS) {
-        printf("ERROR: wolfSPDM_Init failed: %s\n", wolfSPDM_GetErrorString(rc));
-        wolfSPDM_Free(ctx);
+        printf("ERROR: wolfSPDM_InitStatic failed: %s\n",
+            wolfSPDM_GetErrorString(rc));
         tcp_disconnect();
         return 1;
     }

@@ -29,21 +29,6 @@
  * Context Management
  * ========================================================================== */
 
-WOLFSPDM_CTX* wolfSPDM_New(void)
-{
-    WOLFSPDM_CTX* ctx;
-
-    ctx = (WOLFSPDM_CTX*)XMALLOC(sizeof(WOLFSPDM_CTX), NULL, DYNAMIC_TYPE_TMP_BUFFER);
-    if (ctx == NULL) {
-        return NULL;
-    }
-
-    XMEMSET(ctx, 0, sizeof(WOLFSPDM_CTX));
-    ctx->state = WOLFSPDM_STATE_INIT;
-
-    return ctx;
-}
-
 int wolfSPDM_Init(WOLFSPDM_CTX* ctx)
 {
     int rc;
@@ -52,9 +37,9 @@ int wolfSPDM_Init(WOLFSPDM_CTX* ctx)
         return WOLFSPDM_E_INVALID_ARG;
     }
 
-    if (ctx->initialized) {
-        return WOLFSPDM_E_ALREADY_INIT;
-    }
+    /* Clean slate — do NOT read any fields before this (could be garbage) */
+    XMEMSET(ctx, 0, sizeof(WOLFSPDM_CTX));
+    ctx->state = WOLFSPDM_STATE_INIT;
 
     /* Initialize RNG */
     rc = wc_InitRng(&ctx->rng);
@@ -70,10 +55,31 @@ int wolfSPDM_Init(WOLFSPDM_CTX* ctx)
     ctx->reqSessionId = 0x0001;
 
     ctx->initialized = 1;
-    ctx->state = WOLFSPDM_STATE_INIT;
+    /* isDynamic remains 0 — only wolfSPDM_New sets it */
 
     return WOLFSPDM_SUCCESS;
 }
+
+#ifdef WOLFSPDM_DYNAMIC_MEMORY
+WOLFSPDM_CTX* wolfSPDM_New(void)
+{
+    WOLFSPDM_CTX* ctx;
+
+    ctx = (WOLFSPDM_CTX*)XMALLOC(sizeof(WOLFSPDM_CTX), NULL,
+                                  DYNAMIC_TYPE_TMP_BUFFER);
+    if (ctx == NULL) {
+        return NULL;
+    }
+
+    if (wolfSPDM_Init(ctx) != WOLFSPDM_SUCCESS) {
+        XFREE(ctx, NULL, DYNAMIC_TYPE_TMP_BUFFER);
+        return NULL;
+    }
+    ctx->isDynamic = 1;  /* Tag AFTER Init so it isn't wiped */
+
+    return ctx;
+}
+#endif /* WOLFSPDM_DYNAMIC_MEMORY */
 
 void wolfSPDM_Free(WOLFSPDM_CTX* ctx)
 {
@@ -81,32 +87,30 @@ void wolfSPDM_Free(WOLFSPDM_CTX* ctx)
         return;
     }
 
+#ifdef WOLFSPDM_DYNAMIC_MEMORY
+    {
+        int wasDynamic = ctx->isDynamic;
+#endif
+
     /* Free RNG */
     if (ctx->rngInitialized) {
         wc_FreeRng(&ctx->rng);
-        ctx->rngInitialized = 0;
     }
 
     /* Free ephemeral key */
     if (ctx->ephemeralKeyInitialized) {
         wc_ecc_free(&ctx->ephemeralKey);
-        ctx->ephemeralKeyInitialized = 0;
     }
 
-    /* Zero out sensitive data */
-    XMEMSET(ctx->sharedSecret, 0, sizeof(ctx->sharedSecret));
-    XMEMSET(ctx->handshakeSecret, 0, sizeof(ctx->handshakeSecret));
-    XMEMSET(ctx->reqHsSecret, 0, sizeof(ctx->reqHsSecret));
-    XMEMSET(ctx->rspHsSecret, 0, sizeof(ctx->rspHsSecret));
-    XMEMSET(ctx->reqFinishedKey, 0, sizeof(ctx->reqFinishedKey));
-    XMEMSET(ctx->rspFinishedKey, 0, sizeof(ctx->rspFinishedKey));
-    XMEMSET(ctx->reqDataKey, 0, sizeof(ctx->reqDataKey));
-    XMEMSET(ctx->rspDataKey, 0, sizeof(ctx->rspDataKey));
-    XMEMSET(ctx->reqDataIv, 0, sizeof(ctx->reqDataIv));
-    XMEMSET(ctx->rspDataIv, 0, sizeof(ctx->rspDataIv));
-    XMEMSET(ctx->reqPrivKey, 0, sizeof(ctx->reqPrivKey));
+    /* Zero entire struct (covers all sensitive key material) */
+    wc_ForceZero(ctx, sizeof(WOLFSPDM_CTX));
 
-    XFREE(ctx, NULL, DYNAMIC_TYPE_TMP_BUFFER);
+#ifdef WOLFSPDM_DYNAMIC_MEMORY
+        if (wasDynamic) {
+            XFREE(ctx, NULL, DYNAMIC_TYPE_TMP_BUFFER);
+        }
+    }
+#endif
 }
 
 int wolfSPDM_GetCtxSize(void)
@@ -123,9 +127,6 @@ int wolfSPDM_InitStatic(WOLFSPDM_CTX* ctx, int size)
     if (size < (int)sizeof(WOLFSPDM_CTX)) {
         return WOLFSPDM_E_BUFFER_SMALL;
     }
-
-    XMEMSET(ctx, 0, sizeof(WOLFSPDM_CTX));
-    ctx->state = WOLFSPDM_STATE_INIT;
 
     return wolfSPDM_Init(ctx);
 }
@@ -389,7 +390,7 @@ int wolfSPDM_Disconnect(WOLFSPDM_CTX* ctx)
 {
     int rc;
     byte txBuf[8];
-    byte rxBuf[64];
+    byte rxBuf[16];   /* END_SESSION_ACK: 4 bytes */
     word32 txSz, rxSz;
 
     if (ctx == NULL) {

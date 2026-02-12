@@ -193,7 +193,7 @@ int wolfSPDM_SignHash(WOLFSPDM_CTX* ctx, const byte* hash, word32 hashSz,
     ecc_key sigKey;
     int rc;
     int keyInit = 0;
-    byte derSig[128];
+    byte derSig[104];  /* P-384 DER sig max: 2 + (2+49) + (2+49) = 104 */
     word32 derSigSz = sizeof(derSig);
     word32 rLen, sLen;
 

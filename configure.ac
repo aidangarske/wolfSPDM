@@ -65,6 +65,16 @@ if test "x$enable_nuvoton" = "xyes"; then
 fi
 AM_CONDITIONAL([BUILD_NUVOTON], [test "x$enable_nuvoton" = "xyes"])
 
+# Dynamic memory allocation (enables wolfSPDM_New/XMALLOC)
+AC_ARG_ENABLE([dynamic-mem],
+    [AS_HELP_STRING([--enable-dynamic-mem], [Enable dynamic memory allocation (wolfSPDM_New)])],
+    [enable_dynamic_mem=$enableval],
+    [enable_dynamic_mem=no])
+
+if test "x$enable_dynamic_mem" = "xyes"; then
+    AC_DEFINE([WOLFSPDM_DYNAMIC_MEMORY], [1], [Enable dynamic memory allocation])
+fi
+
 # Output files
 AC_CONFIG_FILES([Makefile wolfspdm.pc])
 AC_OUTPUT
@@ -74,5 +84,6 @@ echo "wolfSPDM configuration summary:"
 echo "  Version:     $PACKAGE_VERSION"
 echo "  Debug:       $enable_debug"
 echo "  Nuvoton:     $enable_nuvoton"
+echo "  Dynamic mem: $enable_dynamic_mem"
 echo "  wolfSSL:     ${WOLFSSL_DIR:-system}"
 echo ""
