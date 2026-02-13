@@ -1,14 +1,16 @@
 # wolfSPDM
 
-Lightweight SPDM 1.2+ requester-only stack implenation using wolfSSL/wolfCrypt
+Lightweight SPDM 1.2+ requester-only stack implementation using wolfSSL/wolfCrypt
 
 ## Overview
 
 - SPDM 1.2 requester implementation
 - Algorithm Set B (FIPS 140-3 Level 3): ECDSA/ECDHE P-384, SHA-384, AES-256-GCM, HKDF-SHA384
+- **Zero-malloc by default** — fully static memory, ideal for constrained/embedded environments
+- Optional `--enable-dynamic-mem` for heap-allocated contexts (useful for small-stack platforms)
 - Hardware SPDM via wolfTPM + Nuvoton TPM
 - Full transcript tracking for TH1/TH2 computation
-- Compatible with DMTF libspdm emulator for interoperability testing
+- Compatible with DMTF spdm-emu for interoperability testing
 - **FIPS 140-3** (Certificate #4718) via wolfCrypt FIPS
 - **DO-178C DAL A** via wolfCrypt DO-178 with wolfTPM
 
@@ -39,7 +41,45 @@ sudo ldconfig
 make
 ```
 
-## Testing with swpdm-emu Emulator
+### Configure Options
+
+| Option | Description |
+|---|---|
+| `--enable-debug` | Debug output with `-g -O0` (default: `-O2`) |
+| `--enable-nuvoton` | Enable Nuvoton TPM support |
+| `--enable-dynamic-mem` | Use heap allocation for WOLFSPDM_CTX (default: static) |
+| `--with-wolfssl=PATH` | wolfSSL installation path |
+
+### Memory Modes
+
+**Static (default):** Zero heap allocation. The caller provides a buffer
+(`WOLFSPDM_CTX_STATIC_SIZE` bytes, ~22 KB) and wolfSPDM operates entirely
+within it. This is ideal for embedded and constrained environments where
+malloc is unavailable or undesirable.
+
+```c
+#include <wolfspdm/spdm.h>
+
+byte spdmBuf[WOLFSPDM_CTX_STATIC_SIZE];
+WOLFSPDM_CTX* ctx = (WOLFSPDM_CTX*)spdmBuf;
+wolfSPDM_InitStatic(ctx, sizeof(spdmBuf));
+/* ... use ctx ... */
+wolfSPDM_Free(ctx);
+```
+
+**Dynamic (`--enable-dynamic-mem`):** Context is heap-allocated via
+`wolfSPDM_New()`. Useful on platforms with small stacks where a ~22 KB
+local variable is impractical.
+
+```c
+#include <wolfspdm/spdm.h>
+
+WOLFSPDM_CTX* ctx = wolfSPDM_New();
+/* ... use ctx ... */
+wolfSPDM_Free(ctx);  /* frees heap memory */
+```
+
+## Testing with spdm-emu Emulator
 
 ```bash
 # Build emulator
@@ -58,16 +98,18 @@ cd wolfTPM
 ./configure --enable-spdm --enable-swtpm --with-wolfspdm=path/to/wolfspdm
 make
 
-# Terminal 1: Start responder
+# Terminal 1: Start responder with Algorithm Set B
 cd spdm-emu
-./bin/spdm_responder_emu --trans TCP
+./bin/spdm_responder_emu --ver 1.2 \
+    --hash SHA_384 --asym ECDSA_P384 \
+    --dhe SECP_384_R1 --aead AES_256_GCM
 
-# Terminal 2: Run wolfTPM example tests you want
+# Terminal 2: Run wolfTPM example
 cd wolfTPM
-./examples/spdm/spdm_demo --help
+./examples/spdm/spdm_demo --emu
 ```
 
-## Testing with Nuvoton NC75x
+## Testing with Nuvoton NPCT75x
 
 ```bash
 # Build wolfSPDM
@@ -80,17 +122,19 @@ cd wolfTPM
 ./configure --enable-spdm --enable-nuvoton --with-wolfspdm=path/to/wolfspdm
 make
 
-# Terminal 2: Run wolfTPM example tests you want
-./examples/spdm/spdm_demo --help
+# Run test suite
+./examples/spdm/spdm_test.sh
 ```
 
 ## API Reference
 
 | Function | Description |
 |---|---|
-| `wolfSPDM_New()` | Allocate new context |
-| `wolfSPDM_Init()` | Initialize context |
-| `wolfSPDM_Free()` | Free context |
+| `wolfSPDM_InitStatic()` | Initialize context in caller-provided buffer (static mode) |
+| `wolfSPDM_New()` | Allocate and initialize context on heap (dynamic mode) |
+| `wolfSPDM_Init()` | Initialize a pre-allocated context |
+| `wolfSPDM_Free()` | Free context (releases resources; frees heap only if dynamic) |
+| `wolfSPDM_GetCtxSize()` | Return `sizeof(WOLFSPDM_CTX)` at runtime |
 | `wolfSPDM_SetIO()` | Set transport I/O callback |
 | `wolfSPDM_SetDebug()` | Enable/disable debug output |
 | `wolfSPDM_Connect()` | Full SPDM handshake |
