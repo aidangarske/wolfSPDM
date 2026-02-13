@@ -38,6 +38,9 @@ test/test_spdm
 # pkg-config generated
 wolfspdm.pc
 
+# Auto-generated options header
+wolfspdm/options.h
+
 # Editor and IDE files
 *~
 *.swp

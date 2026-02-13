@@ -107,7 +107,6 @@ int wolfSPDM_EncryptInternal(WOLFSPDM_CTX* ctx,
     byte iv[WOLFSPDM_AEAD_IV_SIZE];
     byte aad[16];  /* Up to 14 bytes for TCG format */
     byte plainBuf[WOLFSPDM_MAX_MSG_SIZE + 16];
-    byte ciphertext[WOLFSPDM_MAX_MSG_SIZE + 16];
     byte tag[WOLFSPDM_AEAD_TAG_SIZE];
     word32 plainBufSz;
     word16 recordLen;
@@ -259,13 +258,13 @@ int wolfSPDM_EncryptInternal(WOLFSPDM_CTX* ctx,
         return WOLFSPDM_E_CRYPTO_FAIL;
     }
 
-    rc = wc_AesGcmEncrypt(&aes, ciphertext, plainBuf, plainBufSz,
+    /* Encrypt directly into output buffer (enc + hdrSz) to avoid a copy */
+    rc = wc_AesGcmEncrypt(&aes, &enc[hdrSz], plainBuf, plainBufSz,
         iv, WOLFSPDM_AEAD_IV_SIZE, tag, WOLFSPDM_AEAD_TAG_SIZE, aad, aadSz);
     if (rc != 0) {
         return WOLFSPDM_E_CRYPTO_FAIL;
     }
 
-    XMEMCPY(&enc[hdrSz], ciphertext, plainBufSz);
     XMEMCPY(&enc[hdrSz + plainBufSz], tag, WOLFSPDM_AEAD_TAG_SIZE);
     *encSz = hdrSz + plainBufSz + WOLFSPDM_AEAD_TAG_SIZE;
 
@@ -495,8 +494,8 @@ int wolfSPDM_SecuredExchange(WOLFSPDM_CTX* ctx,
     const byte* cmdPlain, word32 cmdSz,
     byte* rspPlain, word32* rspSz)
 {
-    byte encBuf[WOLFSPDM_MAX_MSG_SIZE + 64];
-    byte rxBuf[WOLFSPDM_MAX_MSG_SIZE + 64];
+    byte encBuf[WOLFSPDM_MAX_MSG_SIZE + 48];
+    byte rxBuf[WOLFSPDM_MAX_MSG_SIZE + 48];
     word32 encSz = sizeof(encBuf);
     word32 rxSz = sizeof(rxBuf);
     int rc;

@@ -22,6 +22,12 @@
 #ifndef WOLFSPDM_SPDM_H
 #define WOLFSPDM_SPDM_H
 
+/* Include build options (WOLFSPDM_DYNAMIC_MEMORY, WOLFSPDM_NUVOTON, etc.)
+ * Generated from config.h during build; installed alongside this header. */
+#ifndef HAVE_CONFIG_H
+    #include <wolfspdm/options.h>
+#endif
+
 #include <wolfspdm/spdm_types.h>
 #include <wolfspdm/spdm_error.h>
 
@@ -68,15 +74,37 @@ typedef enum {
  *   - No external dependencies beyond wolfCrypt
  *
  * Typical Usage:
- *   1. Create context:     ctx = wolfSPDM_New()
- *   2. Set I/O callback:   wolfSPDM_SetIO(ctx, callback, userPtr)
- *   3. Initialize:         wolfSPDM_Init(ctx)
- *   4. Connect:            wolfSPDM_Connect(ctx)
- *   5. Send/Receive:       wolfSPDM_SecuredExchange(ctx, ...)
- *   6. Disconnect:         wolfSPDM_Disconnect(ctx)
- *   7. Free:               wolfSPDM_Free(ctx)
+ *
+ *   Static (default, zero-malloc):
+ *     WOLFSPDM_CTX ctx;
+ *     wolfSPDM_Init(&ctx);
+ *     wolfSPDM_SetIO(&ctx, callback, userPtr);
+ *     wolfSPDM_Connect(&ctx);
+ *     wolfSPDM_SecuredExchange(&ctx, ...);
+ *     wolfSPDM_Disconnect(&ctx);
+ *     wolfSPDM_Free(&ctx);
+ *
+ *   Dynamic (opt-in, requires --enable-dynamic-mem):
+ *     ctx = wolfSPDM_New();       // Allocates and fully initializes
+ *     wolfSPDM_SetIO(ctx, callback, userPtr);
+ *     wolfSPDM_Connect(ctx);
+ *     wolfSPDM_SecuredExchange(ctx, ...);
+ *     wolfSPDM_Disconnect(ctx);
+ *     wolfSPDM_Free(ctx);         // Frees the allocation
+ *
+ *   Note: WOLFSPDM_CTX is approximately 22KB. On embedded systems with
+ *   small stacks, declare it as a static global rather than a local variable.
  *
  * ========================================================================== */
+
+/* Compile-time size for static allocation of WOLFSPDM_CTX.
+ * Use this when you need a buffer large enough to hold WOLFSPDM_CTX
+ * without access to the struct definition (e.g., in wolfTPM).
+ * Actual struct size: ~21.2 KB (base) / ~21.3 KB (with Nuvoton).
+ * Rounded up to 22 KB for platform alignment and minor future growth.
+ * wolfSPDM_InitStatic() verifies at runtime that the provided buffer
+ * is large enough; returns WOLFSPDM_E_BUFFER_SMALL if not. */
+#define WOLFSPDM_CTX_STATIC_SIZE  22528
 
 /* Forward declaration */
 struct WOLFSPDM_CTX;
@@ -122,23 +150,33 @@ typedef int (*WOLFSPDM_IO_CB)(
  * ========================================================================== */
 
 /**
- * Allocate and return a new wolfSPDM context.
- *
- * @return Pointer to new context, or NULL on failure.
- */
-WOLFSPDM_CTX* wolfSPDM_New(void);
-
-/**
  * Initialize a wolfSPDM context for use.
+ * Zeroes the context and initializes all internal state.
+ * Works on stack, static, or dynamically-allocated contexts.
  * Must be called before wolfSPDM_Connect().
+ *
+ * Call wolfSPDM_Free() before re-initializing to avoid leaking the RNG.
  *
  * @param ctx  The wolfSPDM context.
  * @return WOLFSPDM_SUCCESS or negative error code.
  */
 int wolfSPDM_Init(WOLFSPDM_CTX* ctx);
 
+#ifdef WOLFSPDM_DYNAMIC_MEMORY
+/**
+ * Allocate and fully initialize a new wolfSPDM context.
+ * No separate wolfSPDM_Init() call needed.
+ * Requires --enable-dynamic-mem at configure time.
+ *
+ * @return Pointer to new context, or NULL on failure.
+ */
+WOLFSPDM_CTX* wolfSPDM_New(void);
+#endif
+
 /**
  * Free a wolfSPDM context and all associated resources.
+ * Safe for both stack-allocated and dynamically-allocated contexts.
+ * Zeroes all sensitive key material before returning.
  *
  * @param ctx  The wolfSPDM context to free.
  */
@@ -153,7 +191,8 @@ void wolfSPDM_Free(WOLFSPDM_CTX* ctx);
 int wolfSPDM_GetCtxSize(void);
 
 /**
- * Initialize a statically-allocated context.
+ * Initialize a statically-allocated context with size check.
+ * Verifies the buffer is large enough, then calls wolfSPDM_Init().
  *
  * @param ctx   Pointer to pre-allocated memory of at least wolfSPDM_GetCtxSize().
  * @param size  Size of the provided buffer.

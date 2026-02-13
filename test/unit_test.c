@@ -5,6 +5,10 @@
  * Unit tests for wolfSPDM library functions.
  */
 
+#ifdef HAVE_CONFIG_H
+    #include <config.h>
+#endif
+
 #include <wolfspdm/spdm.h>
 #include "../src/spdm_internal.h"
 #include <stdio.h>
@@ -40,6 +44,7 @@ static int dummy_io_cb(WOLFSPDM_CTX* ctx, const byte* txBuf, word32 txSz,
 /* Context Tests */
 /* ========================================================================== */
 
+#ifdef WOLFSPDM_DYNAMIC_MEMORY
 static int test_context_new_free(void)
 {
     WOLFSPDM_CTX* ctx;
@@ -50,7 +55,7 @@ static int test_context_new_free(void)
     TEST_ASSERT(ctx != NULL, "wolfSPDM_New returned NULL");
 
     TEST_ASSERT(ctx->state == WOLFSPDM_STATE_INIT, "Initial state wrong");
-    TEST_ASSERT(ctx->initialized == 0, "Should not be initialized yet");
+    TEST_ASSERT(ctx->initialized == 1, "Should be initialized by New()");
 
     wolfSPDM_Free(ctx);
 
@@ -59,26 +64,21 @@ static int test_context_new_free(void)
 
     TEST_PASS();
 }
+#endif /* WOLFSPDM_DYNAMIC_MEMORY */
 
 static int test_context_init(void)
 {
-    WOLFSPDM_CTX* ctx;
+    WOLFSPDM_CTX ctxBuf;
+    WOLFSPDM_CTX* ctx = &ctxBuf;
     int rc;
 
     printf("test_context_init...\n");
-
-    ctx = wolfSPDM_New();
-    TEST_ASSERT(ctx != NULL, "wolfSPDM_New failed");
 
     rc = wolfSPDM_Init(ctx);
     TEST_ASSERT(rc == WOLFSPDM_SUCCESS, "wolfSPDM_Init failed");
     TEST_ASSERT(ctx->initialized == 1, "Not marked initialized");
     TEST_ASSERT(ctx->rngInitialized == 1, "RNG not initialized");
     TEST_ASSERT(ctx->reqCaps == WOLFSPDM_DEFAULT_REQ_CAPS, "Default caps wrong");
-
-    /* Double init should fail */
-    rc = wolfSPDM_Init(ctx);
-    TEST_ASSERT(rc == WOLFSPDM_E_ALREADY_INIT, "Double init should fail");
 
     wolfSPDM_Free(ctx);
     TEST_PASS();
@@ -95,26 +95,28 @@ static int test_context_static_alloc(void)
     TEST_ASSERT(wolfSPDM_GetCtxSize() == (int)sizeof(WOLFSPDM_CTX),
         "GetCtxSize mismatch");
 
+    /* Too small buffer should fail */
+    rc = wolfSPDM_InitStatic(ctx, 10);
+    TEST_ASSERT(rc == WOLFSPDM_E_BUFFER_SMALL, "Should fail on small buffer");
+
     rc = wolfSPDM_InitStatic(ctx, sizeof(buffer));
     TEST_ASSERT(rc == WOLFSPDM_SUCCESS, "InitStatic failed");
     TEST_ASSERT(ctx->initialized == 1, "Static ctx not initialized");
 
-    /* Too small buffer should fail */
-    rc = wolfSPDM_InitStatic(ctx, 10);
-    TEST_ASSERT(rc == WOLFSPDM_E_BUFFER_SMALL, "Should fail on small buffer");
+    wolfSPDM_Free(ctx);  /* Now safe — no XFREE on static ctx */
 
     TEST_PASS();
 }
 
 static int test_context_set_io(void)
 {
-    WOLFSPDM_CTX* ctx;
+    WOLFSPDM_CTX ctxBuf;
+    WOLFSPDM_CTX* ctx = &ctxBuf;
     int rc;
     int dummy = 42;
 
     printf("test_context_set_io...\n");
 
-    ctx = wolfSPDM_New();
     wolfSPDM_Init(ctx);
 
     /* Dummy callback for testing */
@@ -137,14 +139,14 @@ static int test_context_set_io(void)
 
 static int test_transcript_add_reset(void)
 {
-    WOLFSPDM_CTX* ctx;
+    WOLFSPDM_CTX ctxBuf;
+    WOLFSPDM_CTX* ctx = &ctxBuf;
     byte data1[] = {0x01, 0x02, 0x03, 0x04};
     byte data2[] = {0x05, 0x06, 0x07, 0x08};
     int rc;
 
     printf("test_transcript_add_reset...\n");
 
-    ctx = wolfSPDM_New();
     wolfSPDM_Init(ctx);
 
     TEST_ASSERT(ctx->transcriptLen == 0, "Transcript should start empty");
@@ -168,14 +170,14 @@ static int test_transcript_add_reset(void)
 
 static int test_transcript_hash(void)
 {
-    WOLFSPDM_CTX* ctx;
+    WOLFSPDM_CTX ctxBuf;
+    WOLFSPDM_CTX* ctx = &ctxBuf;
     byte data[] = "test data for hashing";
     byte hash[WOLFSPDM_HASH_SIZE];
     int rc;
 
     printf("test_transcript_hash...\n");
 
-    ctx = wolfSPDM_New();
     wolfSPDM_Init(ctx);
 
     wolfSPDM_TranscriptAdd(ctx, data, sizeof(data) - 1);
@@ -196,13 +198,13 @@ static int test_transcript_hash(void)
 
 static int test_certchain_hash(void)
 {
-    WOLFSPDM_CTX* ctx;
+    WOLFSPDM_CTX ctxBuf;
+    WOLFSPDM_CTX* ctx = &ctxBuf;
     byte certData[] = {0x30, 0x82, 0x01, 0x00, 0xAA, 0xBB, 0xCC, 0xDD};
     int rc;
 
     printf("test_certchain_hash...\n");
 
-    ctx = wolfSPDM_New();
     wolfSPDM_Init(ctx);
 
     rc = wolfSPDM_CertChainAdd(ctx, certData, sizeof(certData));
@@ -229,13 +231,13 @@ static int test_certchain_hash(void)
 
 static int test_random_generation(void)
 {
-    WOLFSPDM_CTX* ctx;
+    WOLFSPDM_CTX ctxBuf;
+    WOLFSPDM_CTX* ctx = &ctxBuf;
     byte buf1[32], buf2[32];
     int rc;
 
     printf("test_random_generation...\n");
 
-    ctx = wolfSPDM_New();
     wolfSPDM_Init(ctx);
 
     rc = wolfSPDM_GetRandom(ctx, buf1, sizeof(buf1));
@@ -254,7 +256,8 @@ static int test_random_generation(void)
 
 static int test_ephemeral_key_generation(void)
 {
-    WOLFSPDM_CTX* ctx;
+    WOLFSPDM_CTX ctxBuf;
+    WOLFSPDM_CTX* ctx = &ctxBuf;
     byte pubKeyX[WOLFSPDM_ECC_KEY_SIZE];
     byte pubKeyY[WOLFSPDM_ECC_KEY_SIZE];
     word32 xSz = sizeof(pubKeyX);
@@ -263,7 +266,6 @@ static int test_ephemeral_key_generation(void)
 
     printf("test_ephemeral_key_generation...\n");
 
-    ctx = wolfSPDM_New();
     wolfSPDM_Init(ctx);
 
     rc = wolfSPDM_GenerateEphemeralKey(ctx);
@@ -372,14 +374,14 @@ static int test_build_get_version(void)
 
 static int test_build_get_capabilities(void)
 {
-    WOLFSPDM_CTX* ctx;
+    WOLFSPDM_CTX ctxBuf;
+    WOLFSPDM_CTX* ctx = &ctxBuf;
     byte buf[32];
     word32 bufSz = sizeof(buf);
     int rc;
 
     printf("test_build_get_capabilities...\n");
 
-    ctx = wolfSPDM_New();
     wolfSPDM_Init(ctx);
     ctx->spdmVersion = SPDM_VERSION_12;
 
@@ -395,14 +397,14 @@ static int test_build_get_capabilities(void)
 
 static int test_build_negotiate_algorithms(void)
 {
-    WOLFSPDM_CTX* ctx;
+    WOLFSPDM_CTX ctxBuf;
+    WOLFSPDM_CTX* ctx = &ctxBuf;
     byte buf[64];
     word32 bufSz = sizeof(buf);
     int rc;
 
     printf("test_build_negotiate_algorithms...\n");
 
-    ctx = wolfSPDM_New();
     wolfSPDM_Init(ctx);
     ctx->spdmVersion = SPDM_VERSION_12;
 
@@ -418,14 +420,14 @@ static int test_build_negotiate_algorithms(void)
 
 static int test_build_get_digests(void)
 {
-    WOLFSPDM_CTX* ctx;
+    WOLFSPDM_CTX ctxBuf;
+    WOLFSPDM_CTX* ctx = &ctxBuf;
     byte buf[16];
     word32 bufSz = sizeof(buf);
     int rc;
 
     printf("test_build_get_digests...\n");
 
-    ctx = wolfSPDM_New();
     wolfSPDM_Init(ctx);
     ctx->spdmVersion = SPDM_VERSION_12;
 
@@ -440,14 +442,14 @@ static int test_build_get_digests(void)
 
 static int test_build_get_certificate(void)
 {
-    WOLFSPDM_CTX* ctx;
+    WOLFSPDM_CTX ctxBuf;
+    WOLFSPDM_CTX* ctx = &ctxBuf;
     byte buf[16];
     word32 bufSz = sizeof(buf);
     int rc;
 
     printf("test_build_get_certificate...\n");
 
-    ctx = wolfSPDM_New();
     wolfSPDM_Init(ctx);
     ctx->spdmVersion = SPDM_VERSION_12;
 
@@ -464,14 +466,14 @@ static int test_build_get_certificate(void)
 
 static int test_build_end_session(void)
 {
-    WOLFSPDM_CTX* ctx;
+    WOLFSPDM_CTX ctxBuf;
+    WOLFSPDM_CTX* ctx = &ctxBuf;
     byte buf[16];
     word32 bufSz = sizeof(buf);
     int rc;
 
     printf("test_build_end_session...\n");
 
-    ctx = wolfSPDM_New();
     wolfSPDM_Init(ctx);
     ctx->spdmVersion = SPDM_VERSION_12;
 
@@ -526,11 +528,11 @@ static int test_error_strings(void)
 
 static int test_session_state(void)
 {
-    WOLFSPDM_CTX* ctx;
+    WOLFSPDM_CTX ctxBuf;
+    WOLFSPDM_CTX* ctx = &ctxBuf;
 
     printf("test_session_state...\n");
 
-    ctx = wolfSPDM_New();
     wolfSPDM_Init(ctx);
 
     TEST_ASSERT(wolfSPDM_IsConnected(ctx) == 0, "Should not be connected");
@@ -562,7 +564,9 @@ int main(void)
     printf("===========================================\n\n");
 
     /* Context tests */
+#ifdef WOLFSPDM_DYNAMIC_MEMORY
     test_context_new_free();
+#endif
     test_context_init();
     test_context_static_alloc();
     test_context_set_io();

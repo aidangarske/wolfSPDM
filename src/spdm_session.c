@@ -25,7 +25,7 @@
 int wolfSPDM_GetVersion(WOLFSPDM_CTX* ctx)
 {
     byte txBuf[8];
-    byte rxBuf[64];
+    byte rxBuf[32];  /* VERSION: 4 hdr + 2 count + up to 8 entries * 2 = 22 */
     word32 txSz = sizeof(txBuf);
     word32 rxSz = sizeof(rxBuf);
     int rc;
@@ -49,8 +49,8 @@ int wolfSPDM_GetVersion(WOLFSPDM_CTX* ctx)
 
 int wolfSPDM_GetCapabilities(WOLFSPDM_CTX* ctx)
 {
-    byte txBuf[32];
-    byte rxBuf[64];
+    byte txBuf[24];   /* GET_CAPABILITIES: 20 bytes */
+    byte rxBuf[40];   /* CAPABILITIES: 20-36 bytes */
     word32 txSz = sizeof(txBuf);
     word32 rxSz = sizeof(rxBuf);
     int rc;
@@ -74,8 +74,8 @@ int wolfSPDM_GetCapabilities(WOLFSPDM_CTX* ctx)
 
 int wolfSPDM_NegotiateAlgorithms(WOLFSPDM_CTX* ctx)
 {
-    byte txBuf[64];
-    byte rxBuf[128];
+    byte txBuf[52];   /* NEGOTIATE_ALGORITHMS: 48 bytes */
+    byte rxBuf[80];   /* ALGORITHMS: ~56 bytes with struct tables */
     word32 txSz = sizeof(txBuf);
     word32 rxSz = sizeof(rxBuf);
     int rc;
@@ -122,7 +122,7 @@ int wolfSPDM_GetDigests(WOLFSPDM_CTX* ctx)
 int wolfSPDM_GetCertificate(WOLFSPDM_CTX* ctx, int slotId)
 {
     byte txBuf[16];
-    byte rxBuf[2048];
+    byte rxBuf[1040];  /* 8 hdr + up to 1024 cert data per chunk */
     word32 txSz;
     word32 rxSz;
     word16 offset = 0;
@@ -164,8 +164,8 @@ int wolfSPDM_GetCertificate(WOLFSPDM_CTX* ctx, int slotId)
 
 int wolfSPDM_KeyExchange(WOLFSPDM_CTX* ctx)
 {
-    byte txBuf[256];
-    byte rxBuf[512];
+    byte txBuf[192];  /* KEY_EXCHANGE: ~158 bytes */
+    byte rxBuf[384];  /* KEY_EXCHANGE_RSP: ~302 bytes */
     word32 txSz = sizeof(txBuf);
     word32 rxSz = sizeof(rxBuf);
     int rc;
@@ -191,10 +191,10 @@ int wolfSPDM_KeyExchange(WOLFSPDM_CTX* ctx)
 
 int wolfSPDM_Finish(WOLFSPDM_CTX* ctx)
 {
-    byte finishBuf[160];  /* 148 bytes for mutual auth FINISH */
-    byte encBuf[512];     /* Encrypted: FINISH + padding + tag + headers */
-    byte rxBuf[256];
-    byte decBuf[128];
+    byte finishBuf[152];  /* 148 bytes max for mutual auth FINISH */
+    byte encBuf[256];     /* Encrypted: hdr(14) + padded(160) + tag(16) = 190 max */
+    byte rxBuf[128];      /* Encrypted FINISH_RSP: ~94 bytes max */
+    byte decBuf[64];      /* Decrypted FINISH_RSP: 4 hdr + 48 verify = 52 */
     word32 finishSz = sizeof(finishBuf);
     word32 encSz = sizeof(encBuf);
     word32 rxSz = sizeof(rxBuf);

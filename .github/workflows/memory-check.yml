@@ -8,8 +8,12 @@ on:
 
 jobs:
   valgrind:
-    name: Valgrind
+    name: Valgrind / dynamic-mem=${{ matrix.dynamic-mem }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        dynamic-mem: [yes, no]
 
     steps:
     - uses: actions/checkout@v4
@@ -42,7 +46,8 @@ jobs:
     - name: Build with debug
       run: |
         ./autogen.sh
-        ./configure --with-wolfssl=$HOME/wolfssl-install --enable-debug
+        ./configure --with-wolfssl=$HOME/wolfssl-install --enable-debug \
+                    ${{ matrix.dynamic-mem == 'yes' && '--enable-dynamic-mem' || '' }}
         make -j$(nproc)
         make -j$(nproc) check TESTS=
 

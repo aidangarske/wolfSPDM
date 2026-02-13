@@ -68,6 +68,9 @@
 /* Enable debug output */
 #undef WOLFSPDM_DEBUG
 
+/* Enable dynamic memory allocation */
+#undef WOLFSPDM_DYNAMIC_MEMORY
+
 /* Enable Nuvoton TPM support */
 #undef WOLFSPDM_NUVOTON
 
