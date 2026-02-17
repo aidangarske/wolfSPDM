@@ -19,13 +19,18 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y autoconf automake libtool cmake libmbedtls-dev
 
+    - name: Compute cache period
+      id: cache-period
+      run: |
+        echo "biweekly=$(( $(date +%s) / 1296000 ))" >> $GITHUB_OUTPUT
+
     # --- Build wolfSSL ---
     - name: Cache wolfSSL
       id: cache-wolfssl
       uses: actions/cache@v4
       with:
         path: ~/wolfssl-install
-        key: wolfssl-emu-test-v1
+        key: wolfssl-${{ steps.cache-period.outputs.biweekly }}
 
     - name: Build wolfSSL
       if: steps.cache-wolfssl.outputs.cache-hit != 'true'
@@ -54,7 +59,7 @@ jobs:
       uses: actions/cache@v4
       with:
         path: ~/spdm-emu
-        key: spdm-emu-v1
+        key: spdm-emu-${{ steps.cache-period.outputs.biweekly }}
 
     - name: Build spdm-emu
       if: steps.cache-spdm-emu.outputs.cache-hit != 'true'
@@ -67,15 +72,29 @@ jobs:
         make copy_sample_key && make -j$(nproc)
 
     # --- Build wolfTPM ---
-    - name: Build wolfTPM
+    - name: Cache wolfTPM source
+      id: cache-wolftpm
+      uses: actions/cache@v4
+      with:
+        path: ~/wolfTPM
+        key: wolftpm-${{ steps.cache-period.outputs.biweekly }}
+
+    - name: Clone wolfTPM
+      if: steps.cache-wolftpm.outputs.cache-hit != 'true'
       run: |
         cd ~
-        git clone --depth 1 https://github.com/wolfSSL/wolfTPM.git wolfTPM
+        # TODO: Switch to wolfSSL/wolfTPM once PR #453 is merged
+        git clone --depth 1 -b add-wolfspdm-backend \
+          https://github.com/aidangarske/wolfTPM.git wolfTPM
         cd wolfTPM
         ./autogen.sh
+
+    - name: Build wolfTPM
+      run: |
+        cd ~/wolfTPM
         ./configure --enable-spdm --enable-swtpm \
                     --with-wolfspdm=$HOME/wolfspdm-install \
-                    --with-wolfssl=$HOME/wolfssl-install
+                    --with-wolfcrypt=$HOME/wolfssl-install
         make -j$(nproc)
 
     # --- Run integration tests ---
