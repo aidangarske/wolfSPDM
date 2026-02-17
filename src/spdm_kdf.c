@@ -242,6 +242,10 @@ int wolfSPDM_DeriveAppDataKeys(WOLFSPDM_CTX* ctx)
         return rc;
     }
 
+    /* Save app secrets for KEY_UPDATE re-derivation */
+    XMEMCPY(ctx->reqAppSecret, reqAppSecret, WOLFSPDM_HASH_SIZE);
+    XMEMCPY(ctx->rspAppSecret, rspAppSecret, WOLFSPDM_HASH_SIZE);
+
     /* Derive new encryption keys from app data secrets */
     rc = wolfSPDM_HkdfExpandLabel(ctx->spdmVersion, reqAppSecret,
         WOLFSPDM_HASH_SIZE, SPDM_LABEL_KEY, NULL, 0,
@@ -276,6 +280,84 @@ int wolfSPDM_DeriveAppDataKeys(WOLFSPDM_CTX* ctx)
     ctx->rspSeqNum = 0;
 
     wolfSPDM_DebugPrint(ctx, "App data keys derived, seq nums reset to 0\n");
+
+    return WOLFSPDM_SUCCESS;
+}
+
+/* ==========================================================================
+ * Key Update Re-derivation (DSP0277)
+ *
+ * Per DSP0277, KEY_UPDATE re-derives keys from saved app secrets:
+ *   newAppSecret = HKDF-Expand(oldAppSecret, "update" || version_byte, 48)
+ *   newKey = HKDF-Expand(newAppSecret, "key", 32)
+ *   newIv  = HKDF-Expand(newAppSecret, "iv", 12)
+ * ========================================================================== */
+
+int wolfSPDM_DeriveUpdatedKeys(WOLFSPDM_CTX* ctx, int updateAll)
+{
+    byte newReqAppSecret[WOLFSPDM_HASH_SIZE];
+    byte newRspAppSecret[WOLFSPDM_HASH_SIZE];
+    int rc;
+
+    if (ctx == NULL) {
+        return WOLFSPDM_E_INVALID_ARG;
+    }
+
+    /* Per DSP0277: KEY_UPDATE uses "traffic upd" label with NO context.
+     * info = outLen(2 LE) || "spdm1.2 " || "traffic upd" */
+
+    /* Always update requester key */
+    rc = wolfSPDM_HkdfExpandLabel(ctx->spdmVersion, ctx->reqAppSecret,
+        WOLFSPDM_HASH_SIZE, SPDM_LABEL_UPDATE, NULL, 0,
+        newReqAppSecret, WOLFSPDM_HASH_SIZE);
+    if (rc != WOLFSPDM_SUCCESS) {
+        return rc;
+    }
+
+    rc = wolfSPDM_HkdfExpandLabel(ctx->spdmVersion, newReqAppSecret,
+        WOLFSPDM_HASH_SIZE, SPDM_LABEL_KEY, NULL, 0,
+        ctx->reqDataKey, WOLFSPDM_AEAD_KEY_SIZE);
+    if (rc != WOLFSPDM_SUCCESS) {
+        return rc;
+    }
+
+    rc = wolfSPDM_HkdfExpandLabel(ctx->spdmVersion, newReqAppSecret,
+        WOLFSPDM_HASH_SIZE, SPDM_LABEL_IV, NULL, 0,
+        ctx->reqDataIv, WOLFSPDM_AEAD_IV_SIZE);
+    if (rc != WOLFSPDM_SUCCESS) {
+        return rc;
+    }
+
+    /* Save new requester secret for future updates */
+    XMEMCPY(ctx->reqAppSecret, newReqAppSecret, WOLFSPDM_HASH_SIZE);
+
+    /* Optionally update responder key */
+    if (updateAll) {
+        rc = wolfSPDM_HkdfExpandLabel(ctx->spdmVersion, ctx->rspAppSecret,
+            WOLFSPDM_HASH_SIZE, SPDM_LABEL_UPDATE, NULL, 0,
+            newRspAppSecret, WOLFSPDM_HASH_SIZE);
+        if (rc != WOLFSPDM_SUCCESS) {
+            return rc;
+        }
+
+        rc = wolfSPDM_HkdfExpandLabel(ctx->spdmVersion, newRspAppSecret,
+            WOLFSPDM_HASH_SIZE, SPDM_LABEL_KEY, NULL, 0,
+            ctx->rspDataKey, WOLFSPDM_AEAD_KEY_SIZE);
+        if (rc != WOLFSPDM_SUCCESS) {
+            return rc;
+        }
+
+        rc = wolfSPDM_HkdfExpandLabel(ctx->spdmVersion, newRspAppSecret,
+            WOLFSPDM_HASH_SIZE, SPDM_LABEL_IV, NULL, 0,
+            ctx->rspDataIv, WOLFSPDM_AEAD_IV_SIZE);
+        if (rc != WOLFSPDM_SUCCESS) {
+            return rc;
+        }
+
+        /* Save new responder secret for future updates */
+        XMEMCPY(ctx->rspAppSecret, newRspAppSecret, WOLFSPDM_HASH_SIZE);
+
+    }
 
     return WOLFSPDM_SUCCESS;
 }

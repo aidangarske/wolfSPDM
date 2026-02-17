@@ -102,6 +102,19 @@ void wolfSPDM_Free(WOLFSPDM_CTX* ctx)
         wc_ecc_free(&ctx->ephemeralKey);
     }
 
+    /* Free responder public key (used for measurement/challenge verification) */
+    if (ctx->hasResponderPubKey) {
+        wc_ecc_free(&ctx->responderPubKey);
+    }
+
+#ifndef NO_WOLFSPDM_CHALLENGE
+    /* Free M1/M2 challenge hash if still initialized */
+    if (ctx->m1m2HashInit) {
+        wc_Sha384Free(&ctx->m1m2Hash);
+        ctx->m1m2HashInit = 0;
+    }
+#endif
+
     /* Zero entire struct (covers all sensitive key material) */
     wc_ForceZero(ctx, sizeof(WOLFSPDM_CTX));
 
@@ -202,6 +215,24 @@ int wolfSPDM_SetRequesterKeyTPMT(WOLFSPDM_CTX* ctx,
     return WOLFSPDM_SUCCESS;
 }
 #endif /* WOLFSPDM_NUVOTON */
+
+int wolfSPDM_SetTrustedCAs(WOLFSPDM_CTX* ctx, const byte* derCerts,
+    word32 derCertsSz)
+{
+    if (ctx == NULL || derCerts == NULL || derCertsSz == 0) {
+        return WOLFSPDM_E_INVALID_ARG;
+    }
+
+    if (derCertsSz > WOLFSPDM_MAX_CERT_CHAIN) {
+        return WOLFSPDM_E_BUFFER_SMALL;
+    }
+
+    XMEMCPY(ctx->trustedCAs, derCerts, derCertsSz);
+    ctx->trustedCAsSz = derCertsSz;
+    ctx->hasTrustedCAs = 1;
+
+    return WOLFSPDM_SUCCESS;
+}
 
 void wolfSPDM_SetDebug(WOLFSPDM_CTX* ctx, int enable)
 {
@@ -337,6 +368,22 @@ static int wolfSPDM_ConnectStandard(WOLFSPDM_CTX* ctx)
     if (rc != WOLFSPDM_SUCCESS) {
         ctx->state = WOLFSPDM_STATE_ERROR;
         return rc;
+    }
+
+    /* Validate certificate chain if trusted CAs are loaded.
+     * Public key extraction now happens automatically in GetCertificate. */
+    if (ctx->hasTrustedCAs) {
+        rc = wolfSPDM_ValidateCertChain(ctx);
+        if (rc != WOLFSPDM_SUCCESS) {
+            wolfSPDM_DebugPrint(ctx,
+                "Certificate chain validation failed (%d)\n", rc);
+            ctx->state = WOLFSPDM_STATE_ERROR;
+            return rc;
+        }
+    }
+    else if (!ctx->hasResponderPubKey) {
+        wolfSPDM_DebugPrint(ctx,
+            "Warning: No trusted CAs loaded — chain not validated\n");
     }
 
     /* Step 6: KEY_EXCHANGE / KEY_EXCHANGE_RSP */
@@ -483,6 +530,58 @@ void wolfSPDM_DebugHex(WOLFSPDM_CTX* ctx, const char* label,
 }
 
 /* ==========================================================================
+ * Measurement Accessors
+ * ========================================================================== */
+
+#ifndef NO_WOLFSPDM_MEAS
+
+int wolfSPDM_GetMeasurementCount(WOLFSPDM_CTX* ctx)
+{
+    if (ctx == NULL || !ctx->hasMeasurements) {
+        return 0;
+    }
+    return (int)ctx->measBlockCount;
+}
+
+int wolfSPDM_GetMeasurementBlock(WOLFSPDM_CTX* ctx, int blockIdx,
+    byte* measIndex, byte* measType, byte* value, word32* valueSz)
+{
+    WOLFSPDM_MEAS_BLOCK* blk;
+
+    if (ctx == NULL || !ctx->hasMeasurements) {
+        return WOLFSPDM_E_INVALID_ARG;
+    }
+    if (blockIdx < 0 || blockIdx >= (int)ctx->measBlockCount) {
+        return WOLFSPDM_E_INVALID_ARG;
+    }
+    if (valueSz == NULL) {
+        return WOLFSPDM_E_INVALID_ARG;
+    }
+
+    blk = &ctx->measBlocks[blockIdx];
+
+    if (measIndex != NULL) {
+        *measIndex = blk->index;
+    }
+    if (measType != NULL) {
+        *measType = blk->dmtfType;
+    }
+
+    if (value != NULL) {
+        word32 copySize = blk->valueSize;
+        if (copySize > *valueSz) {
+            copySize = *valueSz;
+        }
+        XMEMCPY(value, blk->value, copySize);
+    }
+    *valueSz = blk->valueSize;
+
+    return WOLFSPDM_SUCCESS;
+}
+
+#endif /* !NO_WOLFSPDM_MEAS */
+
+/* ==========================================================================
  * Error String
  * ========================================================================== */
 
@@ -510,6 +609,12 @@ const char* wolfSPDM_GetErrorString(int error)
         case WOLFSPDM_E_ALGO_MISMATCH:    return "Algorithm mismatch";
         case WOLFSPDM_E_SESSION_INVALID:  return "Invalid session";
         case WOLFSPDM_E_KEY_EXCHANGE:     return "Key exchange failed";
+        case WOLFSPDM_E_MEASUREMENT:     return "Measurement retrieval failed";
+        case WOLFSPDM_E_MEAS_NOT_VERIFIED: return "Measurements not signature-verified";
+        case WOLFSPDM_E_MEAS_SIG_FAIL:   return "Measurement signature verification failed";
+        case WOLFSPDM_E_CERT_PARSE:      return "Failed to parse responder certificate";
+        case WOLFSPDM_E_CHALLENGE:       return "Challenge authentication failed";
+        case WOLFSPDM_E_KEY_UPDATE:      return "Key update failed";
         default:                          return "Unknown error";
     }
 }

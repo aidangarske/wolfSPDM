@@ -27,7 +27,7 @@
  *
  * MCTP transport:
  *   Header/AAD: SessionID(4 LE) + SeqNum(2 LE) + Length(2 LE) = 8 bytes
- *   IV XOR: Rightmost 2 bytes (bytes 10-11) with 2-byte sequence number
+ *   IV XOR: Leftmost 2 bytes (bytes 0-1) with 2-byte LE sequence number (DSP0277)
  *
  * Nuvoton TCG binding (Rev 1.11):
  *   Header/AAD: SessionID(4 LE) + SeqNum(8 LE) + Length(2 LE) = 14 bytes
@@ -248,9 +248,10 @@ int wolfSPDM_EncryptInternal(WOLFSPDM_CTX* ctx,
     else
 #endif
     {
-        /* MCTP format: 2-byte sequence number XOR at bytes 10-11 (rightmost) */
-        iv[10] ^= (byte)(ctx->reqSeqNum & 0xFF);
-        iv[11] ^= (byte)((ctx->reqSeqNum >> 8) & 0xFF);
+        /* MCTP format: Zero-extend 2-byte LE sequence number to iv_length,
+         * then XOR with base IV per DSP0277. LE integer starts at byte 0. */
+        iv[0] ^= (byte)(ctx->reqSeqNum & 0xFF);
+        iv[1] ^= (byte)((ctx->reqSeqNum >> 8) & 0xFF);
     }
 
     rc = wc_AesGcmSetKey(&aes, ctx->reqDataKey, WOLFSPDM_AEAD_KEY_SIZE);
@@ -415,10 +416,11 @@ int wolfSPDM_DecryptInternal(WOLFSPDM_CTX* ctx,
 
         XMEMCPY(aad, enc, aadSz);
 
-        /* Build IV: BaseIV XOR sequence number at bytes 10-11 (rightmost 2 bytes) */
+        /* Build IV: Zero-extend 2-byte LE sequence number to iv_length,
+         * then XOR with base IV per DSP0277. LE integer starts at byte 0. */
         XMEMCPY(iv, ctx->rspDataIv, WOLFSPDM_AEAD_IV_SIZE);
-        iv[10] ^= (byte)(rspSeqNum & 0xFF);
-        iv[11] ^= (byte)((rspSeqNum >> 8) & 0xFF);
+        iv[0] ^= (byte)(rspSeqNum & 0xFF);
+        iv[1] ^= (byte)((rspSeqNum >> 8) & 0xFF);
 
         rc = wc_AesGcmSetKey(&aes, ctx->rspDataKey, WOLFSPDM_AEAD_KEY_SIZE);
         if (rc != 0) {
@@ -515,6 +517,85 @@ int wolfSPDM_SecuredExchange(WOLFSPDM_CTX* ctx,
     }
 
     rc = wolfSPDM_DecryptInternal(ctx, rxBuf, rxSz, rspPlain, rspSz);
+    if (rc != WOLFSPDM_SUCCESS) {
+        return rc;
+    }
+
+    return WOLFSPDM_SUCCESS;
+}
+
+/* ==========================================================================
+ * Application Data Transfer
+ * ========================================================================== */
+
+int wolfSPDM_SendData(WOLFSPDM_CTX* ctx, const byte* data, word32 dataSz)
+{
+    byte encBuf[WOLFSPDM_MAX_MSG_SIZE + 48];
+    word32 encSz = sizeof(encBuf);
+    int rc;
+
+    if (ctx == NULL || data == NULL || dataSz == 0) {
+        return WOLFSPDM_E_INVALID_ARG;
+    }
+
+    if (ctx->state != WOLFSPDM_STATE_CONNECTED) {
+        return WOLFSPDM_E_NOT_CONNECTED;
+    }
+
+    /* Max payload: leave room for AEAD overhead */
+    if (dataSz > WOLFSPDM_MAX_MSG_SIZE - 64) {
+        return WOLFSPDM_E_BUFFER_SMALL;
+    }
+
+    /* Encrypt the application data */
+    rc = wolfSPDM_EncryptInternal(ctx, data, dataSz, encBuf, &encSz);
+    if (rc != WOLFSPDM_SUCCESS) {
+        return rc;
+    }
+
+    /* Send via I/O callback (no response expected for send-only) */
+    if (ctx->ioCb == NULL) {
+        return WOLFSPDM_E_IO_FAIL;
+    }
+
+    {
+        byte rxBuf[16];
+        word32 rxSz = sizeof(rxBuf);
+        rc = ctx->ioCb(ctx, encBuf, encSz, rxBuf, &rxSz, ctx->ioUserCtx);
+        if (rc != 0) {
+            return WOLFSPDM_E_IO_FAIL;
+        }
+    }
+
+    return WOLFSPDM_SUCCESS;
+}
+
+int wolfSPDM_ReceiveData(WOLFSPDM_CTX* ctx, byte* data, word32* dataSz)
+{
+    byte rxBuf[WOLFSPDM_MAX_MSG_SIZE + 48];
+    word32 rxSz = sizeof(rxBuf);
+    int rc;
+
+    if (ctx == NULL || data == NULL || dataSz == NULL) {
+        return WOLFSPDM_E_INVALID_ARG;
+    }
+
+    if (ctx->state != WOLFSPDM_STATE_CONNECTED) {
+        return WOLFSPDM_E_NOT_CONNECTED;
+    }
+
+    if (ctx->ioCb == NULL) {
+        return WOLFSPDM_E_IO_FAIL;
+    }
+
+    /* Receive via I/O callback (NULL tx to indicate receive-only) */
+    rc = ctx->ioCb(ctx, NULL, 0, rxBuf, &rxSz, ctx->ioUserCtx);
+    if (rc != 0) {
+        return WOLFSPDM_E_IO_FAIL;
+    }
+
+    /* Decrypt the received data */
+    rc = wolfSPDM_DecryptInternal(ctx, rxBuf, rxSz, data, dataSz);
     if (rc != WOLFSPDM_SUCCESS) {
         return rc;
     }
