@@ -22,9 +22,7 @@
 #include "spdm_internal.h"
 #include <string.h>
 
-/* ==========================================================================
- * Random Number Generation
- * ========================================================================== */
+/* --- Random Number Generation --- */
 
 int wolfSPDM_GetRandom(WOLFSPDM_CTX* ctx, byte* out, word32 outSz)
 {
@@ -46,9 +44,7 @@ int wolfSPDM_GetRandom(WOLFSPDM_CTX* ctx, byte* out, word32 outSz)
     return WOLFSPDM_SUCCESS;
 }
 
-/* ==========================================================================
- * ECDHE Key Generation (P-384)
- * ========================================================================== */
+/* --- ECDHE Key Generation (P-384) --- */
 
 int wolfSPDM_GenerateEphemeralKey(WOLFSPDM_CTX* ctx)
 {
@@ -116,9 +112,7 @@ int wolfSPDM_ExportEphemeralPubKey(WOLFSPDM_CTX* ctx,
     return WOLFSPDM_SUCCESS;
 }
 
-/* ==========================================================================
- * ECDH Shared Secret Computation
- * ========================================================================== */
+/* --- ECDH Shared Secret Computation --- */
 
 int wolfSPDM_ComputeSharedSecret(WOLFSPDM_CTX* ctx,
     const byte* peerPubKeyX, const byte* peerPubKeyY)
@@ -182,10 +176,7 @@ cleanup:
     return (rc == 0) ? WOLFSPDM_SUCCESS : WOLFSPDM_E_CRYPTO_FAIL;
 }
 
-/* ==========================================================================
- * ECDSA Signing (P-384)
- * Used for requester's signature in FINISH during mutual authentication
- * ========================================================================== */
+/* --- ECDSA Signing (P-384) --- */
 
 int wolfSPDM_SignHash(WOLFSPDM_CTX* ctx, const byte* hash, word32 hashSz,
     byte* sig, word32* sigSz)

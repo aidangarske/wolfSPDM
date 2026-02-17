@@ -284,14 +284,7 @@ int wolfSPDM_DeriveAppDataKeys(WOLFSPDM_CTX* ctx)
     return WOLFSPDM_SUCCESS;
 }
 
-/* ==========================================================================
- * Key Update Re-derivation (DSP0277)
- *
- * Per DSP0277, KEY_UPDATE re-derives keys from saved app secrets:
- *   newAppSecret = HKDF-Expand(oldAppSecret, "update" || version_byte, 48)
- *   newKey = HKDF-Expand(newAppSecret, "key", 32)
- *   newIv  = HKDF-Expand(newAppSecret, "iv", 12)
- * ========================================================================== */
+/* --- Key Update Re-derivation (DSP0277) --- */
 
 int wolfSPDM_DeriveUpdatedKeys(WOLFSPDM_CTX* ctx, int updateAll)
 {

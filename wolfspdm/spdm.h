@@ -31,13 +31,22 @@
 #include <wolfspdm/spdm_types.h>
 #include <wolfspdm/spdm_error.h>
 
+/* Feature detection macros — external projects (e.g. wolfTPM) can check these
+ * to conditionally compile against optional wolfSPDM APIs. */
+#ifndef NO_WOLFSPDM_MEAS
+#define WOLFSPDM_HAS_MEASUREMENTS
+#endif
+#ifndef NO_WOLFSPDM_CHALLENGE
+#define WOLFSPDM_HAS_CHALLENGE
+#endif
+#define WOLFSPDM_HAS_HEARTBEAT
+#define WOLFSPDM_HAS_KEY_UPDATE
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/* ==========================================================================
- * Protocol Mode Selection
- * ==========================================================================
+/* --- Protocol Mode Selection ---
  *
  * wolfSPDM supports two protocol modes:
  *
@@ -50,18 +59,14 @@ extern "C" {
  * WOLFSPDM_MODE_NUVOTON (requires --enable-nuvoton):
  *   Nuvoton TPM-specific protocol with TCG binding headers.
  *   Flow: GET_VERSION -> GET_PUB_KEY -> KEY_EXCHANGE -> GIVE_PUB_KEY -> FINISH
- *   Use with: Nuvoton NPCT75x TPMs (FW 7.2+)
- *
- * ========================================================================== */
+ *   Use with: Nuvoton NPCT75x TPMs (FW 7.2+) */
 
 typedef enum {
     WOLFSPDM_MODE_STANDARD = 0,    /* Standard SPDM 1.2 (default) */
     WOLFSPDM_MODE_NUVOTON  = 1,    /* Nuvoton TCG binding + vendor commands */
 } WOLFSPDM_MODE;
 
-/* ==========================================================================
- * wolfSPDM Overview
- * ==========================================================================
+/* --- wolfSPDM Overview ---
  *
  * wolfSPDM is a lightweight SPDM (Security Protocol and Data Model)
  * implementation using wolfCrypt for all cryptographic operations.
@@ -93,9 +98,7 @@ typedef enum {
  *     wolfSPDM_Free(ctx);         // Frees the allocation
  *
  *   Note: WOLFSPDM_CTX is approximately 22KB. On embedded systems with
- *   small stacks, declare it as a static global rather than a local variable.
- *
- * ========================================================================== */
+ *   small stacks, declare it as a static global rather than a local variable. */
 
 /* Compile-time size for static allocation of WOLFSPDM_CTX.
  * Use this when you need a buffer large enough to hold WOLFSPDM_CTX
@@ -115,9 +118,7 @@ typedef struct WOLFSPDM_CTX WOLFSPDM_CTX;
     #include <wolfspdm/spdm_nuvoton.h>
 #endif
 
-/* ==========================================================================
- * I/O Callback
- * ==========================================================================
+/* --- I/O Callback ---
  *
  * The I/O callback is called by wolfSPDM to send and receive raw SPDM
  * messages. The transport layer (SPI, I2C, TCP, etc.) is handled externally.
@@ -136,8 +137,7 @@ typedef struct WOLFSPDM_CTX WOLFSPDM_CTX;
  * Notes:
  *   - For MCTP transport, the callback should handle MCTP encapsulation
  *   - For secured messages (after KEY_EXCHANGE), the callback receives
- *     already-encrypted data including the session header
- * ========================================================================== */
+ *     already-encrypted data including the session header */
 typedef int (*WOLFSPDM_IO_CB)(
     WOLFSPDM_CTX* ctx,
     const byte* txBuf, word32 txSz,
@@ -145,9 +145,7 @@ typedef int (*WOLFSPDM_IO_CB)(
     void* userCtx
 );
 
-/* ==========================================================================
- * Context Management
- * ========================================================================== */
+/* --- Context Management --- */
 
 /**
  * Initialize a wolfSPDM context for use.
@@ -200,9 +198,7 @@ int wolfSPDM_GetCtxSize(void);
  */
 int wolfSPDM_InitStatic(WOLFSPDM_CTX* ctx, int size);
 
-/* ==========================================================================
- * Configuration
- * ========================================================================== */
+/* --- Configuration --- */
 
 /**
  * Set the I/O callback for sending/receiving SPDM messages.
@@ -261,9 +257,7 @@ int wolfSPDM_SetRequesterKeyPair(WOLFSPDM_CTX* ctx,
     const byte* privKey, word32 privKeySz,
     const byte* pubKey, word32 pubKeySz);
 
-/* ==========================================================================
- * Session Establishment
- * ========================================================================== */
+/* --- Session Establishment --- */
 
 /**
  * Establish an SPDM session (full handshake).
@@ -294,9 +288,7 @@ int wolfSPDM_IsConnected(WOLFSPDM_CTX* ctx);
  */
 int wolfSPDM_Disconnect(WOLFSPDM_CTX* ctx);
 
-/* ==========================================================================
- * Individual Handshake Steps (for fine-grained control)
- * ========================================================================== */
+/* --- Individual Handshake Steps (for fine-grained control) --- */
 
 /**
  * Send GET_VERSION and receive VERSION response.
@@ -361,10 +353,9 @@ int wolfSPDM_KeyExchange(WOLFSPDM_CTX* ctx);
  */
 int wolfSPDM_Finish(WOLFSPDM_CTX* ctx);
 
-/* ==========================================================================
- * Secured Messaging
- * ========================================================================== */
+/* --- Secured Messaging --- */
 
+#ifndef WOLFSPDM_LEAN
 /**
  * Encrypt a message for sending over the established session.
  *
@@ -392,6 +383,7 @@ int wolfSPDM_EncryptMessage(WOLFSPDM_CTX* ctx,
 int wolfSPDM_DecryptMessage(WOLFSPDM_CTX* ctx,
     const byte* enc, word32 encSz,
     byte* plain, word32* plainSz);
+#endif /* !WOLFSPDM_LEAN */
 
 /**
  * Perform a secured message exchange (encrypt, send, receive, decrypt).
@@ -409,9 +401,7 @@ int wolfSPDM_SecuredExchange(WOLFSPDM_CTX* ctx,
     byte* rspPlain, word32* rspSz);
 
 #ifndef NO_WOLFSPDM_MEAS
-/* ==========================================================================
- * Measurements (Device Attestation)
- * ==========================================================================
+/* --- Measurements (Device Attestation) ---
  *
  * When requestSignature=1 (and NO_WOLFSPDM_MEAS_VERIFY is NOT defined):
  *   Retrieves measurements with a cryptographic signature from the responder,
@@ -428,8 +418,7 @@ int wolfSPDM_SecuredExchange(WOLFSPDM_CTX* ctx,
  * disabled and returns WOLFSPDM_E_MEAS_NOT_VERIFIED regardless of
  * requestSignature (signature bytes are still captured in the context).
  *
- * Contexts are NOT thread-safe; do not call from multiple threads.
- * ========================================================================== */
+ * Contexts are NOT thread-safe; do not call from multiple threads. */
 
 /**
  * Retrieve measurements from the SPDM responder.
@@ -466,15 +455,13 @@ int wolfSPDM_GetMeasurementBlock(WOLFSPDM_CTX* ctx, int blockIdx,
     byte* measIndex, byte* measType, byte* value, word32* valueSz);
 #endif /* !NO_WOLFSPDM_MEAS */
 
-/* ==========================================================================
- * Application Data Transfer
- * ==========================================================================
+#ifndef WOLFSPDM_LEAN
+/* --- Application Data Transfer ---
  *
  * Send/receive application data over an established SPDM session.
  * Max payload per call: WOLFSPDM_MAX_MSG_SIZE minus AEAD overhead (~4000 bytes).
  * These are message-oriented (no partial reads/writes).
- * Contexts are NOT thread-safe; do not call from multiple threads.
- * ========================================================================== */
+ * Contexts are NOT thread-safe; do not call from multiple threads. */
 
 /**
  * Send application data over an established SPDM session.
@@ -495,10 +482,9 @@ int wolfSPDM_SendData(WOLFSPDM_CTX* ctx, const byte* data, word32 dataSz);
  * @return WOLFSPDM_SUCCESS or negative error code.
  */
 int wolfSPDM_ReceiveData(WOLFSPDM_CTX* ctx, byte* data, word32* dataSz);
+#endif /* !WOLFSPDM_LEAN */
 
-/* ==========================================================================
- * Session Information
- * ========================================================================== */
+/* --- Session Information --- */
 
 /**
  * Get the current session ID.
@@ -534,9 +520,7 @@ word32 wolfSPDM_GetConnectionHandle(WOLFSPDM_CTX* ctx);
 word16 wolfSPDM_GetFipsIndicator(WOLFSPDM_CTX* ctx);
 #endif
 
-/* ==========================================================================
- * Certificate Chain Validation
- * ========================================================================== */
+/* --- Certificate Chain Validation --- */
 
 /**
  * Load trusted root CA certificates for certificate chain validation.
@@ -552,9 +536,7 @@ int wolfSPDM_SetTrustedCAs(WOLFSPDM_CTX* ctx, const byte* derCerts,
     word32 derCertsSz);
 
 #ifndef NO_WOLFSPDM_CHALLENGE
-/* ==========================================================================
- * Challenge Authentication (Sessionless Attestation)
- * ========================================================================== */
+/* --- Challenge Authentication (Sessionless Attestation) --- */
 
 /**
  * Perform CHALLENGE/CHALLENGE_AUTH exchange for sessionless attestation.
@@ -573,9 +555,7 @@ int wolfSPDM_SetTrustedCAs(WOLFSPDM_CTX* ctx, const byte* derCerts,
 int wolfSPDM_Challenge(WOLFSPDM_CTX* ctx, int slotId, byte measHashType);
 #endif /* !NO_WOLFSPDM_CHALLENGE */
 
-/* ==========================================================================
- * Session Keep-Alive
- * ========================================================================== */
+/* --- Session Keep-Alive --- */
 
 /**
  * Send HEARTBEAT and receive HEARTBEAT_ACK.
@@ -587,9 +567,7 @@ int wolfSPDM_Challenge(WOLFSPDM_CTX* ctx, int slotId, byte measHashType);
  */
 int wolfSPDM_Heartbeat(WOLFSPDM_CTX* ctx);
 
-/* ==========================================================================
- * Key Update (Session Key Rotation)
- * ========================================================================== */
+/* --- Key Update (Session Key Rotation) --- */
 
 /**
  * Perform KEY_UPDATE to rotate session encryption keys.
@@ -603,9 +581,7 @@ int wolfSPDM_Heartbeat(WOLFSPDM_CTX* ctx);
  */
 int wolfSPDM_KeyUpdate(WOLFSPDM_CTX* ctx, int updateAll);
 
-/* ==========================================================================
- * Debug/Utility
- * ========================================================================== */
+/* --- Debug/Utility --- */
 
 /**
  * Enable or disable debug output.

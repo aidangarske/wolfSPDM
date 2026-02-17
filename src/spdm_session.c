@@ -293,13 +293,11 @@ int wolfSPDM_Finish(WOLFSPDM_CTX* ctx)
     rc = wolfSPDM_DecryptInternal(ctx, rxBuf, rxSz, decBuf, &decSz);
     if (rc != WOLFSPDM_SUCCESS) {
         wolfSPDM_DebugPrint(ctx, "FINISH decrypt failed: %d\n", rc);
-
         return rc;
     }
 
     rc = wolfSPDM_ParseFinishRsp(ctx, decBuf, decSz);
     if (rc != WOLFSPDM_SUCCESS) {
-
         return rc;
     }
 
@@ -307,16 +305,12 @@ int wolfSPDM_Finish(WOLFSPDM_CTX* ctx)
     rc = wolfSPDM_DeriveAppDataKeys(ctx);
     if (rc != WOLFSPDM_SUCCESS) {
         wolfSPDM_DebugPrint(ctx, "App data key derivation failed: %d\n", rc);
-
         return rc;
     }
-
     return WOLFSPDM_SUCCESS;
 }
 
-/* ==========================================================================
- * Measurements (Device Attestation)
- * ========================================================================== */
+/* --- Measurements (Device Attestation) --- */
 
 #ifndef NO_WOLFSPDM_MEAS
 
@@ -400,9 +394,7 @@ int wolfSPDM_GetMeasurements(WOLFSPDM_CTX* ctx, byte measOperation,
 
 #endif /* !NO_WOLFSPDM_MEAS */
 
-/* ==========================================================================
- * Challenge Authentication (Sessionless Attestation)
- * ========================================================================== */
+/* --- Challenge Authentication (Sessionless Attestation) --- */
 
 #ifndef NO_WOLFSPDM_CHALLENGE
 
@@ -465,9 +457,7 @@ int wolfSPDM_Challenge(WOLFSPDM_CTX* ctx, int slotId, byte measHashType)
 
 #endif /* !NO_WOLFSPDM_CHALLENGE */
 
-/* ==========================================================================
- * Heartbeat (Session Keep-Alive)
- * ========================================================================== */
+/* --- Heartbeat (Session Keep-Alive) --- */
 
 int wolfSPDM_Heartbeat(WOLFSPDM_CTX* ctx)
 {
@@ -504,9 +494,7 @@ int wolfSPDM_Heartbeat(WOLFSPDM_CTX* ctx)
     return wolfSPDM_ParseHeartbeatAck(ctx, rxBuf, rxSz);
 }
 
-/* ==========================================================================
- * Key Update (Session Key Rotation)
- * ========================================================================== */
+/* --- Key Update (Session Key Rotation) --- */
 
 int wolfSPDM_KeyUpdate(WOLFSPDM_CTX* ctx, int updateAll)
 {

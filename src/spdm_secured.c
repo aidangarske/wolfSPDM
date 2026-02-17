@@ -52,13 +52,9 @@ static int wolfSPDM_AesGcmSelfTest(WOLFSPDM_CTX* ctx)
     int rc;
 
     /* Build AAD matching what we'd use for SeqNum=0 */
-    testAad[0] = (byte)(ctx->sessionId & 0xFF);
-    testAad[1] = (byte)((ctx->sessionId >> 8) & 0xFF);
-    testAad[2] = (byte)((ctx->sessionId >> 16) & 0xFF);
-    testAad[3] = (byte)((ctx->sessionId >> 24) & 0xFF);
+    SPDM_Set32LE(&testAad[0], ctx->sessionId);
     XMEMSET(&testAad[4], 0, 8);  /* SeqNum = 0 */
-    testAad[12] = (byte)((testPlainSz + 16) & 0xFF);
-    testAad[13] = (byte)(((testPlainSz + 16) >> 8) & 0xFF);
+    SPDM_Set16LE(&testAad[12], (word16)(testPlainSz + 16));
 
     /* Encrypt */
     rc = wc_AesGcmSetKey(&aesEnc, ctx->reqDataKey, WOLFSPDM_AEAD_KEY_SIZE);
@@ -149,8 +145,7 @@ int wolfSPDM_EncryptInternal(WOLFSPDM_CTX* ctx,
         }
 
         /* Build plaintext: AppDataLength(2 LE) || SPDM message || RandomData */
-        plainBuf[0] = (byte)(appDataLen & 0xFF);
-        plainBuf[1] = (byte)((appDataLen >> 8) & 0xFF);
+        SPDM_Set16LE(plainBuf, appDataLen);
         XMEMCPY(&plainBuf[2], plain, plainSz);
         /* Fill RandomData with actual random bytes per Nuvoton spec */
         if (padLen > 0) {
@@ -165,24 +160,10 @@ int wolfSPDM_EncryptInternal(WOLFSPDM_CTX* ctx,
         }
 
         /* Build header/AAD: SessionID(4 LE) + SeqNum(8 LE) + Length(2 LE) = 14 bytes */
-        offset = 0;
-        /* SessionID (4 bytes LE): ReqSessionId || RspSessionId */
-        enc[offset++] = (byte)(ctx->sessionId & 0xFF);
-        enc[offset++] = (byte)((ctx->sessionId >> 8) & 0xFF);
-        enc[offset++] = (byte)((ctx->sessionId >> 16) & 0xFF);
-        enc[offset++] = (byte)((ctx->sessionId >> 24) & 0xFF);
-        /* SequenceNumber (8 bytes LE) - per Nuvoton spec */
-        enc[offset++] = (byte)(ctx->reqSeqNum & 0xFF);
-        enc[offset++] = (byte)((ctx->reqSeqNum >> 8) & 0xFF);
-        enc[offset++] = (byte)((ctx->reqSeqNum >> 16) & 0xFF);
-        enc[offset++] = (byte)((ctx->reqSeqNum >> 24) & 0xFF);
-        enc[offset++] = (byte)((ctx->reqSeqNum >> 32) & 0xFF);
-        enc[offset++] = (byte)((ctx->reqSeqNum >> 40) & 0xFF);
-        enc[offset++] = (byte)((ctx->reqSeqNum >> 48) & 0xFF);
-        enc[offset++] = (byte)((ctx->reqSeqNum >> 56) & 0xFF);
-        /* Length (2 bytes LE) = encrypted payload + MAC */
-        enc[offset++] = (byte)(recordLen & 0xFF);
-        enc[offset++] = (byte)((recordLen >> 8) & 0xFF);
+        SPDM_Set32LE(&enc[0], ctx->sessionId);
+        SPDM_Set64LE(&enc[4], ctx->reqSeqNum);
+        SPDM_Set16LE(&enc[12], recordLen);
+        offset = 14;
 
         aadSz = 14;
         XMEMCPY(aad, enc, aadSz);
@@ -207,52 +188,23 @@ int wolfSPDM_EncryptInternal(WOLFSPDM_CTX* ctx,
         }
 
         /* Build plaintext: AppDataLen(2 LE) || MCTP header(0x05) || SPDM msg */
-        plainBuf[0] = (byte)(appDataLen & 0xFF);
-        plainBuf[1] = (byte)((appDataLen >> 8) & 0xFF);
+        SPDM_Set16LE(plainBuf, appDataLen);
         plainBuf[2] = MCTP_MESSAGE_TYPE_SPDM;
         XMEMCPY(&plainBuf[3], plain, plainSz);
 
         /* Build header/AAD: SessionID(4 LE) + SeqNum(2 LE) + Length(2 LE) */
-        offset = 0;
-        enc[offset++] = (byte)(ctx->sessionId & 0xFF);
-        enc[offset++] = (byte)((ctx->sessionId >> 8) & 0xFF);
-        enc[offset++] = (byte)((ctx->sessionId >> 16) & 0xFF);
-        enc[offset++] = (byte)((ctx->sessionId >> 24) & 0xFF);
-        enc[offset++] = (byte)(ctx->reqSeqNum & 0xFF);
-        enc[offset++] = (byte)((ctx->reqSeqNum >> 8) & 0xFF);
-        enc[offset++] = (byte)(recordLen & 0xFF);
-        enc[offset++] = (byte)((recordLen >> 8) & 0xFF);
+        SPDM_Set32LE(&enc[0], ctx->sessionId);
+        SPDM_Set16LE(&enc[4], (word16)ctx->reqSeqNum);
+        SPDM_Set16LE(&enc[6], recordLen);
+        offset = 8;
 
         aadSz = 8;
         XMEMCPY(aad, enc, aadSz);
     }
 
-    /* Build IV: BaseIV XOR sequence number */
-    XMEMCPY(iv, ctx->reqDataIv, WOLFSPDM_AEAD_IV_SIZE);
-#ifdef WOLFSPDM_NUVOTON
-    if (ctx->mode == WOLFSPDM_MODE_NUVOTON) {
-        /* DSP0277 1.2 IV construction:
-         * Zero-extend 8-byte LE sequence number to iv_length (12 bytes),
-         * then XOR with base IV. Seq occupies leftmost bytes (0-7),
-         * zero-padding at bytes 8-11.
-         */
-        iv[0]  ^= (byte)(ctx->reqSeqNum & 0xFF);
-        iv[1]  ^= (byte)((ctx->reqSeqNum >> 8) & 0xFF);
-        iv[2]  ^= (byte)((ctx->reqSeqNum >> 16) & 0xFF);
-        iv[3]  ^= (byte)((ctx->reqSeqNum >> 24) & 0xFF);
-        iv[4]  ^= (byte)((ctx->reqSeqNum >> 32) & 0xFF);
-        iv[5]  ^= (byte)((ctx->reqSeqNum >> 40) & 0xFF);
-        iv[6]  ^= (byte)((ctx->reqSeqNum >> 48) & 0xFF);
-        iv[7]  ^= (byte)((ctx->reqSeqNum >> 56) & 0xFF);
-    }
-    else
-#endif
-    {
-        /* MCTP format: Zero-extend 2-byte LE sequence number to iv_length,
-         * then XOR with base IV per DSP0277. LE integer starts at byte 0. */
-        iv[0] ^= (byte)(ctx->reqSeqNum & 0xFF);
-        iv[1] ^= (byte)((ctx->reqSeqNum >> 8) & 0xFF);
-    }
+    /* Build IV: BaseIV XOR sequence number (DSP0277) */
+    wolfSPDM_BuildIV(iv, ctx->reqDataIv, ctx->reqSeqNum,
+        ctx->mode == WOLFSPDM_MODE_NUVOTON);
 
     rc = wc_AesGcmSetKey(&aes, ctx->reqDataKey, WOLFSPDM_AEAD_KEY_SIZE);
     if (rc != 0) {
@@ -316,13 +268,9 @@ int wolfSPDM_DecryptInternal(WOLFSPDM_CTX* ctx,
         }
 
         /* Parse header: SessionID(4) + SeqNum(8) + Length(2) */
-        rspSessionId = (word32)enc[0] | ((word32)enc[1] << 8) |
-                       ((word32)enc[2] << 16) | ((word32)enc[3] << 24);
-        rspSeqNum64 = (word64)enc[4] | ((word64)enc[5] << 8) |
-                      ((word64)enc[6] << 16) | ((word64)enc[7] << 24) |
-                      ((word64)enc[8] << 32) | ((word64)enc[9] << 40) |
-                      ((word64)enc[10] << 48) | ((word64)enc[11] << 56);
-        rspLen = (word16)(enc[12] | (enc[13] << 8));
+        rspSessionId = SPDM_Get32LE(&enc[0]);
+        rspSeqNum64 = SPDM_Get64LE(&enc[4]);
+        rspLen = SPDM_Get16LE(&enc[12]);
         rspSeqNum = (word16)(rspSeqNum64 & 0xFFFF);  /* For debug output */
 
         if (rspSessionId != ctx->sessionId) {
@@ -342,19 +290,8 @@ int wolfSPDM_DecryptInternal(WOLFSPDM_CTX* ctx,
 
         XMEMCPY(aad, enc, aadSz);
 
-        /* DSP0277 1.2 IV construction:
-         * Zero-extend 8-byte LE sequence number to iv_length (12 bytes),
-         * then XOR with base IV. Seq occupies leftmost bytes (0-7).
-         * SeqNum bytes are at enc[4]-enc[11] in the record header. */
-        XMEMCPY(iv, ctx->rspDataIv, WOLFSPDM_AEAD_IV_SIZE);
-        iv[0]  ^= enc[4];   /* SeqNum byte 0 */
-        iv[1]  ^= enc[5];   /* SeqNum byte 1 */
-        iv[2]  ^= enc[6];   /* SeqNum byte 2 */
-        iv[3]  ^= enc[7];   /* SeqNum byte 3 */
-        iv[4]  ^= enc[8];   /* SeqNum byte 4 */
-        iv[5]  ^= enc[9];   /* SeqNum byte 5 */
-        iv[6]  ^= enc[10];  /* SeqNum byte 6 */
-        iv[7]  ^= enc[11];  /* SeqNum byte 7 */
+        /* Build IV: BaseIV XOR sequence number (DSP0277 1.2) */
+        wolfSPDM_BuildIV(iv, ctx->rspDataIv, rspSeqNum64, 1);
 
         rc = wc_AesGcmSetKey(&aes, ctx->rspDataKey, WOLFSPDM_AEAD_KEY_SIZE);
         if (rc != 0) {
@@ -369,7 +306,7 @@ int wolfSPDM_DecryptInternal(WOLFSPDM_CTX* ctx,
         }
 
         /* Parse decrypted: AppDataLen (2 LE) || SPDM message || RandomData */
-        appDataLen = (word16)(decrypted[0] | (decrypted[1] << 8));
+        appDataLen = SPDM_Get16LE(decrypted);
 
         if (cipherLen < (word32)(2 + appDataLen)) {
             return WOLFSPDM_E_BUFFER_SMALL;
@@ -394,11 +331,10 @@ int wolfSPDM_DecryptInternal(WOLFSPDM_CTX* ctx,
             return WOLFSPDM_E_BUFFER_SMALL;
         }
 
-        /* Parse header */
-        rspSessionId = (word32)enc[0] | ((word32)enc[1] << 8) |
-                       ((word32)enc[2] << 16) | ((word32)enc[3] << 24);
-        rspSeqNum = (word16)(enc[4] | (enc[5] << 8));
-        rspLen = (word16)(enc[6] | (enc[7] << 8));
+        /* Parse header: SessionID(4) + SeqNum(2) + Length(2) */
+        rspSessionId = SPDM_Get32LE(&enc[0]);
+        rspSeqNum = SPDM_Get16LE(&enc[4]);
+        rspLen = SPDM_Get16LE(&enc[6]);
 
         if (rspSessionId != ctx->sessionId) {
             wolfSPDM_DebugPrint(ctx, "Session ID mismatch: 0x%08x != 0x%08x\n",
@@ -416,11 +352,8 @@ int wolfSPDM_DecryptInternal(WOLFSPDM_CTX* ctx,
 
         XMEMCPY(aad, enc, aadSz);
 
-        /* Build IV: Zero-extend 2-byte LE sequence number to iv_length,
-         * then XOR with base IV per DSP0277. LE integer starts at byte 0. */
-        XMEMCPY(iv, ctx->rspDataIv, WOLFSPDM_AEAD_IV_SIZE);
-        iv[0] ^= (byte)(rspSeqNum & 0xFF);
-        iv[1] ^= (byte)((rspSeqNum >> 8) & 0xFF);
+        /* Build IV: BaseIV XOR sequence number (DSP0277) */
+        wolfSPDM_BuildIV(iv, ctx->rspDataIv, (word64)rspSeqNum, 0);
 
         rc = wc_AesGcmSetKey(&aes, ctx->rspDataKey, WOLFSPDM_AEAD_KEY_SIZE);
         if (rc != 0) {
@@ -435,7 +368,7 @@ int wolfSPDM_DecryptInternal(WOLFSPDM_CTX* ctx,
         }
 
         /* Parse decrypted: AppDataLen (2) || MCTP (1) || SPDM msg */
-        appDataLen = (word16)(decrypted[0] | (decrypted[1] << 8));
+        appDataLen = SPDM_Get16LE(decrypted);
 
         if (appDataLen < 1 || cipherLen < (word32)(2 + appDataLen)) {
             return WOLFSPDM_E_BUFFER_SMALL;
@@ -458,6 +391,7 @@ int wolfSPDM_DecryptInternal(WOLFSPDM_CTX* ctx,
     return WOLFSPDM_SUCCESS;
 }
 
+#ifndef WOLFSPDM_LEAN
 int wolfSPDM_EncryptMessage(WOLFSPDM_CTX* ctx,
     const byte* plain, word32 plainSz,
     byte* enc, word32* encSz)
@@ -491,6 +425,7 @@ int wolfSPDM_DecryptMessage(WOLFSPDM_CTX* ctx,
 
     return wolfSPDM_DecryptInternal(ctx, enc, encSz, plain, plainSz);
 }
+#endif /* !WOLFSPDM_LEAN */
 
 int wolfSPDM_SecuredExchange(WOLFSPDM_CTX* ctx,
     const byte* cmdPlain, word32 cmdSz,
@@ -516,18 +451,12 @@ int wolfSPDM_SecuredExchange(WOLFSPDM_CTX* ctx,
         return rc;
     }
 
-    rc = wolfSPDM_DecryptInternal(ctx, rxBuf, rxSz, rspPlain, rspSz);
-    if (rc != WOLFSPDM_SUCCESS) {
-        return rc;
-    }
-
-    return WOLFSPDM_SUCCESS;
+    return wolfSPDM_DecryptInternal(ctx, rxBuf, rxSz, rspPlain, rspSz);
 }
 
-/* ==========================================================================
- * Application Data Transfer
- * ========================================================================== */
+/* --- Application Data Transfer --- */
 
+#ifndef WOLFSPDM_LEAN
 int wolfSPDM_SendData(WOLFSPDM_CTX* ctx, const byte* data, word32 dataSz)
 {
     byte encBuf[WOLFSPDM_MAX_MSG_SIZE + 48];
@@ -595,10 +524,6 @@ int wolfSPDM_ReceiveData(WOLFSPDM_CTX* ctx, byte* data, word32* dataSz)
     }
 
     /* Decrypt the received data */
-    rc = wolfSPDM_DecryptInternal(ctx, rxBuf, rxSz, data, dataSz);
-    if (rc != WOLFSPDM_SUCCESS) {
-        return rc;
-    }
-
-    return WOLFSPDM_SUCCESS;
+    return wolfSPDM_DecryptInternal(ctx, rxBuf, rxSz, data, dataSz);
 }
+#endif /* !WOLFSPDM_LEAN */

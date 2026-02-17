@@ -1,0 +1,96 @@
+name: SPDM Emulator Integration Test
+
+on:
+  push:
+    branches: [ 'master', 'main', 'release/**' ]
+  pull_request:
+    branches: [ '*' ]
+
+jobs:
+  spdm-emu-test:
+    name: SPDM emulator integration test
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y autoconf automake libtool cmake libmbedtls-dev
+
+    # --- Build wolfSSL ---
+    - name: Cache wolfSSL
+      id: cache-wolfssl
+      uses: actions/cache@v4
+      with:
+        path: ~/wolfssl-install
+        key: wolfssl-emu-test-v1
+
+    - name: Build wolfSSL
+      if: steps.cache-wolfssl.outputs.cache-hit != 'true'
+      run: |
+        cd ~
+        git clone --depth 1 https://github.com/wolfSSL/wolfssl.git
+        cd wolfssl
+        ./autogen.sh
+        ./configure --enable-wolftpm --enable-all \
+                    --prefix=$HOME/wolfssl-install
+        make -j$(nproc)
+        make install
+
+    # --- Build wolfSPDM ---
+    - name: Build and install wolfSPDM
+      run: |
+        ./autogen.sh
+        ./configure --with-wolfssl=$HOME/wolfssl-install \
+                    --prefix=$HOME/wolfspdm-install
+        make -j$(nproc)
+        make install
+
+    # --- Build spdm-emu ---
+    - name: Cache spdm-emu
+      id: cache-spdm-emu
+      uses: actions/cache@v4
+      with:
+        path: ~/spdm-emu
+        key: spdm-emu-v1
+
+    - name: Build spdm-emu
+      if: steps.cache-spdm-emu.outputs.cache-hit != 'true'
+      run: |
+        cd ~
+        git clone --depth 1 https://github.com/DMTF/spdm-emu.git
+        cd spdm-emu
+        mkdir build && cd build
+        cmake -DARCH=x64 -DTOOLCHAIN=GCC -DTARGET=Release -DCRYPTO=mbedtls ..
+        make copy_sample_key && make -j$(nproc)
+
+    # --- Build wolfTPM ---
+    - name: Build wolfTPM
+      run: |
+        cd ~
+        git clone --depth 1 https://github.com/wolfSSL/wolfTPM.git wolfTPM
+        cd wolfTPM
+        ./autogen.sh
+        ./configure --enable-spdm --enable-swtpm \
+                    --with-wolfspdm=$HOME/wolfspdm-install \
+                    --with-wolfssl=$HOME/wolfssl-install
+        make -j$(nproc)
+
+    # --- Run integration tests ---
+    - name: Run SPDM emulator tests
+      run: |
+        cd ~/wolfTPM
+        export LD_LIBRARY_PATH=$HOME/wolfspdm-install/lib:$HOME/wolfssl-install/lib
+        export SPDM_EMU_PATH=$HOME/spdm-emu/build/bin
+        ./examples/spdm/spdm_test.sh --emu
+
+    - name: Upload logs on failure
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: spdm-emu-test-logs
+        path: |
+          config.log
+          ~/wolfTPM/config.log

@@ -25,9 +25,7 @@
 #include <stdarg.h>
 #include <stdio.h>
 
-/* ==========================================================================
- * Context Management
- * ========================================================================== */
+/* --- Context Management --- */
 
 int wolfSPDM_Init(WOLFSPDM_CTX* ctx)
 {
@@ -144,9 +142,7 @@ int wolfSPDM_InitStatic(WOLFSPDM_CTX* ctx, int size)
     return wolfSPDM_Init(ctx);
 }
 
-/* ==========================================================================
- * Configuration
- * ========================================================================== */
+/* --- Configuration --- */
 
 int wolfSPDM_SetIO(WOLFSPDM_CTX* ctx, WOLFSPDM_IO_CB ioCb, void* userCtx)
 {
@@ -271,9 +267,7 @@ WOLFSPDM_MODE wolfSPDM_GetMode(WOLFSPDM_CTX* ctx)
     return ctx->mode;
 }
 
-/* ==========================================================================
- * Session Status
- * ========================================================================== */
+/* --- Session Status --- */
 
 int wolfSPDM_IsConnected(WOLFSPDM_CTX* ctx)
 {
@@ -317,9 +311,7 @@ word16 wolfSPDM_GetFipsIndicator(WOLFSPDM_CTX* ctx)
 }
 #endif
 
-/* ==========================================================================
- * Session Establishment - Connect (Full Handshake)
- * ========================================================================== */
+/* --- Session Establishment - Connect (Full Handshake) --- */
 
 /* Standard SPDM 1.2 connection flow (for libspdm emulator, etc.) */
 static int wolfSPDM_ConnectStandard(WOLFSPDM_CTX* ctx)
@@ -330,77 +322,30 @@ static int wolfSPDM_ConnectStandard(WOLFSPDM_CTX* ctx)
     ctx->state = WOLFSPDM_STATE_INIT;
     wolfSPDM_TranscriptReset(ctx);
 
-    /* Step 1: GET_VERSION / VERSION */
-    wolfSPDM_DebugPrint(ctx, "Step 1: GET_VERSION\n");
-    rc = wolfSPDM_GetVersion(ctx);
-    if (rc != WOLFSPDM_SUCCESS) {
-        ctx->state = WOLFSPDM_STATE_ERROR;
-        return rc;
-    }
+    SPDM_CONNECT_STEP(ctx, "Step 1: GET_VERSION\n",
+        wolfSPDM_GetVersion(ctx));
+    SPDM_CONNECT_STEP(ctx, "Step 2: GET_CAPABILITIES\n",
+        wolfSPDM_GetCapabilities(ctx));
+    SPDM_CONNECT_STEP(ctx, "Step 3: NEGOTIATE_ALGORITHMS\n",
+        wolfSPDM_NegotiateAlgorithms(ctx));
+    SPDM_CONNECT_STEP(ctx, "Step 4: GET_DIGESTS\n",
+        wolfSPDM_GetDigests(ctx));
+    SPDM_CONNECT_STEP(ctx, "Step 5: GET_CERTIFICATE\n",
+        wolfSPDM_GetCertificate(ctx, 0));
 
-    /* Step 2: GET_CAPABILITIES / CAPABILITIES */
-    wolfSPDM_DebugPrint(ctx, "Step 2: GET_CAPABILITIES\n");
-    rc = wolfSPDM_GetCapabilities(ctx);
-    if (rc != WOLFSPDM_SUCCESS) {
-        ctx->state = WOLFSPDM_STATE_ERROR;
-        return rc;
-    }
-
-    /* Step 3: NEGOTIATE_ALGORITHMS / ALGORITHMS */
-    wolfSPDM_DebugPrint(ctx, "Step 3: NEGOTIATE_ALGORITHMS\n");
-    rc = wolfSPDM_NegotiateAlgorithms(ctx);
-    if (rc != WOLFSPDM_SUCCESS) {
-        ctx->state = WOLFSPDM_STATE_ERROR;
-        return rc;
-    }
-
-    /* Step 4: GET_DIGESTS / DIGESTS */
-    wolfSPDM_DebugPrint(ctx, "Step 4: GET_DIGESTS\n");
-    rc = wolfSPDM_GetDigests(ctx);
-    if (rc != WOLFSPDM_SUCCESS) {
-        ctx->state = WOLFSPDM_STATE_ERROR;
-        return rc;
-    }
-
-    /* Step 5: GET_CERTIFICATE / CERTIFICATE */
-    wolfSPDM_DebugPrint(ctx, "Step 5: GET_CERTIFICATE\n");
-    rc = wolfSPDM_GetCertificate(ctx, 0);  /* Slot 0 */
-    if (rc != WOLFSPDM_SUCCESS) {
-        ctx->state = WOLFSPDM_STATE_ERROR;
-        return rc;
-    }
-
-    /* Validate certificate chain if trusted CAs are loaded.
-     * Public key extraction now happens automatically in GetCertificate. */
+    /* Validate certificate chain if trusted CAs are loaded */
     if (ctx->hasTrustedCAs) {
-        rc = wolfSPDM_ValidateCertChain(ctx);
-        if (rc != WOLFSPDM_SUCCESS) {
-            wolfSPDM_DebugPrint(ctx,
-                "Certificate chain validation failed (%d)\n", rc);
-            ctx->state = WOLFSPDM_STATE_ERROR;
-            return rc;
-        }
+        SPDM_CONNECT_STEP(ctx, "", wolfSPDM_ValidateCertChain(ctx));
     }
     else if (!ctx->hasResponderPubKey) {
         wolfSPDM_DebugPrint(ctx,
             "Warning: No trusted CAs loaded — chain not validated\n");
     }
 
-    /* Step 6: KEY_EXCHANGE / KEY_EXCHANGE_RSP */
-    wolfSPDM_DebugPrint(ctx, "Step 6: KEY_EXCHANGE\n");
-    rc = wolfSPDM_KeyExchange(ctx);
-    if (rc != WOLFSPDM_SUCCESS) {
-        ctx->state = WOLFSPDM_STATE_ERROR;
-        return rc;
-    }
-
-    /* Step 7: FINISH / FINISH_RSP */
-    wolfSPDM_DebugPrint(ctx, "Step 7: FINISH\n");
-    rc = wolfSPDM_Finish(ctx);
-    if (rc != WOLFSPDM_SUCCESS) {
-        ctx->state = WOLFSPDM_STATE_ERROR;
-        return rc;
-    }
+    SPDM_CONNECT_STEP(ctx, "Step 6: KEY_EXCHANGE\n",
+        wolfSPDM_KeyExchange(ctx));
+    SPDM_CONNECT_STEP(ctx, "Step 7: FINISH\n",
+        wolfSPDM_Finish(ctx));
 
     ctx->state = WOLFSPDM_STATE_CONNECTED;
     wolfSPDM_DebugPrint(ctx, "SPDM Session Established! SessionID=0x%08x\n",
@@ -468,9 +413,7 @@ int wolfSPDM_Disconnect(WOLFSPDM_CTX* ctx)
     return (rc == WOLFSPDM_SUCCESS) ? WOLFSPDM_SUCCESS : rc;
 }
 
-/* ==========================================================================
- * I/O Helper
- * ========================================================================== */
+/* --- I/O Helper --- */
 
 int wolfSPDM_SendReceive(WOLFSPDM_CTX* ctx,
     const byte* txBuf, word32 txSz,
@@ -490,9 +433,7 @@ int wolfSPDM_SendReceive(WOLFSPDM_CTX* ctx,
     return WOLFSPDM_SUCCESS;
 }
 
-/* ==========================================================================
- * Debug Utilities
- * ========================================================================== */
+/* --- Debug Utilities --- */
 
 void wolfSPDM_DebugPrint(WOLFSPDM_CTX* ctx, const char* fmt, ...)
 {
@@ -529,9 +470,7 @@ void wolfSPDM_DebugHex(WOLFSPDM_CTX* ctx, const char* label,
     fflush(stdout);
 }
 
-/* ==========================================================================
- * Measurement Accessors
- * ========================================================================== */
+/* --- Measurement Accessors --- */
 
 #ifndef NO_WOLFSPDM_MEAS
 
@@ -581,9 +520,7 @@ int wolfSPDM_GetMeasurementBlock(WOLFSPDM_CTX* ctx, int blockIdx,
 
 #endif /* !NO_WOLFSPDM_MEAS */
 
-/* ==========================================================================
- * Error String
- * ========================================================================== */
+/* --- Error String --- */
 
 const char* wolfSPDM_GetErrorString(int error)
 {

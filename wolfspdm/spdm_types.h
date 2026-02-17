@@ -37,9 +37,7 @@ extern "C" {
     #include <wolfssl/wolfcrypt/types.h>
 #endif
 
-/* ==========================================================================
- * SPDM Protocol Constants (DMTF DSP0274 / DSP0277)
- * ========================================================================== */
+/* --- SPDM Protocol Constants (DMTF DSP0274 / DSP0277) --- */
 
 /* SPDM Version Numbers */
 #define SPDM_VERSION_10             0x10    /* SPDM 1.0 (for GET_VERSION) */
@@ -109,10 +107,8 @@ extern "C" {
 #define SPDM_ERROR_RESPONSE_NOT_READY   0x42
 #define SPDM_ERROR_REQUEST_RESYNCH      0x43
 
-/* ==========================================================================
- * Algorithm Set B (FIPS 140-3 Level 3 compliant)
- * This implementation ONLY supports Algorithm Set B for simplicity.
- * ========================================================================== */
+/* --- Algorithm Set B (FIPS 140-3 Level 3 compliant) ---
+ * This implementation ONLY supports Algorithm Set B for simplicity. */
 
 /* Hash Algorithms */
 #define SPDM_HASH_ALGO_SHA_384      0x00000002  /* TPM_ALG_SHA384 */
@@ -139,9 +135,7 @@ extern "C" {
 #define WOLFSPDM_AEAD_TAG_SIZE      16  /* AES-GCM tag size */
 #define WOLFSPDM_HMAC_SIZE          48  /* HMAC-SHA384 output size */
 
-/* ==========================================================================
- * Capability Flags (per DSP0274)
- * ========================================================================== */
+/* --- Capability Flags (per DSP0274) --- */
 
 /* Requester Capabilities (GET_CAPABILITIES flags) */
 #define SPDM_CAP_CERT_CAP           0x00000002  /* Certificate support */
@@ -167,18 +161,14 @@ extern "C" {
                                      SPDM_CAP_KEY_EX_CAP | SPDM_CAP_HBEAT_CAP | \
                                      SPDM_CAP_KEY_UPD_CAP)
 
-/* ==========================================================================
- * Buffer/Message Size Limits
- * ========================================================================== */
+/* --- Buffer/Message Size Limits --- */
 
 #define WOLFSPDM_MAX_MSG_SIZE       4096    /* Maximum SPDM message size */
 #define WOLFSPDM_MAX_CERT_CHAIN     4096    /* Maximum certificate chain size */
 #define WOLFSPDM_MAX_TRANSCRIPT     4096    /* Maximum transcript buffer */
 #define WOLFSPDM_RANDOM_SIZE        32      /* Random data in KEY_EXCHANGE */
 
-/* ==========================================================================
- * MCTP Transport Constants (for TCP/socket transport)
- * ========================================================================== */
+/* --- MCTP Transport Constants (for TCP/socket transport) --- */
 
 #define MCTP_MESSAGE_TYPE_SPDM      0x05    /* SPDM over MCTP */
 #define MCTP_MESSAGE_TYPE_SECURED   0x06    /* Secured SPDM over MCTP */
@@ -195,9 +185,7 @@ extern "C" {
 #endif
 
 #ifndef NO_WOLFSPDM_MEAS
-/* ==========================================================================
- * Measurement Constants (DSP0274 Section 10.11)
- * ========================================================================== */
+/* --- Measurement Constants (DSP0274 Section 10.11) --- */
 
 /* MeasurementSummaryHashType (Param1 of GET_MEASUREMENTS) */
 #define SPDM_MEAS_SUMMARY_HASH_NONE     0x00
@@ -231,9 +219,7 @@ extern "C" {
 #define WOLFSPDM_MEAS_BLOCK_HDR_SIZE    4   /* Index(1) + MeasSpec(1) + Size(2 LE) */
 #endif /* !NO_WOLFSPDM_MEAS */
 
-/* ==========================================================================
- * Key Derivation Labels (SPDM 1.2 per DSP0277)
- * ========================================================================== */
+/* --- Key Derivation Labels (SPDM 1.2 per DSP0277) --- */
 
 #define SPDM_BIN_CONCAT_PREFIX_12   "spdm1.2 "
 #define SPDM_BIN_CONCAT_PREFIX_13   "spdm1.3 "
