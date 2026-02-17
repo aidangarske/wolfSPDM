@@ -103,8 +103,8 @@ typedef enum {
 /* Compile-time size for static allocation of WOLFSPDM_CTX.
  * Use this when you need a buffer large enough to hold WOLFSPDM_CTX
  * without access to the struct definition (e.g., in wolfTPM).
- * Actual struct size: ~22.7 KB (base with measurements) / ~21.2 KB (NO_WOLFSPDM_MEAS).
- * Rounded up to 24 KB for platform alignment and minor future growth.
+ * Actual struct size: ~31.3 KB (with measurements) / ~29.9 KB (NO_WOLFSPDM_MEAS).
+ * Rounded up to 32 KB for platform alignment.
  * wolfSPDM_InitStatic() verifies at runtime that the provided buffer
  * is large enough; returns WOLFSPDM_E_BUFFER_SMALL if not. */
 #define WOLFSPDM_CTX_STATIC_SIZE  32768  /* 32KB - fits CTX with cert validation + challenge + key update fields */

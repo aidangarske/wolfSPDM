@@ -871,11 +871,11 @@ int wolfSPDM_VerifyMeasurementSig(WOLFSPDM_CTX* ctx,
      *
      * Per DSP0274:
      * - combined_spdm_prefix = "dmtf-spdm-v1.X.*" x4 = 64 bytes
-     * - zero_pad = 36 - strlen("responder-measurements signing") = 5 bytes
-     * - signing_context = "responder-measurements signing" (31 bytes)
+     * - zero_pad = 36 - strlen("responder-measurements signing") = 6 bytes
+     * - signing_context = "responder-measurements signing" (30 bytes)
      * - Hash(L1||L2) = SHA-384(reqMsg || rspBuf[0..sigOffset-1]) = 48 bytes
      *
-     * Total M = 64 + 5 + 31 + 48 = 148 bytes
+     * Total M = 64 + 6 + 30 + 48 = 148 bytes
      * Then sign Hash(M) */
 
     /* Compute L1||L2 hash per DSP0274 Section 10.11.1:

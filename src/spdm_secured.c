@@ -464,7 +464,11 @@ int wolfSPDM_SendData(WOLFSPDM_CTX* ctx, const byte* data, word32 dataSz)
         return WOLFSPDM_E_INVALID_ARG;
     }
 
-    if (ctx->state != WOLFSPDM_STATE_CONNECTED) {
+    if (ctx->state != WOLFSPDM_STATE_CONNECTED
+#ifndef NO_WOLFSPDM_MEAS
+        && ctx->state != WOLFSPDM_STATE_MEASURED
+#endif
+        ) {
         return WOLFSPDM_E_NOT_CONNECTED;
     }
 
@@ -506,7 +510,11 @@ int wolfSPDM_ReceiveData(WOLFSPDM_CTX* ctx, byte* data, word32* dataSz)
         return WOLFSPDM_E_INVALID_ARG;
     }
 
-    if (ctx->state != WOLFSPDM_STATE_CONNECTED) {
+    if (ctx->state != WOLFSPDM_STATE_CONNECTED
+#ifndef NO_WOLFSPDM_MEAS
+        && ctx->state != WOLFSPDM_STATE_MEASURED
+#endif
+        ) {
         return WOLFSPDM_E_NOT_CONNECTED;
     }
 
