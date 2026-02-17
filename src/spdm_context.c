@@ -546,7 +546,7 @@ int wolfSPDM_GetMeasurementCount(WOLFSPDM_CTX* ctx)
 int wolfSPDM_GetMeasurementBlock(WOLFSPDM_CTX* ctx, int blockIdx,
     byte* measIndex, byte* measType, byte* value, word32* valueSz)
 {
-    WOLFSPDM_MEAS_BLOCK* blk;
+    const WOLFSPDM_MEAS_BLOCK* blk;
 
     if (ctx == NULL || !ctx->hasMeasurements) {
         return WOLFSPDM_E_INVALID_ARG;

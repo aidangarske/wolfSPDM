@@ -25,9 +25,9 @@
 
 int wolfSPDM_BuildGetVersion(byte* buf, word32* bufSz)
 {
-    if (buf == NULL || bufSz == NULL || *bufSz < 4) {
+    /* Note: ctx is not used for GET_VERSION, check buf/bufSz directly */
+    if (buf == NULL || bufSz == NULL || *bufSz < 4)
         return WOLFSPDM_E_BUFFER_SMALL;
-    }
 
     /* Per SPDM spec, GET_VERSION always uses version 0x10 */
     buf[0] = SPDM_VERSION_10;
@@ -41,9 +41,7 @@ int wolfSPDM_BuildGetVersion(byte* buf, word32* bufSz)
 
 int wolfSPDM_BuildGetCapabilities(WOLFSPDM_CTX* ctx, byte* buf, word32* bufSz)
 {
-    if (ctx == NULL || buf == NULL || bufSz == NULL || *bufSz < 20) {
-        return WOLFSPDM_E_BUFFER_SMALL;
-    }
+    SPDM_CHECK_BUILD_ARGS(ctx, buf, bufSz, 20);
 
     XMEMSET(buf, 0, 20);
     buf[0] = ctx->spdmVersion;  /* Use negotiated version */
@@ -69,9 +67,7 @@ int wolfSPDM_BuildGetCapabilities(WOLFSPDM_CTX* ctx, byte* buf, word32* bufSz)
 
 int wolfSPDM_BuildNegotiateAlgorithms(WOLFSPDM_CTX* ctx, byte* buf, word32* bufSz)
 {
-    if (ctx == NULL || buf == NULL || bufSz == NULL || *bufSz < 48) {
-        return WOLFSPDM_E_BUFFER_SMALL;
-    }
+    SPDM_CHECK_BUILD_ARGS(ctx, buf, bufSz, 48);
 
     XMEMSET(buf, 0, 48);
     buf[0] = ctx->spdmVersion;  /* Use negotiated version */
@@ -103,9 +99,7 @@ int wolfSPDM_BuildNegotiateAlgorithms(WOLFSPDM_CTX* ctx, byte* buf, word32* bufS
 
 int wolfSPDM_BuildGetDigests(WOLFSPDM_CTX* ctx, byte* buf, word32* bufSz)
 {
-    if (ctx == NULL || buf == NULL || bufSz == NULL || *bufSz < 4) {
-        return WOLFSPDM_E_BUFFER_SMALL;
-    }
+    SPDM_CHECK_BUILD_ARGS(ctx, buf, bufSz, 4);
 
     buf[0] = ctx->spdmVersion;  /* Use negotiated version */
     buf[1] = SPDM_GET_DIGESTS;
@@ -119,9 +113,7 @@ int wolfSPDM_BuildGetDigests(WOLFSPDM_CTX* ctx, byte* buf, word32* bufSz)
 int wolfSPDM_BuildGetCertificate(WOLFSPDM_CTX* ctx, byte* buf, word32* bufSz,
     int slotId, word16 offset, word16 length)
 {
-    if (ctx == NULL || buf == NULL || bufSz == NULL || *bufSz < 8) {
-        return WOLFSPDM_E_BUFFER_SMALL;
-    }
+    SPDM_CHECK_BUILD_ARGS(ctx, buf, bufSz, 8);
 
     buf[0] = ctx->spdmVersion;  /* Use negotiated version */
     buf[1] = SPDM_GET_CERTIFICATE;
@@ -145,9 +137,7 @@ int wolfSPDM_BuildKeyExchange(WOLFSPDM_CTX* ctx, byte* buf, word32* bufSz)
     word32 pubKeyYSz = sizeof(pubKeyY);
     int rc;
 
-    if (ctx == NULL || buf == NULL || bufSz == NULL || *bufSz < 180) {
-        return WOLFSPDM_E_BUFFER_SMALL;
-    }
+    SPDM_CHECK_BUILD_ARGS(ctx, buf, bufSz, 180);
 
     rc = wolfSPDM_GenerateEphemeralKey(ctx);
     if (rc != WOLFSPDM_SUCCESS) {
@@ -224,6 +214,95 @@ int wolfSPDM_BuildKeyExchange(WOLFSPDM_CTX* ctx, byte* buf, word32* bufSz)
 
     *bufSz = offset;
     return WOLFSPDM_SUCCESS;
+}
+
+/* ==========================================================================
+ * Shared Signing Helpers
+ * ========================================================================== */
+
+/* Build SPDM 1.2+ signed hash per DSP0274:
+ * M = combined_spdm_prefix || zero_pad || context_str || inputDigest
+ * outputDigest = Hash(M)
+ *
+ * combined_spdm_prefix = "dmtf-spdm-v1.X.*" x4 = 64 bytes
+ * zero_pad = (36 - contextStrLen) bytes of 0x00
+ * context_str = signing context string (variable length, max 36) */
+static int wolfSPDM_BuildSignedHash(byte spdmVersion,
+    const char* contextStr, word32 contextStrLen,
+    const byte* inputDigest, byte* outputDigest)
+{
+    byte signMsg[200]; /* 64 + 36 + 48 = 148 bytes max */
+    word32 signMsgLen = 0;
+    word32 zeroPadLen;
+    wc_Sha384 sha;
+    byte majorVer, minorVer;
+    int i, rc;
+
+    majorVer = (byte)('0' + ((spdmVersion >> 4) & 0xF));
+    minorVer = (byte)('0' + (spdmVersion & 0xF));
+
+    /* combined_spdm_prefix: "dmtf-spdm-v1.X.*" x4 = 64 bytes */
+    for (i = 0; i < 4; i++) {
+        XMEMCPY(&signMsg[signMsgLen], "dmtf-spdm-v1.2.*", 16);
+        signMsg[signMsgLen + 11] = majorVer;
+        signMsg[signMsgLen + 13] = minorVer;
+        signMsg[signMsgLen + 15] = '*';
+        signMsgLen += 16;
+    }
+
+    /* Zero padding: 36 - contextStrLen bytes */
+    zeroPadLen = 36 - contextStrLen;
+    XMEMSET(&signMsg[signMsgLen], 0x00, zeroPadLen);
+    signMsgLen += zeroPadLen;
+
+    /* Signing context string */
+    XMEMCPY(&signMsg[signMsgLen], contextStr, contextStrLen);
+    signMsgLen += contextStrLen;
+
+    /* Input digest */
+    XMEMCPY(&signMsg[signMsgLen], inputDigest, WOLFSPDM_HASH_SIZE);
+    signMsgLen += WOLFSPDM_HASH_SIZE;
+
+    /* Hash M */
+    rc = wc_InitSha384(&sha);
+    if (rc != 0) return WOLFSPDM_E_CRYPTO_FAIL;
+    rc = wc_Sha384Update(&sha, signMsg, signMsgLen);
+    if (rc != 0) { wc_Sha384Free(&sha); return WOLFSPDM_E_CRYPTO_FAIL; }
+    rc = wc_Sha384Final(&sha, outputDigest);
+    wc_Sha384Free(&sha);
+    if (rc != 0) return WOLFSPDM_E_CRYPTO_FAIL;
+
+    return WOLFSPDM_SUCCESS;
+}
+
+/* Verify an SPDM ECDSA signature (raw r||s format) against a digest
+ * using the responder's public key stored in ctx. */
+static int wolfSPDM_VerifyEccSig(WOLFSPDM_CTX* ctx,
+    const byte* sigRaw, word32 sigRawSz,
+    const byte* digest, word32 digestSz)
+{
+    byte derSig[256];
+    word32 derSigSz = sizeof(derSig);
+    const byte* sigR = sigRaw;
+    const byte* sigS = sigRaw + (sigRawSz / 2);
+    int verified = 0;
+    int rc;
+
+    rc = wc_ecc_rs_raw_to_sig(sigR, sigRawSz / 2,
+        sigS, sigRawSz / 2, derSig, &derSigSz);
+    if (rc != 0) {
+        wolfSPDM_DebugPrint(ctx, "ECC rs_raw_to_sig failed: %d\n", rc);
+        return WOLFSPDM_E_CRYPTO_FAIL;
+    }
+
+    rc = wc_ecc_verify_hash(derSig, derSigSz, digest, digestSz,
+        &verified, &ctx->responderPubKey);
+    if (rc != 0) {
+        wolfSPDM_DebugPrint(ctx, "ECC verify_hash failed: %d\n", rc);
+        return WOLFSPDM_E_CRYPTO_FAIL;
+    }
+
+    return verified == 1 ? WOLFSPDM_SUCCESS : WOLFSPDM_E_CRYPTO_FAIL;
 }
 
 int wolfSPDM_BuildFinish(WOLFSPDM_CTX* ctx, byte* buf, word32* bufSz)
@@ -316,72 +395,14 @@ int wolfSPDM_BuildFinish(WOLFSPDM_CTX* ctx, byte* buf, word32* bufSz)
 
     XMEMCPY(ctx->th2, th2Hash, WOLFSPDM_HASH_SIZE);
 
-    /* For mutual auth, use SPDM 1.2+ signing context format per DSP0274:
-     * M = combined_spdm_prefix || zero_pad || signing_context || TH2
-     *
-     * Where (per libspdm reference implementation):
-     * - combined_spdm_prefix = "dmtf-spdm-v1.3.*" repeated 4 times = 64 bytes
-     *   (16 bytes each, NOT including null terminator)
-     * - zero_pad = 12 bytes of 0x00 (36 - strlen("requester-finish signing"))
-     * - signing_context = "requester-finish signing" (24 bytes)
-     * - TH2 = transcript hash (48 bytes for SHA-384)
-     *
-     * Total: 64 + 12 + 24 + 48 = 148 bytes */
+    /* For mutual auth, use SPDM 1.2+ signing context format per DSP0274 */
     if (mutualAuth) {
-        /* Build signing context per DSP0274 / libspdm */
-        static const char context_str[] = "requester-finish signing";  /* 24 bytes */
-        /* 16 bytes per prefix (sizeof - 1, no null terminator) */
-        #define SPDM_SIGNING_PREFIX_SIZE 16
-        #define SPDM_SIGNING_CONTEXT_STR_SIZE 24
-        #define SPDM_SIGNING_ZERO_PAD_SIZE (36 - SPDM_SIGNING_CONTEXT_STR_SIZE) /* 12 */
-        byte signMsg[200];  /* 64 + 12 + 24 + 48 = 148 bytes */
         byte signMsgHash[WOLFSPDM_HASH_SIZE];
-        word32 signMsgLen = 0;
-        wc_Sha384 sha;
-        int i;
-        byte majorVer, minorVer;
 
-        /* Determine version digits from negotiated SPDM version byte (0x13 = 1.3) */
-        majorVer = (byte)('0' + ((ctx->spdmVersion >> 4) & 0xF));  /* '1' */
-        minorVer = (byte)('0' + (ctx->spdmVersion & 0xF));          /* '3' */
-
-        /* combined_spdm_prefix: "dmtf-spdm-v1.3.*" repeated 4 times = 64 bytes
-         * Each copy is 16 bytes (no null terminator), matching libspdm's
-         * SPDM_VERSION_1_2_SIGNING_PREFIX_CONTEXT_SIZE = sizeof(...) - 1 = 16 */
-        for (i = 0; i < 4; i++) {
-            XMEMCPY(&signMsg[signMsgLen], "dmtf-spdm-v1.2.*", SPDM_SIGNING_PREFIX_SIZE);
-            signMsg[signMsgLen + 11] = majorVer;  /* Patch major version */
-            signMsg[signMsgLen + 13] = minorVer;  /* Patch minor version */
-            signMsg[signMsgLen + 15] = '*';        /* Wildcard for update version */
-            signMsgLen += SPDM_SIGNING_PREFIX_SIZE;
-        }
-
-        /* Zero padding: 36 - context_str_size = 12 bytes of 0x00 */
-        XMEMSET(&signMsg[signMsgLen], 0x00, SPDM_SIGNING_ZERO_PAD_SIZE);
-        signMsgLen += SPDM_SIGNING_ZERO_PAD_SIZE;
-
-        /* Signing context string: "requester-finish signing" (24 bytes) */
-        XMEMCPY(&signMsg[signMsgLen], context_str, SPDM_SIGNING_CONTEXT_STR_SIZE);
-        signMsgLen += SPDM_SIGNING_CONTEXT_STR_SIZE;
-
-        /* Append TH2 hash */
-        XMEMCPY(&signMsg[signMsgLen], th2Hash, WOLFSPDM_HASH_SIZE);
-        signMsgLen += WOLFSPDM_HASH_SIZE;
-
-        /* Hash M to get the value to sign */
-        rc = wc_InitSha384(&sha);
-        if (rc != 0) {
-            return WOLFSPDM_E_CRYPTO_FAIL;
-        }
-        rc = wc_Sha384Update(&sha, signMsg, signMsgLen);
-        if (rc != 0) {
-            wc_Sha384Free(&sha);
-            return WOLFSPDM_E_CRYPTO_FAIL;
-        }
-        rc = wc_Sha384Final(&sha, signMsgHash);
-        wc_Sha384Free(&sha);
-        if (rc != 0) {
-            return WOLFSPDM_E_CRYPTO_FAIL;
+        rc = wolfSPDM_BuildSignedHash(ctx->spdmVersion,
+            "requester-finish signing", 24, th2Hash, signMsgHash);
+        if (rc != WOLFSPDM_SUCCESS) {
+            return rc;
         }
 
         /* Sign Hash(M) */
@@ -434,9 +455,7 @@ int wolfSPDM_BuildFinish(WOLFSPDM_CTX* ctx, byte* buf, word32* bufSz)
 
 int wolfSPDM_BuildEndSession(WOLFSPDM_CTX* ctx, byte* buf, word32* bufSz)
 {
-    if (ctx == NULL || buf == NULL || bufSz == NULL || *bufSz < 4) {
-        return WOLFSPDM_E_BUFFER_SMALL;
-    }
+    SPDM_CHECK_BUILD_ARGS(ctx, buf, bufSz, 4);
 
     buf[0] = ctx->spdmVersion;  /* Use negotiated version */
     buf[1] = SPDM_END_SESSION;
@@ -469,18 +488,8 @@ int wolfSPDM_ParseVersion(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufSz)
     word32 i;
     byte highestVersion = SPDM_VERSION_12;  /* Start at 1.2, find highest supported (capped at 1.3) */
 
-    if (ctx == NULL || buf == NULL || bufSz < 6) {
-        return WOLFSPDM_E_INVALID_ARG;
-    }
-
-    if (buf[1] != SPDM_VERSION) {
-        int errCode;
-        if (wolfSPDM_CheckError(buf, bufSz, &errCode)) {
-            wolfSPDM_DebugPrint(ctx, "VERSION error: 0x%02x\n", errCode);
-            return WOLFSPDM_E_PEER_ERROR;
-        }
-        return WOLFSPDM_E_VERSION_MISMATCH;
-    }
+    SPDM_CHECK_PARSE_ARGS(ctx, buf, bufSz, 6);
+    SPDM_CHECK_RESPONSE(ctx, buf, bufSz, SPDM_VERSION, WOLFSPDM_E_VERSION_MISMATCH);
 
     /* Parse VERSION response:
      * Offset 4-5: VersionNumberEntryCount (LE)
@@ -511,17 +520,8 @@ int wolfSPDM_ParseVersion(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufSz)
 
 int wolfSPDM_ParseCapabilities(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufSz)
 {
-    if (ctx == NULL || buf == NULL || bufSz < 12) {
-        return WOLFSPDM_E_INVALID_ARG;
-    }
-
-    if (buf[1] != SPDM_CAPABILITIES) {
-        int errCode;
-        if (wolfSPDM_CheckError(buf, bufSz, &errCode)) {
-            return WOLFSPDM_E_PEER_ERROR;
-        }
-        return WOLFSPDM_E_CAPS_MISMATCH;
-    }
+    SPDM_CHECK_PARSE_ARGS(ctx, buf, bufSz, 12);
+    SPDM_CHECK_RESPONSE(ctx, buf, bufSz, SPDM_CAPABILITIES, WOLFSPDM_E_CAPS_MISMATCH);
 
     ctx->rspCaps = (word32)buf[8] | ((word32)buf[9] << 8) |
                    ((word32)buf[10] << 16) | ((word32)buf[11] << 24);
@@ -533,17 +533,8 @@ int wolfSPDM_ParseCapabilities(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufSz)
 
 int wolfSPDM_ParseAlgorithms(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufSz)
 {
-    if (ctx == NULL || buf == NULL || bufSz < 4) {
-        return WOLFSPDM_E_INVALID_ARG;
-    }
-
-    if (buf[1] != SPDM_ALGORITHMS) {
-        int errCode;
-        if (wolfSPDM_CheckError(buf, bufSz, &errCode)) {
-            return WOLFSPDM_E_PEER_ERROR;
-        }
-        return WOLFSPDM_E_ALGO_MISMATCH;
-    }
+    SPDM_CHECK_PARSE_ARGS(ctx, buf, bufSz, 4);
+    SPDM_CHECK_RESPONSE(ctx, buf, bufSz, SPDM_ALGORITHMS, WOLFSPDM_E_ALGO_MISMATCH);
 
     ctx->state = WOLFSPDM_STATE_ALGO;
     return WOLFSPDM_SUCCESS;
@@ -551,17 +542,8 @@ int wolfSPDM_ParseAlgorithms(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufSz)
 
 int wolfSPDM_ParseDigests(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufSz)
 {
-    if (ctx == NULL || buf == NULL || bufSz < 4) {
-        return WOLFSPDM_E_INVALID_ARG;
-    }
-
-    if (buf[1] != SPDM_DIGESTS) {
-        int errCode;
-        if (wolfSPDM_CheckError(buf, bufSz, &errCode)) {
-            return WOLFSPDM_E_PEER_ERROR;
-        }
-        return WOLFSPDM_E_CERT_FAIL;
-    }
+    SPDM_CHECK_PARSE_ARGS(ctx, buf, bufSz, 4);
+    SPDM_CHECK_RESPONSE(ctx, buf, bufSz, SPDM_DIGESTS, WOLFSPDM_E_CERT_FAIL);
 
     ctx->state = WOLFSPDM_STATE_DIGESTS;
     return WOLFSPDM_SUCCESS;
@@ -575,13 +557,7 @@ int wolfSPDM_ParseCertificate(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufSz,
         return WOLFSPDM_E_INVALID_ARG;
     }
 
-    if (buf[1] != SPDM_CERTIFICATE) {
-        int errCode;
-        if (wolfSPDM_CheckError(buf, bufSz, &errCode)) {
-            return WOLFSPDM_E_PEER_ERROR;
-        }
-        return WOLFSPDM_E_CERT_FAIL;
-    }
+    SPDM_CHECK_RESPONSE(ctx, buf, bufSz, SPDM_CERTIFICATE, WOLFSPDM_E_CERT_FAIL);
 
     *portionLen = (word16)(buf[4] | (buf[5] << 8));
     *remainderLen = (word16)(buf[6] | (buf[7] << 8));
@@ -610,17 +586,8 @@ int wolfSPDM_ParseKeyExchangeRsp(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufS
     byte expectedHmac[WOLFSPDM_HASH_SIZE];
     int rc;
 
-    if (ctx == NULL || buf == NULL || bufSz < 140) {
-        return WOLFSPDM_E_INVALID_ARG;
-    }
-
-    if (buf[1] != SPDM_KEY_EXCHANGE_RSP) {
-        int errCode;
-        if (wolfSPDM_CheckError(buf, bufSz, &errCode)) {
-            return WOLFSPDM_E_PEER_ERROR;
-        }
-        return WOLFSPDM_E_KEY_EXCHANGE;
-    }
+    SPDM_CHECK_PARSE_ARGS(ctx, buf, bufSz, 140);
+    SPDM_CHECK_RESPONSE(ctx, buf, bufSz, SPDM_KEY_EXCHANGE_RSP, WOLFSPDM_E_KEY_EXCHANGE);
 
     ctx->rspSessionId = (word16)(buf[4] | (buf[5] << 8));
     ctx->sessionId = (word32)ctx->reqSessionId | ((word32)ctx->rspSessionId << 16);
@@ -700,9 +667,7 @@ int wolfSPDM_ParseKeyExchangeRsp(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufS
 
 int wolfSPDM_ParseFinishRsp(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufSz)
 {
-    if (ctx == NULL || buf == NULL || bufSz < 4) {
-        return WOLFSPDM_E_INVALID_ARG;
-    }
+    SPDM_CHECK_PARSE_ARGS(ctx, buf, bufSz, 4);
 
     if (buf[1] == SPDM_FINISH_RSP) {
         int addRc;
@@ -734,7 +699,6 @@ int wolfSPDM_BuildGetMeasurements(WOLFSPDM_CTX* ctx, byte* buf, word32* bufSz,
     byte operation, byte requestSig)
 {
     word32 offset = 0;
-    int rc;
 
     if (ctx == NULL || buf == NULL || bufSz == NULL) {
         return WOLFSPDM_E_INVALID_ARG;
@@ -757,7 +721,7 @@ int wolfSPDM_BuildGetMeasurements(WOLFSPDM_CTX* ctx, byte* buf, word32* bufSz,
 
     if (requestSig) {
         /* Nonce (32 bytes) */
-        rc = wolfSPDM_GetRandom(ctx, &buf[offset], 32);
+        int rc = wolfSPDM_GetRandom(ctx, &buf[offset], 32);
         if (rc != WOLFSPDM_SUCCESS) {
             return rc;
         }
@@ -779,26 +743,9 @@ int wolfSPDM_ParseMeasurements(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufSz)
     word32 recordLen;
     word32 recordEnd;
     word32 blockIdx;
-    word16 opaqueLen;
 
-    if (ctx == NULL || buf == NULL) {
-        return WOLFSPDM_E_INVALID_ARG;
-    }
-
-    /* Minimum: 4 hdr + 1 numBlocks + 3 recordLen = 8 */
-    if (bufSz < 8) {
-        return WOLFSPDM_E_MEASUREMENT;
-    }
-
-    /* Check response code */
-    if (buf[1] != SPDM_MEASUREMENTS) {
-        int errCode;
-        if (wolfSPDM_CheckError(buf, bufSz, &errCode)) {
-            wolfSPDM_DebugPrint(ctx, "MEASUREMENTS error: 0x%02x\n", errCode);
-            return WOLFSPDM_E_PEER_ERROR;
-        }
-        return WOLFSPDM_E_MEASUREMENT;
-    }
+    SPDM_CHECK_PARSE_ARGS(ctx, buf, bufSz, 8);
+    SPDM_CHECK_RESPONSE(ctx, buf, bufSz, SPDM_MEASUREMENTS, WOLFSPDM_E_MEASUREMENT);
 
     numBlocks = buf[4];
     /* MeasurementRecordLength: 3 bytes LE at offset 5..7 */
@@ -907,7 +854,7 @@ int wolfSPDM_ParseMeasurements(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufSz)
         offset += 32;
 
         /* OpaqueDataLength (2 LE) */
-        opaqueLen = (word16)(buf[offset] | (buf[offset + 1] << 8));
+        word16 opaqueLen = (word16)(buf[offset] | (buf[offset + 1] << 8));
         offset += 2;
 
         /* Skip opaque data */
@@ -939,12 +886,7 @@ int wolfSPDM_VerifyMeasurementSig(WOLFSPDM_CTX* ctx,
 {
     wc_Sha384 sha;
     byte digest[WOLFSPDM_HASH_SIZE];
-    byte derSig[256];
-    word32 derSigSz = sizeof(derSig);
     word32 sigOffset;
-    const byte* sigR;
-    const byte* sigS;
-    int verified = 0;
     int rc;
 
     if (ctx == NULL || rspBuf == NULL || reqMsg == NULL) {
@@ -997,73 +939,14 @@ int wolfSPDM_VerifyMeasurementSig(WOLFSPDM_CTX* ctx,
     if (rc != 0) return WOLFSPDM_E_CRYPTO_FAIL;
 
     /* Build M = prefix || zero_pad || context_str || L1L2_hash, then hash it */
-    {
-        static const char context_str[] = "responder-measurements signing";
-        #define MEAS_SIGNING_PREFIX_SIZE 16
-        #define MEAS_SIGNING_CONTEXT_STR_SIZE 30  /* strlen, no null terminator */
-        #define MEAS_SIGNING_ZERO_PAD_SIZE (36 - MEAS_SIGNING_CONTEXT_STR_SIZE) /* 6 */
-        byte signMsg[200]; /* 64 + 5 + 31 + 48 = 148 bytes */
-        word32 signMsgLen = 0;
-        wc_Sha384 sha2;
-        byte majorVer, minorVer;
-        int i;
+    rc = wolfSPDM_BuildSignedHash(ctx->spdmVersion,
+        "responder-measurements signing", 30, digest, digest);
+    if (rc != WOLFSPDM_SUCCESS) return rc;
 
-        majorVer = (byte)('0' + ((ctx->spdmVersion >> 4) & 0xF));
-        minorVer = (byte)('0' + (ctx->spdmVersion & 0xF));
-
-        /* combined_spdm_prefix: "dmtf-spdm-v1.X.*" x4 = 64 bytes */
-        for (i = 0; i < 4; i++) {
-            XMEMCPY(&signMsg[signMsgLen], "dmtf-spdm-v1.2.*",
-                MEAS_SIGNING_PREFIX_SIZE);
-            signMsg[signMsgLen + 11] = majorVer;
-            signMsg[signMsgLen + 13] = minorVer;
-            signMsg[signMsgLen + 15] = '*';
-            signMsgLen += MEAS_SIGNING_PREFIX_SIZE;
-        }
-
-        /* Zero padding */
-        XMEMSET(&signMsg[signMsgLen], 0x00, MEAS_SIGNING_ZERO_PAD_SIZE);
-        signMsgLen += MEAS_SIGNING_ZERO_PAD_SIZE;
-
-        /* Signing context string */
-        XMEMCPY(&signMsg[signMsgLen], context_str, MEAS_SIGNING_CONTEXT_STR_SIZE);
-        signMsgLen += MEAS_SIGNING_CONTEXT_STR_SIZE;
-
-        /* L1||L2 hash */
-        XMEMCPY(&signMsg[signMsgLen], digest, WOLFSPDM_HASH_SIZE);
-        signMsgLen += WOLFSPDM_HASH_SIZE;
-
-        /* Hash M to get the value that was signed */
-        rc = wc_InitSha384(&sha2);
-        if (rc != 0) return WOLFSPDM_E_CRYPTO_FAIL;
-        rc = wc_Sha384Update(&sha2, signMsg, signMsgLen);
-        if (rc != 0) { wc_Sha384Free(&sha2); return WOLFSPDM_E_CRYPTO_FAIL; }
-        rc = wc_Sha384Final(&sha2, digest);
-        wc_Sha384Free(&sha2);
-        if (rc != 0) return WOLFSPDM_E_CRYPTO_FAIL;
-    }
-
-    /* SPDM ECDSA signatures are raw r||s, not DER.
-     * For P-384: r(48 bytes) || s(48 bytes) = 96 bytes */
-    sigR = rspBuf + sigOffset;
-    sigS = sigR + (WOLFSPDM_ECC_SIG_SIZE / 2);
-
-    rc = wc_ecc_rs_raw_to_sig(sigR, WOLFSPDM_ECC_SIG_SIZE / 2,
-        sigS, WOLFSPDM_ECC_SIG_SIZE / 2, derSig, &derSigSz);
-    if (rc != 0) {
-        wolfSPDM_DebugPrint(ctx, "ECC rs_raw_to_sig failed: %d\n", rc);
-        return WOLFSPDM_E_CRYPTO_FAIL;
-    }
-
-    /* Verify the signature */
-    rc = wc_ecc_verify_hash(derSig, derSigSz, digest, WOLFSPDM_HASH_SIZE,
-        &verified, &ctx->responderPubKey);
-    if (rc != 0) {
-        wolfSPDM_DebugPrint(ctx, "ECC verify_hash failed: %d\n", rc);
-        return WOLFSPDM_E_CRYPTO_FAIL;
-    }
-
-    if (verified == 1) {
+    /* Verify ECDSA signature (raw r||s format) */
+    rc = wolfSPDM_VerifyEccSig(ctx, rspBuf + sigOffset, WOLFSPDM_ECC_SIG_SIZE,
+        digest, WOLFSPDM_HASH_SIZE);
+    if (rc == WOLFSPDM_SUCCESS) {
         wolfSPDM_DebugPrint(ctx, "Measurement signature VERIFIED\n");
         return WOLFSPDM_SUCCESS;
     }
@@ -1081,122 +964,6 @@ int wolfSPDM_VerifyMeasurementSig(WOLFSPDM_CTX* ctx,
  * Extract responder's ECC P-384 public key from the leaf certificate in the
  * SPDM certificate chain. Used by both measurement signature verification
  * and CHALLENGE authentication, so it lives outside measurement guards. */
-
-int wolfSPDM_ExtractResponderPubKey(WOLFSPDM_CTX* ctx)
-{
-    DecodedCert cert;
-    const byte* certDer;
-    word32 certDerSz;
-    word32 idx;
-    int rc;
-
-    if (ctx == NULL || ctx->certChainLen == 0) {
-        return WOLFSPDM_E_CERT_PARSE;
-    }
-
-    /* SPDM certificate chain format (DSP0274):
-     * Length(2 LE) + Reserved(2) + RootCertHash(48 for SHA-384) + Certificates...
-     * The leaf certificate is the LAST one in the chain. */
-
-    /* Skip SPDM cert chain header: Length(2) + Reserved(2) + RootHash(48) = 52 bytes */
-    if (ctx->certChainLen <= 52) {
-        wolfSPDM_DebugPrint(ctx, "Certificate chain too short for header\n");
-        return WOLFSPDM_E_CERT_PARSE;
-    }
-
-    certDer = ctx->certChain + 52;
-    certDerSz = ctx->certChainLen - 52;
-
-    /* Walk through certificates to find the leaf (last one).
-     * Each DER cert starts with 0x30 (SEQUENCE) followed by length. */
-    {
-        word32 pos = 0;
-        const byte* lastCert = certDer;
-        word32 lastCertSz = certDerSz;
-
-        while (pos < certDerSz) {
-            word32 certLen;
-            word32 hdrLen;
-
-            if (certDer[pos] != 0x30) {
-                break;  /* Not a valid DER sequence */
-            }
-
-            /* Parse ASN.1 length */
-            if (pos + 1 >= certDerSz) break;
-
-            if (certDer[pos + 1] < 0x80) {
-                certLen = certDer[pos + 1];
-                hdrLen = 2;
-            }
-            else if (certDer[pos + 1] == 0x81) {
-                if (pos + 2 >= certDerSz) break;
-                certLen = certDer[pos + 2];
-                hdrLen = 3;
-            }
-            else if (certDer[pos + 1] == 0x82) {
-                if (pos + 3 >= certDerSz) break;
-                certLen = ((word32)certDer[pos + 2] << 8) | certDer[pos + 3];
-                hdrLen = 4;
-            }
-            else if (certDer[pos + 1] == 0x83) {
-                if (pos + 4 >= certDerSz) break;
-                certLen = ((word32)certDer[pos + 2] << 16) |
-                          ((word32)certDer[pos + 3] << 8) | certDer[pos + 4];
-                hdrLen = 5;
-            }
-            else {
-                break;  /* Length encoding we don't handle */
-            }
-
-            if (pos + hdrLen + certLen > certDerSz) break;
-
-            lastCert = certDer + pos;
-            lastCertSz = hdrLen + certLen;
-
-            pos += hdrLen + certLen;
-        }
-
-        certDer = lastCert;
-        certDerSz = lastCertSz;
-    }
-
-    /* Parse the leaf certificate */
-    wc_InitDecodedCert(&cert, certDer, certDerSz, NULL);
-    rc = wc_ParseCert(&cert, CERT_TYPE, NO_VERIFY, NULL);
-    if (rc != 0) {
-        wolfSPDM_DebugPrint(ctx, "Certificate parse failed: %d\n", rc);
-        wc_FreeDecodedCert(&cert);
-        return WOLFSPDM_E_CERT_PARSE;
-    }
-
-    /* Extract public key from cert and import into ecc_key */
-    rc = wc_ecc_init(&ctx->responderPubKey);
-    if (rc != 0) {
-        wc_FreeDecodedCert(&cert);
-        return WOLFSPDM_E_CRYPTO_FAIL;
-    }
-
-    idx = 0;
-    rc = wc_EccPublicKeyDecode(cert.publicKey, &idx, &ctx->responderPubKey,
-        cert.pubKeySize);
-    if (rc != 0) {
-        wolfSPDM_DebugPrint(ctx, "ECC public key decode failed: %d\n", rc);
-        wc_ecc_free(&ctx->responderPubKey);
-        wc_FreeDecodedCert(&cert);
-        return WOLFSPDM_E_CERT_PARSE;
-    }
-
-    wc_FreeDecodedCert(&cert);
-    ctx->hasResponderPubKey = 1;
-    wolfSPDM_DebugPrint(ctx, "Extracted responder ECC P-384 public key\n");
-
-    return WOLFSPDM_SUCCESS;
-}
-
-/* ==========================================================================
- * Certificate Chain Validation
- * ========================================================================== */
 
 /* Helper: find leaf cert in SPDM cert chain buffer.
  * SPDM cert chain header: Length(2 LE) + Reserved(2) + RootHash(48) = 52 bytes
@@ -1266,12 +1033,65 @@ static int wolfSPDM_FindLeafCert(const byte* certChain, word32 certChainLen,
     return WOLFSPDM_SUCCESS;
 }
 
-int wolfSPDM_ValidateCertChain(WOLFSPDM_CTX* ctx)
+int wolfSPDM_ExtractResponderPubKey(WOLFSPDM_CTX* ctx)
 {
+    DecodedCert cert;
     const byte* leafCert;
     word32 leafCertSz;
-    DecodedCert cert;
     word32 idx;
+    int rc;
+
+    if (ctx == NULL || ctx->certChainLen == 0) {
+        return WOLFSPDM_E_CERT_PARSE;
+    }
+
+    /* Find the leaf (last) certificate in the SPDM cert chain */
+    rc = wolfSPDM_FindLeafCert(ctx->certChain, ctx->certChainLen,
+        &leafCert, &leafCertSz);
+    if (rc != WOLFSPDM_SUCCESS) {
+        wolfSPDM_DebugPrint(ctx, "Certificate chain too short for header\n");
+        return rc;
+    }
+
+    /* Parse the leaf certificate */
+    wc_InitDecodedCert(&cert, leafCert, leafCertSz, NULL);
+    rc = wc_ParseCert(&cert, CERT_TYPE, NO_VERIFY, NULL);
+    if (rc != 0) {
+        wolfSPDM_DebugPrint(ctx, "Certificate parse failed: %d\n", rc);
+        wc_FreeDecodedCert(&cert);
+        return WOLFSPDM_E_CERT_PARSE;
+    }
+
+    /* Extract public key from cert and import into ecc_key */
+    rc = wc_ecc_init(&ctx->responderPubKey);
+    if (rc != 0) {
+        wc_FreeDecodedCert(&cert);
+        return WOLFSPDM_E_CRYPTO_FAIL;
+    }
+
+    idx = 0;
+    rc = wc_EccPublicKeyDecode(cert.publicKey, &idx, &ctx->responderPubKey,
+        cert.pubKeySize);
+    if (rc != 0) {
+        wolfSPDM_DebugPrint(ctx, "ECC public key decode failed: %d\n", rc);
+        wc_ecc_free(&ctx->responderPubKey);
+        wc_FreeDecodedCert(&cert);
+        return WOLFSPDM_E_CERT_PARSE;
+    }
+
+    wc_FreeDecodedCert(&cert);
+    ctx->hasResponderPubKey = 1;
+    wolfSPDM_DebugPrint(ctx, "Extracted responder ECC P-384 public key\n");
+
+    return WOLFSPDM_SUCCESS;
+}
+
+/* ==========================================================================
+ * Certificate Chain Validation
+ * ========================================================================== */
+
+int wolfSPDM_ValidateCertChain(WOLFSPDM_CTX* ctx)
+{
     wc_Sha384 sha;
     byte caHash[WOLFSPDM_HASH_SIZE];
     const byte* chainRootHash;
@@ -1310,102 +1130,13 @@ int wolfSPDM_ValidateCertChain(WOLFSPDM_CTX* ctx)
 
     wolfSPDM_DebugPrint(ctx, "Root certificate hash VERIFIED against trusted CA\n");
 
-    /* Parse the root cert from chain to get its public key for leaf verification */
-    {
-        const byte* rootCert = ctx->certChain + 52;
-        word32 rootCertSz;
-        DecodedCert rootDc;
-        ecc_key rootPubKey;
-        word32 rootIdx;
-
-        /* Get root cert size from ASN.1 header */
-        if (rootCert[0] != 0x30) {
-            return WOLFSPDM_E_CERT_PARSE;
-        }
-        if (rootCert[1] < 0x80) {
-            rootCertSz = rootCert[1] + 2;
-        } else if (rootCert[1] == 0x82 && ctx->certChainLen > 56) {
-            rootCertSz = ((word32)rootCert[2] << 8 | rootCert[3]) + 4;
-        } else if (rootCert[1] == 0x81 && ctx->certChainLen > 55) {
-            rootCertSz = rootCert[2] + 3;
-        } else {
-            return WOLFSPDM_E_CERT_PARSE;
-        }
-
-        /* Parse root cert to get its public key */
-        wc_InitDecodedCert(&rootDc, rootCert, rootCertSz, NULL);
-        rc = wc_ParseCert(&rootDc, CA_TYPE, NO_VERIFY, NULL);
-        if (rc != 0) {
-            wolfSPDM_DebugPrint(ctx, "Root cert parse failed: %d\n", rc);
-            wc_FreeDecodedCert(&rootDc);
-            return WOLFSPDM_E_CERT_PARSE;
-        }
-
-        /* Import root public key for verifying leaf cert signature */
-        rc = wc_ecc_init(&rootPubKey);
-        if (rc != 0) {
-            wc_FreeDecodedCert(&rootDc);
-            return WOLFSPDM_E_CRYPTO_FAIL;
-        }
-        rootIdx = 0;
-        rc = wc_EccPublicKeyDecode(rootDc.publicKey, &rootIdx, &rootPubKey,
-            rootDc.pubKeySize);
-        wc_FreeDecodedCert(&rootDc);
-        if (rc != 0) {
-            wc_ecc_free(&rootPubKey);
-            return WOLFSPDM_E_CERT_PARSE;
-        }
-
-        /* Find leaf cert */
-        rc = wolfSPDM_FindLeafCert(ctx->certChain, ctx->certChainLen,
-            &leafCert, &leafCertSz);
-        if (rc != WOLFSPDM_SUCCESS) {
-            wc_ecc_free(&rootPubKey);
-            return rc;
-        }
-
-        /* Parse leaf cert and verify its signature against the CA/issuer key.
-         * For a 2-cert chain (root + leaf), the root signs the leaf directly.
-         * For longer chains, intermediate certs would need verification too,
-         * but the root hash match already establishes trust anchor. */
-        wc_ecc_free(&rootPubKey);
-    }
-
-    /* Extract public key from leaf cert */
-    rc = wolfSPDM_FindLeafCert(ctx->certChain, ctx->certChainLen,
-        &leafCert, &leafCertSz);
+    /* Extract public key from the leaf cert (reuses FindLeafCert internally) */
+    rc = wolfSPDM_ExtractResponderPubKey(ctx);
     if (rc != WOLFSPDM_SUCCESS) {
         return rc;
     }
 
-    wc_InitDecodedCert(&cert, leafCert, leafCertSz, NULL);
-    rc = wc_ParseCert(&cert, CERT_TYPE, NO_VERIFY, NULL);
-    if (rc != 0) {
-        wolfSPDM_DebugPrint(ctx, "Leaf certificate parse failed: %d\n", rc);
-        wc_FreeDecodedCert(&cert);
-        return WOLFSPDM_E_CERT_PARSE;
-    }
-
-    rc = wc_ecc_init(&ctx->responderPubKey);
-    if (rc != 0) {
-        wc_FreeDecodedCert(&cert);
-        return WOLFSPDM_E_CRYPTO_FAIL;
-    }
-
-    idx = 0;
-    rc = wc_EccPublicKeyDecode(cert.publicKey, &idx, &ctx->responderPubKey,
-        cert.pubKeySize);
-    if (rc != 0) {
-        wolfSPDM_DebugPrint(ctx, "ECC public key decode failed: %d\n", rc);
-        wc_ecc_free(&ctx->responderPubKey);
-        wc_FreeDecodedCert(&cert);
-        return WOLFSPDM_E_CERT_PARSE;
-    }
-
-    wc_FreeDecodedCert(&cert);
-    ctx->hasResponderPubKey = 1;
-    wolfSPDM_DebugPrint(ctx, "Extracted responder ECC P-384 public key (chain validated)\n");
-
+    wolfSPDM_DebugPrint(ctx, "Certificate chain validated\n");
     return WOLFSPDM_SUCCESS;
 }
 
@@ -1421,9 +1152,7 @@ int wolfSPDM_BuildChallenge(WOLFSPDM_CTX* ctx, byte* buf, word32* bufSz,
     word32 offset = 0;
     int rc;
 
-    if (ctx == NULL || buf == NULL || bufSz == NULL || *bufSz < 36) {
-        return WOLFSPDM_E_BUFFER_SMALL;
-    }
+    SPDM_CHECK_BUILD_ARGS(ctx, buf, bufSz, 36);
 
     buf[offset++] = ctx->spdmVersion;
     buf[offset++] = SPDM_CHALLENGE;
@@ -1461,15 +1190,7 @@ int wolfSPDM_ParseChallengeAuth(WOLFSPDM_CTX* ctx, const byte* buf,
         return WOLFSPDM_E_CHALLENGE;
     }
 
-    /* Check response code */
-    if (buf[1] != SPDM_CHALLENGE_AUTH) {
-        int errCode;
-        if (wolfSPDM_CheckError(buf, bufSz, &errCode)) {
-            wolfSPDM_DebugPrint(ctx, "CHALLENGE_AUTH error: 0x%02x\n", errCode);
-            return WOLFSPDM_E_PEER_ERROR;
-        }
-        return WOLFSPDM_E_CHALLENGE;
-    }
+    SPDM_CHECK_RESPONSE(ctx, buf, bufSz, SPDM_CHALLENGE_AUTH, WOLFSPDM_E_CHALLENGE);
 
     offset = 4;
 
@@ -1530,12 +1251,9 @@ int wolfSPDM_VerifyChallengeAuthSig(WOLFSPDM_CTX* ctx,
     const byte* reqMsg, word32 reqMsgSz, word32 sigOffset)
 {
     byte digest[WOLFSPDM_HASH_SIZE];
-    byte derSig[256];
-    word32 derSigSz = sizeof(derSig);
-    const byte* sigR;
-    const byte* sigS;
-    int verified = 0;
     int rc;
+
+    (void)rspBufSz;
 
     if (ctx == NULL || rspBuf == NULL || reqMsg == NULL) {
         return WOLFSPDM_E_INVALID_ARG;
@@ -1546,24 +1264,15 @@ int wolfSPDM_VerifyChallengeAuthSig(WOLFSPDM_CTX* ctx,
     }
 
     /* Build M1/M2 hash per DSP0274 Section 10.8.3:
-     * M1/M2 = A || B || C where:
-     *   A = VCA (GET_VERSION through ALGORITHMS)
-     *   B = GET_DIGESTS + DIGESTS + GET_CERTIFICATE + CERTIFICATE
-     *   C = CHALLENGE request + CHALLENGE_AUTH response (before sig)
-     *
-     * A+B are already accumulated in ctx->m1m2Hash from
-     * NegotiateAlgorithms/GetDigests/GetCertificate.
-     * Now add C and finalize. */
+     * A+B are already accumulated in ctx->m1m2Hash. Now add C and finalize. */
     if (!ctx->m1m2HashInit) {
         wolfSPDM_DebugPrint(ctx, "CHALLENGE: M1/M2 hash not initialized\n");
         return WOLFSPDM_E_CHALLENGE;
     }
 
-    /* Add C: CHALLENGE request */
+    /* Add C: CHALLENGE request + CHALLENGE_AUTH response (before sig) */
     rc = wc_Sha384Update(&ctx->m1m2Hash, reqMsg, reqMsgSz);
     if (rc != 0) return WOLFSPDM_E_CRYPTO_FAIL;
-
-    /* Add C: CHALLENGE_AUTH response (before signature) */
     rc = wc_Sha384Update(&ctx->m1m2Hash, rspBuf, sigOffset);
     if (rc != 0) return WOLFSPDM_E_CRYPTO_FAIL;
 
@@ -1572,68 +1281,15 @@ int wolfSPDM_VerifyChallengeAuthSig(WOLFSPDM_CTX* ctx,
     ctx->m1m2HashInit = 0; /* Hash consumed */
     if (rc != 0) return WOLFSPDM_E_CRYPTO_FAIL;
 
-    /* Build M = prefix || zero_pad || context_str || Hash(M1||M2), then hash */
-    {
-        static const char context_str[] = "responder-challenge_auth signing";
-        #define CHAL_SIGNING_PREFIX_SIZE 16
-        #define CHAL_SIGNING_CONTEXT_STR_SIZE 32
-        #define CHAL_SIGNING_ZERO_PAD_SIZE (36 - CHAL_SIGNING_CONTEXT_STR_SIZE) /* 4 */
-        wc_Sha384 sha2;
-        byte signMsg[200];
-        word32 signMsgLen = 0;
-        byte majorVer, minorVer;
-        int i;
+    /* Build M = prefix || zero_pad || context_str || hash, then hash it */
+    rc = wolfSPDM_BuildSignedHash(ctx->spdmVersion,
+        "responder-challenge_auth signing", 32, digest, digest);
+    if (rc != WOLFSPDM_SUCCESS) return rc;
 
-        majorVer = (byte)('0' + ((ctx->spdmVersion >> 4) & 0xF));
-        minorVer = (byte)('0' + (ctx->spdmVersion & 0xF));
-
-        for (i = 0; i < 4; i++) {
-            XMEMCPY(&signMsg[signMsgLen], "dmtf-spdm-v1.2.*",
-                CHAL_SIGNING_PREFIX_SIZE);
-            signMsg[signMsgLen + 11] = majorVer;
-            signMsg[signMsgLen + 13] = minorVer;
-            signMsg[signMsgLen + 15] = '*';
-            signMsgLen += CHAL_SIGNING_PREFIX_SIZE;
-        }
-
-        XMEMSET(&signMsg[signMsgLen], 0x00, CHAL_SIGNING_ZERO_PAD_SIZE);
-        signMsgLen += CHAL_SIGNING_ZERO_PAD_SIZE;
-
-        XMEMCPY(&signMsg[signMsgLen], context_str, CHAL_SIGNING_CONTEXT_STR_SIZE);
-        signMsgLen += CHAL_SIGNING_CONTEXT_STR_SIZE;
-
-        XMEMCPY(&signMsg[signMsgLen], digest, WOLFSPDM_HASH_SIZE);
-        signMsgLen += WOLFSPDM_HASH_SIZE;
-
-        /* Hash M */
-        rc = wc_InitSha384(&sha2);
-        if (rc != 0) return WOLFSPDM_E_CRYPTO_FAIL;
-        rc = wc_Sha384Update(&sha2, signMsg, signMsgLen);
-        if (rc != 0) { wc_Sha384Free(&sha2); return WOLFSPDM_E_CRYPTO_FAIL; }
-        rc = wc_Sha384Final(&sha2, digest);
-        wc_Sha384Free(&sha2);
-        if (rc != 0) return WOLFSPDM_E_CRYPTO_FAIL;
-    }
-
-    /* SPDM ECDSA signature: raw r||s */
-    sigR = rspBuf + sigOffset;
-    sigS = sigR + (WOLFSPDM_ECC_SIG_SIZE / 2);
-
-    rc = wc_ecc_rs_raw_to_sig(sigR, WOLFSPDM_ECC_SIG_SIZE / 2,
-        sigS, WOLFSPDM_ECC_SIG_SIZE / 2, derSig, &derSigSz);
-    if (rc != 0) {
-        wolfSPDM_DebugPrint(ctx, "Challenge: rs_raw_to_sig failed: %d\n", rc);
-        return WOLFSPDM_E_CRYPTO_FAIL;
-    }
-
-    rc = wc_ecc_verify_hash(derSig, derSigSz, digest, WOLFSPDM_HASH_SIZE,
-        &verified, &ctx->responderPubKey);
-    if (rc != 0) {
-        wolfSPDM_DebugPrint(ctx, "Challenge: verify_hash failed: %d\n", rc);
-        return WOLFSPDM_E_CRYPTO_FAIL;
-    }
-
-    if (verified == 1) {
+    /* Verify ECDSA signature (raw r||s format) */
+    rc = wolfSPDM_VerifyEccSig(ctx, rspBuf + sigOffset, WOLFSPDM_ECC_SIG_SIZE,
+        digest, WOLFSPDM_HASH_SIZE);
+    if (rc == WOLFSPDM_SUCCESS) {
         wolfSPDM_DebugPrint(ctx, "CHALLENGE_AUTH signature VERIFIED\n");
         return WOLFSPDM_SUCCESS;
     }
@@ -1650,9 +1306,7 @@ int wolfSPDM_VerifyChallengeAuthSig(WOLFSPDM_CTX* ctx,
 
 int wolfSPDM_BuildHeartbeat(WOLFSPDM_CTX* ctx, byte* buf, word32* bufSz)
 {
-    if (ctx == NULL || buf == NULL || bufSz == NULL || *bufSz < 4) {
-        return WOLFSPDM_E_BUFFER_SMALL;
-    }
+    SPDM_CHECK_BUILD_ARGS(ctx, buf, bufSz, 4);
 
     buf[0] = ctx->spdmVersion;
     buf[1] = SPDM_HEARTBEAT;
@@ -1666,18 +1320,8 @@ int wolfSPDM_BuildHeartbeat(WOLFSPDM_CTX* ctx, byte* buf, word32* bufSz)
 int wolfSPDM_ParseHeartbeatAck(WOLFSPDM_CTX* ctx, const byte* buf,
     word32 bufSz)
 {
-    if (ctx == NULL || buf == NULL || bufSz < 4) {
-        return WOLFSPDM_E_INVALID_ARG;
-    }
-
-    if (buf[1] != SPDM_HEARTBEAT_ACK) {
-        int errCode;
-        if (wolfSPDM_CheckError(buf, bufSz, &errCode)) {
-            wolfSPDM_DebugPrint(ctx, "HEARTBEAT error: 0x%02x\n", errCode);
-            return WOLFSPDM_E_PEER_ERROR;
-        }
-        return WOLFSPDM_E_BAD_STATE;
-    }
+    SPDM_CHECK_PARSE_ARGS(ctx, buf, bufSz, 4);
+    SPDM_CHECK_RESPONSE(ctx, buf, bufSz, SPDM_HEARTBEAT_ACK, WOLFSPDM_E_BAD_STATE);
 
     wolfSPDM_DebugPrint(ctx, "HEARTBEAT_ACK received\n");
     return WOLFSPDM_SUCCESS;
@@ -1692,10 +1336,9 @@ int wolfSPDM_BuildKeyUpdate(WOLFSPDM_CTX* ctx, byte* buf, word32* bufSz,
 {
     int rc;
 
-    if (ctx == NULL || buf == NULL || bufSz == NULL || tag == NULL ||
-        *bufSz < 4) {
-        return WOLFSPDM_E_BUFFER_SMALL;
-    }
+    SPDM_CHECK_BUILD_ARGS(ctx, buf, bufSz, 4);
+    if (tag == NULL)
+        return WOLFSPDM_E_INVALID_ARG;
 
     /* Generate random tag for request/response matching */
     rc = wolfSPDM_GetRandom(ctx, tag, 1);
@@ -1715,18 +1358,8 @@ int wolfSPDM_BuildKeyUpdate(WOLFSPDM_CTX* ctx, byte* buf, word32* bufSz,
 int wolfSPDM_ParseKeyUpdateAck(WOLFSPDM_CTX* ctx, const byte* buf,
     word32 bufSz, byte operation, byte tag)
 {
-    if (ctx == NULL || buf == NULL || bufSz < 4) {
-        return WOLFSPDM_E_INVALID_ARG;
-    }
-
-    if (buf[1] != SPDM_KEY_UPDATE_ACK) {
-        int errCode;
-        if (wolfSPDM_CheckError(buf, bufSz, &errCode)) {
-            wolfSPDM_DebugPrint(ctx, "KEY_UPDATE error: 0x%02x\n", errCode);
-            return WOLFSPDM_E_PEER_ERROR;
-        }
-        return WOLFSPDM_E_KEY_UPDATE;
-    }
+    SPDM_CHECK_PARSE_ARGS(ctx, buf, bufSz, 4);
+    SPDM_CHECK_RESPONSE(ctx, buf, bufSz, SPDM_KEY_UPDATE_ACK, WOLFSPDM_E_KEY_UPDATE);
 
     /* Verify echoed operation and tag */
     if (buf[2] != operation) {

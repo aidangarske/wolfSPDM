@@ -232,6 +232,34 @@ struct WOLFSPDM_CTX {
 };
 
 /* ==========================================================================
+ * Argument Validation Macros
+ * ========================================================================== */
+
+#define SPDM_CHECK_BUILD_ARGS(ctx, buf, bufSz, minSz) \
+    if ((ctx) == NULL || (buf) == NULL || (bufSz) == NULL || *(bufSz) < (minSz)) \
+        return WOLFSPDM_E_BUFFER_SMALL
+
+#define SPDM_CHECK_PARSE_ARGS(ctx, buf, bufSz, minSz) \
+    if ((ctx) == NULL || (buf) == NULL || (bufSz) < (minSz)) \
+        return WOLFSPDM_E_INVALID_ARG
+
+/* ==========================================================================
+ * Response Code Check Macro
+ * ========================================================================== */
+
+#define SPDM_CHECK_RESPONSE(ctx, buf, bufSz, expected, fallbackErr) \
+    do { \
+        if ((buf)[1] != (expected)) { \
+            int _ec; \
+            if (wolfSPDM_CheckError((buf), (bufSz), &_ec)) { \
+                wolfSPDM_DebugPrint((ctx), "SPDM error: 0x%02x\n", _ec); \
+                return WOLFSPDM_E_PEER_ERROR; \
+            } \
+            return (fallbackErr); \
+        } \
+    } while (0)
+
+/* ==========================================================================
  * Internal Function Declarations - Transcript
  * ========================================================================== */
 

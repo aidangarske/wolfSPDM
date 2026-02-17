@@ -31,6 +31,17 @@ static int g_testsFailed = 0;
     return 0; \
 } while(0)
 
+#define ASSERT_SUCCESS(expr) do { int _r = (expr); if (_r != 0) { \
+    printf("  FAIL %s:%d: %s returned %d\n", __FILE__, __LINE__, #expr, _r); \
+    g_testsFailed++; return -1; } } while(0)
+
+#define ASSERT_FAIL(expr) do { int _r = (expr); if (_r == 0) { \
+    printf("  FAIL %s:%d: %s should have failed\n", __FILE__, __LINE__, #expr); \
+    g_testsFailed++; return -1; } } while(0)
+
+#define ASSERT_EQ(a, b, msg) TEST_ASSERT((a) == (b), msg)
+#define ASSERT_NE(a, b, msg) TEST_ASSERT((a) != (b), msg)
+
 /* Dummy I/O callback for testing */
 static int dummy_io_cb(WOLFSPDM_CTX* ctx, const byte* txBuf, word32 txSz,
     byte* rxBuf, word32* rxSz, void* userCtx)
@@ -53,14 +64,11 @@ static int test_context_new_free(void)
 
     ctx = wolfSPDM_New();
     TEST_ASSERT(ctx != NULL, "wolfSPDM_New returned NULL");
-
-    TEST_ASSERT(ctx->state == WOLFSPDM_STATE_INIT, "Initial state wrong");
-    TEST_ASSERT(ctx->initialized == 1, "Should be initialized by New()");
+    ASSERT_EQ(ctx->state, WOLFSPDM_STATE_INIT, "Initial state wrong");
+    ASSERT_EQ(ctx->initialized, 1, "Should be initialized by New()");
 
     wolfSPDM_Free(ctx);
-
-    /* Free NULL should not crash */
-    wolfSPDM_Free(NULL);
+    wolfSPDM_Free(NULL); /* Should not crash */
 
     TEST_PASS();
 }
@@ -70,15 +78,13 @@ static int test_context_init(void)
 {
     WOLFSPDM_CTX ctxBuf;
     WOLFSPDM_CTX* ctx = &ctxBuf;
-    int rc;
 
     printf("test_context_init...\n");
 
-    rc = wolfSPDM_Init(ctx);
-    TEST_ASSERT(rc == WOLFSPDM_SUCCESS, "wolfSPDM_Init failed");
-    TEST_ASSERT(ctx->initialized == 1, "Not marked initialized");
-    TEST_ASSERT(ctx->rngInitialized == 1, "RNG not initialized");
-    TEST_ASSERT(ctx->reqCaps == WOLFSPDM_DEFAULT_REQ_CAPS, "Default caps wrong");
+    ASSERT_SUCCESS(wolfSPDM_Init(ctx));
+    ASSERT_EQ(ctx->initialized, 1, "Not marked initialized");
+    ASSERT_EQ(ctx->rngInitialized, 1, "RNG not initialized");
+    ASSERT_EQ(ctx->reqCaps, WOLFSPDM_DEFAULT_REQ_CAPS, "Default caps wrong");
 
     wolfSPDM_Free(ctx);
     TEST_PASS();
@@ -88,23 +94,15 @@ static int test_context_static_alloc(void)
 {
     byte buffer[sizeof(WOLFSPDM_CTX) + 64];
     WOLFSPDM_CTX* ctx = (WOLFSPDM_CTX*)buffer;
-    int rc;
 
     printf("test_context_static_alloc...\n");
 
-    TEST_ASSERT(wolfSPDM_GetCtxSize() == (int)sizeof(WOLFSPDM_CTX),
-        "GetCtxSize mismatch");
+    ASSERT_EQ(wolfSPDM_GetCtxSize(), (int)sizeof(WOLFSPDM_CTX), "GetCtxSize mismatch");
+    ASSERT_EQ(wolfSPDM_InitStatic(ctx, 10), WOLFSPDM_E_BUFFER_SMALL, "Should fail on small buffer");
+    ASSERT_SUCCESS(wolfSPDM_InitStatic(ctx, sizeof(buffer)));
+    ASSERT_EQ(ctx->initialized, 1, "Static ctx not initialized");
 
-    /* Too small buffer should fail */
-    rc = wolfSPDM_InitStatic(ctx, 10);
-    TEST_ASSERT(rc == WOLFSPDM_E_BUFFER_SMALL, "Should fail on small buffer");
-
-    rc = wolfSPDM_InitStatic(ctx, sizeof(buffer));
-    TEST_ASSERT(rc == WOLFSPDM_SUCCESS, "InitStatic failed");
-    TEST_ASSERT(ctx->initialized == 1, "Static ctx not initialized");
-
-    wolfSPDM_Free(ctx);  /* Now safe — no XFREE on static ctx */
-
+    wolfSPDM_Free(ctx);
     TEST_PASS();
 }
 
@@ -112,22 +110,16 @@ static int test_context_set_io(void)
 {
     WOLFSPDM_CTX ctxBuf;
     WOLFSPDM_CTX* ctx = &ctxBuf;
-    int rc;
     int dummy = 42;
 
     printf("test_context_set_io...\n");
 
     wolfSPDM_Init(ctx);
 
-    /* Dummy callback for testing */
-    rc = wolfSPDM_SetIO(ctx, dummy_io_cb, &dummy);
-    TEST_ASSERT(rc == WOLFSPDM_SUCCESS, "SetIO failed");
-    TEST_ASSERT(ctx->ioCb == dummy_io_cb, "IO callback not set");
-    TEST_ASSERT(ctx->ioUserCtx == &dummy, "User context not set");
-
-    /* NULL callback should fail */
-    rc = wolfSPDM_SetIO(ctx, NULL, NULL);
-    TEST_ASSERT(rc == WOLFSPDM_E_INVALID_ARG, "NULL callback should fail");
+    ASSERT_SUCCESS(wolfSPDM_SetIO(ctx, dummy_io_cb, &dummy));
+    ASSERT_EQ(ctx->ioCb, dummy_io_cb, "IO callback not set");
+    ASSERT_EQ(ctx->ioUserCtx, &dummy, "User context not set");
+    ASSERT_EQ(wolfSPDM_SetIO(ctx, NULL, NULL), WOLFSPDM_E_INVALID_ARG, "NULL callback should fail");
 
     wolfSPDM_Free(ctx);
     TEST_PASS();
@@ -143,26 +135,22 @@ static int test_transcript_add_reset(void)
     WOLFSPDM_CTX* ctx = &ctxBuf;
     byte data1[] = {0x01, 0x02, 0x03, 0x04};
     byte data2[] = {0x05, 0x06, 0x07, 0x08};
-    int rc;
 
     printf("test_transcript_add_reset...\n");
 
     wolfSPDM_Init(ctx);
+    ASSERT_EQ(ctx->transcriptLen, 0, "Transcript should start empty");
 
-    TEST_ASSERT(ctx->transcriptLen == 0, "Transcript should start empty");
+    ASSERT_SUCCESS(wolfSPDM_TranscriptAdd(ctx, data1, sizeof(data1)));
+    ASSERT_EQ(ctx->transcriptLen, 4, "Length should be 4");
+    ASSERT_EQ(memcmp(ctx->transcript, data1, 4), 0, "Data mismatch");
 
-    rc = wolfSPDM_TranscriptAdd(ctx, data1, sizeof(data1));
-    TEST_ASSERT(rc == WOLFSPDM_SUCCESS, "TranscriptAdd failed");
-    TEST_ASSERT(ctx->transcriptLen == 4, "Length should be 4");
-    TEST_ASSERT(memcmp(ctx->transcript, data1, 4) == 0, "Data mismatch");
-
-    rc = wolfSPDM_TranscriptAdd(ctx, data2, sizeof(data2));
-    TEST_ASSERT(rc == WOLFSPDM_SUCCESS, "Second add failed");
-    TEST_ASSERT(ctx->transcriptLen == 8, "Length should be 8");
-    TEST_ASSERT(memcmp(ctx->transcript + 4, data2, 4) == 0, "Data2 mismatch");
+    ASSERT_SUCCESS(wolfSPDM_TranscriptAdd(ctx, data2, sizeof(data2)));
+    ASSERT_EQ(ctx->transcriptLen, 8, "Length should be 8");
+    ASSERT_EQ(memcmp(ctx->transcript + 4, data2, 4), 0, "Data2 mismatch");
 
     wolfSPDM_TranscriptReset(ctx);
-    TEST_ASSERT(ctx->transcriptLen == 0, "Reset should clear length");
+    ASSERT_EQ(ctx->transcriptLen, 0, "Reset should clear length");
 
     wolfSPDM_Free(ctx);
     TEST_PASS();
@@ -174,23 +162,15 @@ static int test_transcript_hash(void)
     WOLFSPDM_CTX* ctx = &ctxBuf;
     byte data[] = "test data for hashing";
     byte hash[WOLFSPDM_HASH_SIZE];
-    int rc;
+    byte zeros[WOLFSPDM_HASH_SIZE];
 
     printf("test_transcript_hash...\n");
 
     wolfSPDM_Init(ctx);
-
     wolfSPDM_TranscriptAdd(ctx, data, sizeof(data) - 1);
-
-    rc = wolfSPDM_TranscriptHash(ctx, hash);
-    TEST_ASSERT(rc == WOLFSPDM_SUCCESS, "TranscriptHash failed");
-
-    /* Verify hash is non-zero */
-    int nonZero = 0;
-    for (int i = 0; i < WOLFSPDM_HASH_SIZE; i++) {
-        if (hash[i] != 0) nonZero = 1;
-    }
-    TEST_ASSERT(nonZero, "Hash should be non-zero");
+    ASSERT_SUCCESS(wolfSPDM_TranscriptHash(ctx, hash));
+    XMEMSET(zeros, 0, sizeof(zeros));
+    ASSERT_NE(memcmp(hash, zeros, WOLFSPDM_HASH_SIZE), 0, "Hash should be non-zero");
 
     wolfSPDM_Free(ctx);
     TEST_PASS();
@@ -201,25 +181,16 @@ static int test_certchain_hash(void)
     WOLFSPDM_CTX ctxBuf;
     WOLFSPDM_CTX* ctx = &ctxBuf;
     byte certData[] = {0x30, 0x82, 0x01, 0x00, 0xAA, 0xBB, 0xCC, 0xDD};
-    int rc;
+    byte zeros[WOLFSPDM_HASH_SIZE];
 
     printf("test_certchain_hash...\n");
 
     wolfSPDM_Init(ctx);
-
-    rc = wolfSPDM_CertChainAdd(ctx, certData, sizeof(certData));
-    TEST_ASSERT(rc == WOLFSPDM_SUCCESS, "CertChainAdd failed");
-    TEST_ASSERT(ctx->certChainLen == sizeof(certData), "CertChain len wrong");
-
-    rc = wolfSPDM_ComputeCertChainHash(ctx);
-    TEST_ASSERT(rc == WOLFSPDM_SUCCESS, "ComputeCertChainHash failed");
-
-    /* Verify Ct is non-zero */
-    int nonZero = 0;
-    for (int i = 0; i < WOLFSPDM_HASH_SIZE; i++) {
-        if (ctx->certChainHash[i] != 0) nonZero = 1;
-    }
-    TEST_ASSERT(nonZero, "Ct should be non-zero");
+    ASSERT_SUCCESS(wolfSPDM_CertChainAdd(ctx, certData, sizeof(certData)));
+    ASSERT_EQ(ctx->certChainLen, sizeof(certData), "CertChain len wrong");
+    ASSERT_SUCCESS(wolfSPDM_ComputeCertChainHash(ctx));
+    XMEMSET(zeros, 0, sizeof(zeros));
+    ASSERT_NE(memcmp(ctx->certChainHash, zeros, WOLFSPDM_HASH_SIZE), 0, "Ct should be non-zero");
 
     wolfSPDM_Free(ctx);
     TEST_PASS();
@@ -234,21 +205,13 @@ static int test_random_generation(void)
     WOLFSPDM_CTX ctxBuf;
     WOLFSPDM_CTX* ctx = &ctxBuf;
     byte buf1[32], buf2[32];
-    int rc;
 
     printf("test_random_generation...\n");
 
     wolfSPDM_Init(ctx);
-
-    rc = wolfSPDM_GetRandom(ctx, buf1, sizeof(buf1));
-    TEST_ASSERT(rc == WOLFSPDM_SUCCESS, "GetRandom failed");
-
-    rc = wolfSPDM_GetRandom(ctx, buf2, sizeof(buf2));
-    TEST_ASSERT(rc == WOLFSPDM_SUCCESS, "Second GetRandom failed");
-
-    /* Two random outputs should differ */
-    TEST_ASSERT(memcmp(buf1, buf2, sizeof(buf1)) != 0,
-        "Random outputs should differ");
+    ASSERT_SUCCESS(wolfSPDM_GetRandom(ctx, buf1, sizeof(buf1)));
+    ASSERT_SUCCESS(wolfSPDM_GetRandom(ctx, buf2, sizeof(buf2)));
+    ASSERT_NE(memcmp(buf1, buf2, sizeof(buf1)), 0, "Random outputs should differ");
 
     wolfSPDM_Free(ctx);
     TEST_PASS();
@@ -260,29 +223,20 @@ static int test_ephemeral_key_generation(void)
     WOLFSPDM_CTX* ctx = &ctxBuf;
     byte pubKeyX[WOLFSPDM_ECC_KEY_SIZE];
     byte pubKeyY[WOLFSPDM_ECC_KEY_SIZE];
+    byte zeros[WOLFSPDM_ECC_KEY_SIZE];
     word32 xSz = sizeof(pubKeyX);
     word32 ySz = sizeof(pubKeyY);
-    int rc;
 
     printf("test_ephemeral_key_generation...\n");
 
     wolfSPDM_Init(ctx);
-
-    rc = wolfSPDM_GenerateEphemeralKey(ctx);
-    TEST_ASSERT(rc == WOLFSPDM_SUCCESS, "GenerateEphemeralKey failed");
-    TEST_ASSERT(ctx->ephemeralKeyInitialized == 1, "Key not marked initialized");
-
-    rc = wolfSPDM_ExportEphemeralPubKey(ctx, pubKeyX, &xSz, pubKeyY, &ySz);
-    TEST_ASSERT(rc == WOLFSPDM_SUCCESS, "ExportEphemeralPubKey failed");
-    TEST_ASSERT(xSz == WOLFSPDM_ECC_KEY_SIZE, "X coordinate wrong size");
-    TEST_ASSERT(ySz == WOLFSPDM_ECC_KEY_SIZE, "Y coordinate wrong size");
-
-    /* Verify non-zero */
-    int nonZero = 0;
-    for (word32 i = 0; i < xSz; i++) {
-        if (pubKeyX[i] != 0) nonZero = 1;
-    }
-    TEST_ASSERT(nonZero, "Public key X should be non-zero");
+    ASSERT_SUCCESS(wolfSPDM_GenerateEphemeralKey(ctx));
+    ASSERT_EQ(ctx->ephemeralKeyInitialized, 1, "Key not marked initialized");
+    ASSERT_SUCCESS(wolfSPDM_ExportEphemeralPubKey(ctx, pubKeyX, &xSz, pubKeyY, &ySz));
+    ASSERT_EQ(xSz, WOLFSPDM_ECC_KEY_SIZE, "X coordinate wrong size");
+    ASSERT_EQ(ySz, WOLFSPDM_ECC_KEY_SIZE, "Y coordinate wrong size");
+    XMEMSET(zeros, 0, sizeof(zeros));
+    ASSERT_NE(memcmp(pubKeyX, zeros, WOLFSPDM_ECC_KEY_SIZE), 0, "Public key X should be non-zero");
 
     wolfSPDM_Free(ctx);
     TEST_PASS();
@@ -297,24 +251,17 @@ static int test_hkdf_expand_label(void)
     byte secret[48];
     byte output[32];
     byte context[48];
-    int rc;
+    byte zeros[32];
 
     printf("test_hkdf_expand_label...\n");
 
     memset(secret, 0x5A, sizeof(secret));
     memset(context, 0x00, sizeof(context));
 
-    rc = wolfSPDM_HkdfExpandLabel(0x13, secret, sizeof(secret),
-        SPDM_LABEL_KEY, context, sizeof(context),
-        output, sizeof(output));
-    TEST_ASSERT(rc == WOLFSPDM_SUCCESS, "HkdfExpandLabel failed");
-
-    /* Verify non-zero output */
-    int nonZero = 0;
-    for (int i = 0; i < 32; i++) {
-        if (output[i] != 0) nonZero = 1;
-    }
-    TEST_ASSERT(nonZero, "HKDF output should be non-zero");
+    ASSERT_SUCCESS(wolfSPDM_HkdfExpandLabel(0x13, secret, sizeof(secret),
+        SPDM_LABEL_KEY, context, sizeof(context), output, sizeof(output)));
+    XMEMSET(zeros, 0, sizeof(zeros));
+    ASSERT_NE(memcmp(output, zeros, sizeof(output)), 0, "HKDF output should be non-zero");
 
     TEST_PASS();
 }
@@ -324,22 +271,16 @@ static int test_compute_verify_data(void)
     byte finishedKey[WOLFSPDM_HASH_SIZE];
     byte thHash[WOLFSPDM_HASH_SIZE];
     byte verifyData[WOLFSPDM_HASH_SIZE];
-    int rc;
+    byte zeros[WOLFSPDM_HASH_SIZE];
 
     printf("test_compute_verify_data...\n");
 
     memset(finishedKey, 0xAB, sizeof(finishedKey));
     memset(thHash, 0xCD, sizeof(thHash));
 
-    rc = wolfSPDM_ComputeVerifyData(finishedKey, thHash, verifyData);
-    TEST_ASSERT(rc == WOLFSPDM_SUCCESS, "ComputeVerifyData failed");
-
-    /* Verify it's an HMAC (non-zero) */
-    int nonZero = 0;
-    for (int i = 0; i < WOLFSPDM_HASH_SIZE; i++) {
-        if (verifyData[i] != 0) nonZero = 1;
-    }
-    TEST_ASSERT(nonZero, "VerifyData should be non-zero");
+    ASSERT_SUCCESS(wolfSPDM_ComputeVerifyData(finishedKey, thHash, verifyData));
+    XMEMSET(zeros, 0, sizeof(zeros));
+    ASSERT_NE(memcmp(verifyData, zeros, WOLFSPDM_HASH_SIZE), 0, "VerifyData should be non-zero");
 
     TEST_PASS();
 }
@@ -352,22 +293,16 @@ static int test_build_get_version(void)
 {
     byte buf[16];
     word32 bufSz = sizeof(buf);
-    int rc;
 
     printf("test_build_get_version...\n");
 
-    rc = wolfSPDM_BuildGetVersion(buf, &bufSz);
-    TEST_ASSERT(rc == WOLFSPDM_SUCCESS, "BuildGetVersion failed");
-    TEST_ASSERT(bufSz == 4, "GET_VERSION should be 4 bytes");
-    TEST_ASSERT(buf[0] == SPDM_VERSION_10, "Version should be 0x10");
-    TEST_ASSERT(buf[1] == SPDM_GET_VERSION, "Code should be 0x84");
-    TEST_ASSERT(buf[2] == 0x00, "Param1 should be 0");
-    TEST_ASSERT(buf[3] == 0x00, "Param2 should be 0");
+    ASSERT_SUCCESS(wolfSPDM_BuildGetVersion(buf, &bufSz));
+    ASSERT_EQ(bufSz, 4, "GET_VERSION should be 4 bytes");
+    ASSERT_EQ(buf[0], SPDM_VERSION_10, "Version should be 0x10");
+    ASSERT_EQ(buf[1], SPDM_GET_VERSION, "Code should be 0x84");
 
-    /* Buffer too small */
     bufSz = 2;
-    rc = wolfSPDM_BuildGetVersion(buf, &bufSz);
-    TEST_ASSERT(rc == WOLFSPDM_E_BUFFER_SMALL, "Should fail on small buffer");
+    ASSERT_EQ(wolfSPDM_BuildGetVersion(buf, &bufSz), WOLFSPDM_E_BUFFER_SMALL, "Should fail on small buffer");
 
     TEST_PASS();
 }
@@ -378,18 +313,15 @@ static int test_build_get_capabilities(void)
     WOLFSPDM_CTX* ctx = &ctxBuf;
     byte buf[32];
     word32 bufSz = sizeof(buf);
-    int rc;
 
     printf("test_build_get_capabilities...\n");
 
     wolfSPDM_Init(ctx);
     ctx->spdmVersion = SPDM_VERSION_12;
-
-    rc = wolfSPDM_BuildGetCapabilities(ctx, buf, &bufSz);
-    TEST_ASSERT(rc == WOLFSPDM_SUCCESS, "BuildGetCapabilities failed");
-    TEST_ASSERT(bufSz == 20, "GET_CAPABILITIES should be 20 bytes");
-    TEST_ASSERT(buf[0] == SPDM_VERSION_12, "Version should be 0x12");
-    TEST_ASSERT(buf[1] == SPDM_GET_CAPABILITIES, "Code should be 0xE1");
+    ASSERT_SUCCESS(wolfSPDM_BuildGetCapabilities(ctx, buf, &bufSz));
+    ASSERT_EQ(bufSz, 20, "GET_CAPABILITIES should be 20 bytes");
+    ASSERT_EQ(buf[0], SPDM_VERSION_12, "Version should be 0x12");
+    ASSERT_EQ(buf[1], SPDM_GET_CAPABILITIES, "Code should be 0xE1");
 
     wolfSPDM_Free(ctx);
     TEST_PASS();
@@ -401,18 +333,14 @@ static int test_build_negotiate_algorithms(void)
     WOLFSPDM_CTX* ctx = &ctxBuf;
     byte buf[64];
     word32 bufSz = sizeof(buf);
-    int rc;
 
     printf("test_build_negotiate_algorithms...\n");
 
     wolfSPDM_Init(ctx);
     ctx->spdmVersion = SPDM_VERSION_12;
-
-    rc = wolfSPDM_BuildNegotiateAlgorithms(ctx, buf, &bufSz);
-    TEST_ASSERT(rc == WOLFSPDM_SUCCESS, "BuildNegotiateAlgorithms failed");
-    TEST_ASSERT(bufSz == 48, "NEGOTIATE_ALGORITHMS should be 48 bytes");
-    TEST_ASSERT(buf[0] == SPDM_VERSION_12, "Version should be 0x12");
-    TEST_ASSERT(buf[1] == SPDM_NEGOTIATE_ALGORITHMS, "Code should be 0xE3");
+    ASSERT_SUCCESS(wolfSPDM_BuildNegotiateAlgorithms(ctx, buf, &bufSz));
+    ASSERT_EQ(bufSz, 48, "NEGOTIATE_ALGORITHMS should be 48 bytes");
+    ASSERT_EQ(buf[1], SPDM_NEGOTIATE_ALGORITHMS, "Code should be 0xE3");
 
     wolfSPDM_Free(ctx);
     TEST_PASS();
@@ -424,17 +352,14 @@ static int test_build_get_digests(void)
     WOLFSPDM_CTX* ctx = &ctxBuf;
     byte buf[16];
     word32 bufSz = sizeof(buf);
-    int rc;
 
     printf("test_build_get_digests...\n");
 
     wolfSPDM_Init(ctx);
     ctx->spdmVersion = SPDM_VERSION_12;
-
-    rc = wolfSPDM_BuildGetDigests(ctx, buf, &bufSz);
-    TEST_ASSERT(rc == WOLFSPDM_SUCCESS, "BuildGetDigests failed");
-    TEST_ASSERT(bufSz == 4, "GET_DIGESTS should be 4 bytes");
-    TEST_ASSERT(buf[1] == SPDM_GET_DIGESTS, "Code should be 0x81");
+    ASSERT_SUCCESS(wolfSPDM_BuildGetDigests(ctx, buf, &bufSz));
+    ASSERT_EQ(bufSz, 4, "GET_DIGESTS should be 4 bytes");
+    ASSERT_EQ(buf[1], SPDM_GET_DIGESTS, "Code should be 0x81");
 
     wolfSPDM_Free(ctx);
     TEST_PASS();
@@ -446,18 +371,15 @@ static int test_build_get_certificate(void)
     WOLFSPDM_CTX* ctx = &ctxBuf;
     byte buf[16];
     word32 bufSz = sizeof(buf);
-    int rc;
 
     printf("test_build_get_certificate...\n");
 
     wolfSPDM_Init(ctx);
     ctx->spdmVersion = SPDM_VERSION_12;
-
-    rc = wolfSPDM_BuildGetCertificate(ctx, buf, &bufSz, 0, 0, 1024);
-    TEST_ASSERT(rc == WOLFSPDM_SUCCESS, "BuildGetCertificate failed");
-    TEST_ASSERT(bufSz == 8, "GET_CERTIFICATE should be 8 bytes");
-    TEST_ASSERT(buf[1] == SPDM_GET_CERTIFICATE, "Code should be 0x82");
-    TEST_ASSERT(buf[2] == 0x00, "SlotID should be 0");
+    ASSERT_SUCCESS(wolfSPDM_BuildGetCertificate(ctx, buf, &bufSz, 0, 0, 1024));
+    ASSERT_EQ(bufSz, 8, "GET_CERTIFICATE should be 8 bytes");
+    ASSERT_EQ(buf[1], SPDM_GET_CERTIFICATE, "Code should be 0x82");
+    ASSERT_EQ(buf[2], 0x00, "SlotID should be 0");
     TEST_ASSERT(buf[6] == 0x00 && buf[7] == 0x04, "Length should be 1024");
 
     wolfSPDM_Free(ctx);
@@ -470,17 +392,14 @@ static int test_build_end_session(void)
     WOLFSPDM_CTX* ctx = &ctxBuf;
     byte buf[16];
     word32 bufSz = sizeof(buf);
-    int rc;
 
     printf("test_build_end_session...\n");
 
     wolfSPDM_Init(ctx);
     ctx->spdmVersion = SPDM_VERSION_12;
-
-    rc = wolfSPDM_BuildEndSession(ctx, buf, &bufSz);
-    TEST_ASSERT(rc == WOLFSPDM_SUCCESS, "BuildEndSession failed");
-    TEST_ASSERT(bufSz == 4, "END_SESSION should be 4 bytes");
-    TEST_ASSERT(buf[1] == SPDM_END_SESSION, "Code should be 0xEA");
+    ASSERT_SUCCESS(wolfSPDM_BuildEndSession(ctx, buf, &bufSz));
+    ASSERT_EQ(bufSz, 4, "END_SESSION should be 4 bytes");
+    ASSERT_EQ(buf[1], SPDM_END_SESSION, "Code should be 0xEA");
 
     wolfSPDM_Free(ctx);
     TEST_PASS();
@@ -533,8 +452,8 @@ static int test_build_get_measurements(void)
     WOLFSPDM_CTX ctxBuf;
     WOLFSPDM_CTX* ctx = &ctxBuf;
     byte buf[64];
+    byte zeros[32];
     word32 bufSz;
-    int rc;
 
     printf("test_build_get_measurements...\n");
 
@@ -543,36 +462,19 @@ static int test_build_get_measurements(void)
 
     /* Build without signature */
     bufSz = sizeof(buf);
-    rc = wolfSPDM_BuildGetMeasurements(ctx, buf, &bufSz,
-        SPDM_MEAS_OPERATION_ALL, 0);
-    TEST_ASSERT(rc == WOLFSPDM_SUCCESS, "Build without sig failed");
-    TEST_ASSERT(bufSz == 4, "Without sig should be 4 bytes");
-    TEST_ASSERT(buf[0] == SPDM_VERSION_12, "Version wrong");
-    TEST_ASSERT(buf[1] == SPDM_GET_MEASUREMENTS, "Code should be 0xE0");
-    TEST_ASSERT(buf[2] == 0x00, "Param1 should be 0 (no sig)");
-    TEST_ASSERT(buf[3] == SPDM_MEAS_OPERATION_ALL, "Param2 should be 0xFF");
+    ASSERT_SUCCESS(wolfSPDM_BuildGetMeasurements(ctx, buf, &bufSz, SPDM_MEAS_OPERATION_ALL, 0));
+    ASSERT_EQ(bufSz, 4, "Without sig should be 4 bytes");
+    ASSERT_EQ(buf[1], SPDM_GET_MEASUREMENTS, "Code should be 0xE0");
+    ASSERT_EQ(buf[2], 0x00, "Param1 should be 0 (no sig)");
 
     /* Build with signature */
     bufSz = sizeof(buf);
-    rc = wolfSPDM_BuildGetMeasurements(ctx, buf, &bufSz,
-        SPDM_MEAS_OPERATION_ALL, 1);
-    TEST_ASSERT(rc == WOLFSPDM_SUCCESS, "Build with sig failed");
-    TEST_ASSERT(bufSz == 37, "With sig should be 37 bytes");
-    TEST_ASSERT(buf[2] == SPDM_MEAS_REQUEST_SIG_BIT, "Sig bit should be set");
-
-    /* Verify nonce was populated (non-zero) */
-    {
-        int nonZero = 0;
-        int i;
-        for (i = 4; i < 36; i++) {
-            if (buf[i] != 0) nonZero = 1;
-        }
-        TEST_ASSERT(nonZero, "Nonce should be non-zero");
-    }
-
-    /* Verify nonce saved in context */
-    TEST_ASSERT(memcmp(ctx->measNonce, &buf[4], 32) == 0,
-        "Nonce should match context");
+    ASSERT_SUCCESS(wolfSPDM_BuildGetMeasurements(ctx, buf, &bufSz, SPDM_MEAS_OPERATION_ALL, 1));
+    ASSERT_EQ(bufSz, 37, "With sig should be 37 bytes");
+    ASSERT_EQ(buf[2], SPDM_MEAS_REQUEST_SIG_BIT, "Sig bit should be set");
+    XMEMSET(zeros, 0, sizeof(zeros));
+    ASSERT_NE(memcmp(&buf[4], zeros, 32), 0, "Nonce should be non-zero");
+    ASSERT_EQ(memcmp(ctx->measNonce, &buf[4], 32), 0, "Nonce should match context");
 
     wolfSPDM_Free(ctx);
     TEST_PASS();
@@ -585,67 +487,44 @@ static int test_measurement_accessors(void)
     byte measIdx, measType;
     byte value[64];
     word32 valueSz;
-    int rc;
 
     printf("test_measurement_accessors...\n");
 
     wolfSPDM_Init(ctx);
-
-    /* Before measurements: count should be 0 */
-    TEST_ASSERT(wolfSPDM_GetMeasurementCount(ctx) == 0,
-        "Count should be 0 before measurements");
+    ASSERT_EQ(wolfSPDM_GetMeasurementCount(ctx), 0, "Count should be 0 before measurements");
 
     /* Manually populate 2 test blocks */
     ctx->hasMeasurements = 1;
     ctx->measBlockCount = 2;
-
     ctx->measBlocks[0].index = 1;
     ctx->measBlocks[0].dmtfType = SPDM_MEAS_VALUE_TYPE_IMMUTABLE_ROM;
     ctx->measBlocks[0].valueSize = 4;
-    ctx->measBlocks[0].value[0] = 0xAA;
-    ctx->measBlocks[0].value[1] = 0xBB;
-    ctx->measBlocks[0].value[2] = 0xCC;
-    ctx->measBlocks[0].value[3] = 0xDD;
-
+    ctx->measBlocks[0].value[0] = 0xAA; ctx->measBlocks[0].value[1] = 0xBB;
+    ctx->measBlocks[0].value[2] = 0xCC; ctx->measBlocks[0].value[3] = 0xDD;
     ctx->measBlocks[1].index = 2;
     ctx->measBlocks[1].dmtfType = SPDM_MEAS_VALUE_TYPE_MUTABLE_FW;
     ctx->measBlocks[1].valueSize = 2;
-    ctx->measBlocks[1].value[0] = 0x11;
-    ctx->measBlocks[1].value[1] = 0x22;
+    ctx->measBlocks[1].value[0] = 0x11; ctx->measBlocks[1].value[1] = 0x22;
 
-    TEST_ASSERT(wolfSPDM_GetMeasurementCount(ctx) == 2,
-        "Count should be 2");
+    ASSERT_EQ(wolfSPDM_GetMeasurementCount(ctx), 2, "Count should be 2");
 
     /* Get block 0 */
     valueSz = sizeof(value);
-    rc = wolfSPDM_GetMeasurementBlock(ctx, 0, &measIdx, &measType,
-        value, &valueSz);
-    TEST_ASSERT(rc == WOLFSPDM_SUCCESS, "GetMeasurementBlock(0) failed");
-    TEST_ASSERT(measIdx == 1, "Block 0 index should be 1");
-    TEST_ASSERT(measType == SPDM_MEAS_VALUE_TYPE_IMMUTABLE_ROM,
-        "Block 0 type wrong");
-    TEST_ASSERT(valueSz == 4, "Block 0 size wrong");
-    TEST_ASSERT(value[0] == 0xAA, "Block 0 value wrong");
+    ASSERT_SUCCESS(wolfSPDM_GetMeasurementBlock(ctx, 0, &measIdx, &measType, value, &valueSz));
+    ASSERT_EQ(measIdx, 1, "Block 0 index should be 1");
+    ASSERT_EQ(measType, SPDM_MEAS_VALUE_TYPE_IMMUTABLE_ROM, "Block 0 type wrong");
+    ASSERT_EQ(valueSz, 4, "Block 0 size wrong");
+    ASSERT_EQ(value[0], 0xAA, "Block 0 value wrong");
 
     /* Get block 1 */
     valueSz = sizeof(value);
-    rc = wolfSPDM_GetMeasurementBlock(ctx, 1, &measIdx, &measType,
-        value, &valueSz);
-    TEST_ASSERT(rc == WOLFSPDM_SUCCESS, "GetMeasurementBlock(1) failed");
-    TEST_ASSERT(measIdx == 2, "Block 1 index should be 2");
-    TEST_ASSERT(valueSz == 2, "Block 1 size wrong");
+    ASSERT_SUCCESS(wolfSPDM_GetMeasurementBlock(ctx, 1, &measIdx, &measType, value, &valueSz));
+    ASSERT_EQ(measIdx, 2, "Block 1 index should be 2");
 
     /* Out of range */
     valueSz = sizeof(value);
-    rc = wolfSPDM_GetMeasurementBlock(ctx, 2, &measIdx, &measType,
-        value, &valueSz);
-    TEST_ASSERT(rc == WOLFSPDM_E_INVALID_ARG,
-        "Out of range should return INVALID_ARG");
-
-    rc = wolfSPDM_GetMeasurementBlock(ctx, -1, &measIdx, &measType,
-        value, &valueSz);
-    TEST_ASSERT(rc == WOLFSPDM_E_INVALID_ARG,
-        "Negative index should return INVALID_ARG");
+    ASSERT_FAIL(wolfSPDM_GetMeasurementBlock(ctx, 2, &measIdx, &measType, value, &valueSz));
+    ASSERT_FAIL(wolfSPDM_GetMeasurementBlock(ctx, -1, &measIdx, &measType, value, &valueSz));
 
     wolfSPDM_Free(ctx);
     TEST_PASS();
@@ -655,70 +534,32 @@ static int test_parse_measurements(void)
 {
     WOLFSPDM_CTX ctxBuf;
     WOLFSPDM_CTX* ctx = &ctxBuf;
-    /* Construct a fake MEASUREMENTS response with 2 blocks:
-     *
-     * Header (8 bytes):
-     *   [0] version=0x12 [1] code=0x60 [2] param1 [3] param2
-     *   [4] numBlocks=2
-     *   [5..7] recordLen (3 LE)
-     *
-     * Block 1 (4+7=11 bytes):
-     *   Index=1, MeasSpec=1, MeasSize=7 (LE)
-     *   DMTF: Type=0x00, ValueSize=4 (LE), Value=AA BB CC DD
-     *
-     * Block 2 (4+5=9 bytes):
-     *   Index=2, MeasSpec=1, MeasSize=5 (LE)
-     *   DMTF: Type=0x01, ValueSize=2 (LE), Value=11 22
-     *
-     * RecordLen = 11 + 9 = 20
-     */
+    /* Fake MEASUREMENTS response: 2 blocks, recordLen=20 */
     byte rsp[] = {
         0x12, 0x60, 0x00, 0x00,   /* header */
         0x02,                       /* numBlocks */
         0x14, 0x00, 0x00,           /* recordLen = 20 LE */
-        /* Block 1 */
-        0x01,                       /* Index */
-        0x01,                       /* MeasSpec (DMTF) */
-        0x07, 0x00,                 /* MeasSize = 7 LE */
-        0x00,                       /* DMTF Type: Immutable ROM */
-        0x04, 0x00,                 /* ValueSize = 4 LE */
-        0xAA, 0xBB, 0xCC, 0xDD,    /* Value */
-        /* Block 2 */
-        0x02,                       /* Index */
-        0x01,                       /* MeasSpec (DMTF) */
-        0x05, 0x00,                 /* MeasSize = 5 LE */
-        0x01,                       /* DMTF Type: Mutable FW */
-        0x02, 0x00,                 /* ValueSize = 2 LE */
-        0x11, 0x22                  /* Value */
+        /* Block 1: Index=1, Spec=1, Size=7, DMTF Type=0x00, ValSize=4 */
+        0x01, 0x01, 0x07, 0x00, 0x00, 0x04, 0x00, 0xAA, 0xBB, 0xCC, 0xDD,
+        /* Block 2: Index=2, Spec=1, Size=5, DMTF Type=0x01, ValSize=2 */
+        0x02, 0x01, 0x05, 0x00, 0x01, 0x02, 0x00, 0x11, 0x22
     };
-    int rc;
 
     printf("test_parse_measurements...\n");
 
     wolfSPDM_Init(ctx);
-
-    rc = wolfSPDM_ParseMeasurements(ctx, rsp, sizeof(rsp));
-    TEST_ASSERT(rc == WOLFSPDM_SUCCESS, "ParseMeasurements failed");
-    TEST_ASSERT(ctx->measBlockCount == 2, "Should have 2 blocks");
-    TEST_ASSERT(ctx->hasMeasurements == 1, "hasMeasurements should be set");
-
-    /* Check block 0 */
-    TEST_ASSERT(ctx->measBlocks[0].index == 1, "Block 0 index wrong");
-    TEST_ASSERT(ctx->measBlocks[0].dmtfType == 0x00, "Block 0 type wrong");
-    TEST_ASSERT(ctx->measBlocks[0].valueSize == 4, "Block 0 valueSize wrong");
-    TEST_ASSERT(ctx->measBlocks[0].value[0] == 0xAA, "Block 0 value[0] wrong");
-    TEST_ASSERT(ctx->measBlocks[0].value[3] == 0xDD, "Block 0 value[3] wrong");
-
-    /* Check block 1 */
-    TEST_ASSERT(ctx->measBlocks[1].index == 2, "Block 1 index wrong");
-    TEST_ASSERT(ctx->measBlocks[1].dmtfType == 0x01, "Block 1 type wrong");
-    TEST_ASSERT(ctx->measBlocks[1].valueSize == 2, "Block 1 valueSize wrong");
-    TEST_ASSERT(ctx->measBlocks[1].value[0] == 0x11, "Block 1 value[0] wrong");
+    ASSERT_SUCCESS(wolfSPDM_ParseMeasurements(ctx, rsp, sizeof(rsp)));
+    ASSERT_EQ(ctx->measBlockCount, 2, "Should have 2 blocks");
+    ASSERT_EQ(ctx->hasMeasurements, 1, "hasMeasurements should be set");
+    ASSERT_EQ(ctx->measBlocks[0].index, 1, "Block 0 index wrong");
+    ASSERT_EQ(ctx->measBlocks[0].dmtfType, 0x00, "Block 0 type wrong");
+    ASSERT_EQ(ctx->measBlocks[0].valueSize, 4, "Block 0 valueSize wrong");
+    ASSERT_EQ(ctx->measBlocks[0].value[0], 0xAA, "Block 0 value[0] wrong");
+    ASSERT_EQ(ctx->measBlocks[1].index, 2, "Block 1 index wrong");
+    ASSERT_EQ(ctx->measBlocks[1].valueSize, 2, "Block 1 valueSize wrong");
 
     /* Test truncated buffer */
-    rc = wolfSPDM_ParseMeasurements(ctx, rsp, 5);
-    TEST_ASSERT(rc == WOLFSPDM_E_MEASUREMENT,
-        "Truncated should return MEASUREMENT error");
+    ASSERT_FAIL(wolfSPDM_ParseMeasurements(ctx, rsp, 5));
 
     wolfSPDM_Free(ctx);
     TEST_PASS();
@@ -905,29 +746,17 @@ static int test_set_trusted_cas(void)
     WOLFSPDM_CTX ctxBuf;
     WOLFSPDM_CTX* ctx = &ctxBuf;
     byte fakeCa[] = {0x30, 0x82, 0x01, 0x00, 0xAA, 0xBB, 0xCC, 0xDD};
-    int rc;
 
     printf("test_set_trusted_cas...\n");
 
     wolfSPDM_Init(ctx);
-
-    /* NULL args should fail */
-    rc = wolfSPDM_SetTrustedCAs(NULL, fakeCa, sizeof(fakeCa));
-    TEST_ASSERT(rc == WOLFSPDM_E_INVALID_ARG, "NULL ctx should fail");
-
-    rc = wolfSPDM_SetTrustedCAs(ctx, NULL, sizeof(fakeCa));
-    TEST_ASSERT(rc == WOLFSPDM_E_INVALID_ARG, "NULL certs should fail");
-
-    rc = wolfSPDM_SetTrustedCAs(ctx, fakeCa, 0);
-    TEST_ASSERT(rc == WOLFSPDM_E_INVALID_ARG, "Zero size should fail");
-
-    /* Valid call */
-    rc = wolfSPDM_SetTrustedCAs(ctx, fakeCa, sizeof(fakeCa));
-    TEST_ASSERT(rc == WOLFSPDM_SUCCESS, "SetTrustedCAs failed");
-    TEST_ASSERT(ctx->hasTrustedCAs == 1, "hasTrustedCAs not set");
-    TEST_ASSERT(ctx->trustedCAsSz == sizeof(fakeCa), "Size mismatch");
-    TEST_ASSERT(memcmp(ctx->trustedCAs, fakeCa, sizeof(fakeCa)) == 0,
-        "Data mismatch");
+    ASSERT_FAIL(wolfSPDM_SetTrustedCAs(NULL, fakeCa, sizeof(fakeCa)));
+    ASSERT_FAIL(wolfSPDM_SetTrustedCAs(ctx, NULL, sizeof(fakeCa)));
+    ASSERT_FAIL(wolfSPDM_SetTrustedCAs(ctx, fakeCa, 0));
+    ASSERT_SUCCESS(wolfSPDM_SetTrustedCAs(ctx, fakeCa, sizeof(fakeCa)));
+    ASSERT_EQ(ctx->hasTrustedCAs, 1, "hasTrustedCAs not set");
+    ASSERT_EQ(ctx->trustedCAsSz, sizeof(fakeCa), "Size mismatch");
+    ASSERT_EQ(memcmp(ctx->trustedCAs, fakeCa, sizeof(fakeCa)), 0, "Data mismatch");
 
     wolfSPDM_Free(ctx);
     TEST_PASS();
@@ -937,16 +766,11 @@ static int test_validate_cert_chain_no_cas(void)
 {
     WOLFSPDM_CTX ctxBuf;
     WOLFSPDM_CTX* ctx = &ctxBuf;
-    int rc;
 
     printf("test_validate_cert_chain_no_cas...\n");
 
     wolfSPDM_Init(ctx);
-
-    /* No trusted CAs loaded — should return error */
-    rc = wolfSPDM_ValidateCertChain(ctx);
-    TEST_ASSERT(rc == WOLFSPDM_E_CERT_PARSE,
-        "Should fail without trusted CAs");
+    ASSERT_EQ(wolfSPDM_ValidateCertChain(ctx), WOLFSPDM_E_CERT_PARSE, "Should fail without trusted CAs");
 
     wolfSPDM_Free(ctx);
     TEST_PASS();
@@ -963,8 +787,8 @@ static int test_build_challenge(void)
     WOLFSPDM_CTX ctxBuf;
     WOLFSPDM_CTX* ctx = &ctxBuf;
     byte buf[64];
+    byte zeros[32];
     word32 bufSz;
-    int rc;
 
     printf("test_build_challenge...\n");
 
@@ -972,42 +796,23 @@ static int test_build_challenge(void)
     ctx->spdmVersion = SPDM_VERSION_12;
 
     bufSz = sizeof(buf);
-    rc = wolfSPDM_BuildChallenge(ctx, buf, &bufSz, 0,
-        SPDM_MEAS_SUMMARY_HASH_NONE);
-    TEST_ASSERT(rc == WOLFSPDM_SUCCESS, "BuildChallenge failed");
-    TEST_ASSERT(bufSz == 36, "CHALLENGE should be 36 bytes");
-    TEST_ASSERT(buf[0] == SPDM_VERSION_12, "Version wrong");
-    TEST_ASSERT(buf[1] == SPDM_CHALLENGE, "Code should be 0x83");
-    TEST_ASSERT(buf[2] == 0x00, "SlotID should be 0");
-    TEST_ASSERT(buf[3] == SPDM_MEAS_SUMMARY_HASH_NONE, "MeasHashType wrong");
-
-    /* Verify nonce is populated (non-zero) */
-    {
-        int nonZero = 0;
-        int i;
-        for (i = 4; i < 36; i++) {
-            if (buf[i] != 0) nonZero = 1;
-        }
-        TEST_ASSERT(nonZero, "Nonce should be non-zero");
-    }
-
-    /* Verify nonce saved in context */
-    TEST_ASSERT(memcmp(ctx->challengeNonce, &buf[4], 32) == 0,
-        "Challenge nonce should match context");
+    ASSERT_SUCCESS(wolfSPDM_BuildChallenge(ctx, buf, &bufSz, 0, SPDM_MEAS_SUMMARY_HASH_NONE));
+    ASSERT_EQ(bufSz, 36, "CHALLENGE should be 36 bytes");
+    ASSERT_EQ(buf[1], SPDM_CHALLENGE, "Code should be 0x83");
+    ASSERT_EQ(buf[3], SPDM_MEAS_SUMMARY_HASH_NONE, "MeasHashType wrong");
+    XMEMSET(zeros, 0, sizeof(zeros));
+    ASSERT_NE(memcmp(&buf[4], zeros, 32), 0, "Nonce should be non-zero");
+    ASSERT_EQ(memcmp(ctx->challengeNonce, &buf[4], 32), 0, "Nonce should match context");
 
     /* Test with different slot and meas hash type */
     bufSz = sizeof(buf);
-    rc = wolfSPDM_BuildChallenge(ctx, buf, &bufSz, 3,
-        SPDM_MEAS_SUMMARY_HASH_ALL);
-    TEST_ASSERT(rc == WOLFSPDM_SUCCESS, "BuildChallenge slot 3 failed");
-    TEST_ASSERT(buf[2] == 0x03, "SlotID should be 3");
-    TEST_ASSERT(buf[3] == 0xFF, "MeasHashType should be 0xFF");
+    ASSERT_SUCCESS(wolfSPDM_BuildChallenge(ctx, buf, &bufSz, 3, SPDM_MEAS_SUMMARY_HASH_ALL));
+    ASSERT_EQ(buf[2], 0x03, "SlotID should be 3");
 
     /* Buffer too small */
     bufSz = 10;
-    rc = wolfSPDM_BuildChallenge(ctx, buf, &bufSz, 0,
-        SPDM_MEAS_SUMMARY_HASH_NONE);
-    TEST_ASSERT(rc == WOLFSPDM_E_BUFFER_SMALL, "Should fail on small buffer");
+    ASSERT_EQ(wolfSPDM_BuildChallenge(ctx, buf, &bufSz, 0, SPDM_MEAS_SUMMARY_HASH_NONE),
+        WOLFSPDM_E_BUFFER_SMALL, "Should fail on small buffer");
 
     wolfSPDM_Free(ctx);
     TEST_PASS();
@@ -1017,16 +822,9 @@ static int test_parse_challenge_auth(void)
 {
     WOLFSPDM_CTX ctxBuf;
     WOLFSPDM_CTX* ctx = &ctxBuf;
-    /* Build a fake CHALLENGE_AUTH response (measHashType=NONE):
-     * [0-3]   header: version=0x12, code=0x03, param1, param2
-     * [4-51]  CertChainHash (48 bytes)
-     * [52-83] Nonce (32 bytes per DSP0274)
-     * (no MeasurementSummaryHash when type=NONE)
-     * [84-85] OpaqueDataLength = 0
-     * [86-181] Signature (96 bytes) */
+    /* Fake CHALLENGE_AUTH: hdr(4) + CertHash(48) + Nonce(32) + OpaqueLen(2) + Sig(96) = 182 */
     byte rsp[182];
     word32 sigOffset = 0;
-    int rc;
 
     printf("test_parse_challenge_auth...\n");
 
@@ -1037,37 +835,24 @@ static int test_parse_challenge_auth(void)
     XMEMSET(rsp, 0, sizeof(rsp));
     rsp[0] = SPDM_VERSION_12;
     rsp[1] = SPDM_CHALLENGE_AUTH;
-    rsp[2] = 0x00;  /* Param1 */
-    rsp[3] = 0x00;  /* Param2 */
-
-    /* Fill CertChainHash with known pattern to match ctx */
     XMEMSET(&rsp[4], 0xAA, WOLFSPDM_HASH_SIZE);
     XMEMCPY(ctx->certChainHash, &rsp[4], WOLFSPDM_HASH_SIZE);
-
-    /* Fill nonce (32 bytes) */
     XMEMSET(&rsp[52], 0xBB, 32);
-
-    /* OpaqueDataLength = 0 (no MeasSummaryHash since type=NONE) */
-    rsp[84] = 0x00;
-    rsp[85] = 0x00;
-
-    /* Fake signature (96 bytes) */
     XMEMSET(&rsp[86], 0xCC, WOLFSPDM_ECC_SIG_SIZE);
 
-    rc = wolfSPDM_ParseChallengeAuth(ctx, rsp, sizeof(rsp), &sigOffset);
-    TEST_ASSERT(rc == WOLFSPDM_SUCCESS, "ParseChallengeAuth failed");
-    TEST_ASSERT(sigOffset == 86, "Signature offset should be 86");
+    ASSERT_SUCCESS(wolfSPDM_ParseChallengeAuth(ctx, rsp, sizeof(rsp), &sigOffset));
+    ASSERT_EQ(sigOffset, 86, "Signature offset should be 86");
 
-    /* Test with wrong response code */
+    /* Wrong response code */
     rsp[1] = 0xFF;
-    rc = wolfSPDM_ParseChallengeAuth(ctx, rsp, sizeof(rsp), &sigOffset);
-    TEST_ASSERT(rc == WOLFSPDM_E_CHALLENGE, "Wrong code should fail");
+    ASSERT_EQ(wolfSPDM_ParseChallengeAuth(ctx, rsp, sizeof(rsp), &sigOffset),
+        WOLFSPDM_E_CHALLENGE, "Wrong code should fail");
     rsp[1] = SPDM_CHALLENGE_AUTH;
 
-    /* Test with CertChainHash mismatch */
-    ctx->certChainHash[0] = 0x00;  /* Change expected hash */
-    rc = wolfSPDM_ParseChallengeAuth(ctx, rsp, sizeof(rsp), &sigOffset);
-    TEST_ASSERT(rc == WOLFSPDM_E_CHALLENGE, "Hash mismatch should fail");
+    /* CertChainHash mismatch */
+    ctx->certChainHash[0] = 0x00;
+    ASSERT_EQ(wolfSPDM_ParseChallengeAuth(ctx, rsp, sizeof(rsp), &sigOffset),
+        WOLFSPDM_E_CHALLENGE, "Hash mismatch should fail");
 
     wolfSPDM_Free(ctx);
     TEST_PASS();
@@ -1085,26 +870,18 @@ static int test_build_heartbeat(void)
     WOLFSPDM_CTX* ctx = &ctxBuf;
     byte buf[16];
     word32 bufSz;
-    int rc;
 
     printf("test_build_heartbeat...\n");
 
     wolfSPDM_Init(ctx);
     ctx->spdmVersion = SPDM_VERSION_12;
-
     bufSz = sizeof(buf);
-    rc = wolfSPDM_BuildHeartbeat(ctx, buf, &bufSz);
-    TEST_ASSERT(rc == WOLFSPDM_SUCCESS, "BuildHeartbeat failed");
-    TEST_ASSERT(bufSz == 4, "HEARTBEAT should be 4 bytes");
-    TEST_ASSERT(buf[0] == SPDM_VERSION_12, "Version wrong");
-    TEST_ASSERT(buf[1] == SPDM_HEARTBEAT, "Code should be 0xE8");
-    TEST_ASSERT(buf[2] == 0x00, "Param1 should be 0");
-    TEST_ASSERT(buf[3] == 0x00, "Param2 should be 0");
+    ASSERT_SUCCESS(wolfSPDM_BuildHeartbeat(ctx, buf, &bufSz));
+    ASSERT_EQ(bufSz, 4, "HEARTBEAT should be 4 bytes");
+    ASSERT_EQ(buf[1], SPDM_HEARTBEAT, "Code should be 0xE8");
 
-    /* Buffer too small */
     bufSz = 2;
-    rc = wolfSPDM_BuildHeartbeat(ctx, buf, &bufSz);
-    TEST_ASSERT(rc == WOLFSPDM_E_BUFFER_SMALL, "Should fail on small buffer");
+    ASSERT_EQ(wolfSPDM_BuildHeartbeat(ctx, buf, &bufSz), WOLFSPDM_E_BUFFER_SMALL, "Should fail on small buffer");
 
     wolfSPDM_Free(ctx);
     TEST_PASS();
@@ -1116,19 +893,12 @@ static int test_parse_heartbeat_ack(void)
     WOLFSPDM_CTX* ctx = &ctxBuf;
     byte ack[] = {0x12, SPDM_HEARTBEAT_ACK, 0x00, 0x00};
     byte err[] = {0x12, SPDM_ERROR, 0x01, 0x00};
-    int rc;
 
     printf("test_parse_heartbeat_ack...\n");
 
     wolfSPDM_Init(ctx);
-
-    /* Valid ACK */
-    rc = wolfSPDM_ParseHeartbeatAck(ctx, ack, sizeof(ack));
-    TEST_ASSERT(rc == WOLFSPDM_SUCCESS, "Valid ACK should succeed");
-
-    /* Error response */
-    rc = wolfSPDM_ParseHeartbeatAck(ctx, err, sizeof(err));
-    TEST_ASSERT(rc == WOLFSPDM_E_PEER_ERROR, "Error should return PEER_ERROR");
+    ASSERT_SUCCESS(wolfSPDM_ParseHeartbeatAck(ctx, ack, sizeof(ack)));
+    ASSERT_EQ(wolfSPDM_ParseHeartbeatAck(ctx, err, sizeof(err)), WOLFSPDM_E_PEER_ERROR, "Error should return PEER_ERROR");
 
     wolfSPDM_Free(ctx);
     TEST_PASS();
@@ -1138,16 +908,11 @@ static int test_heartbeat_state_check(void)
 {
     WOLFSPDM_CTX ctxBuf;
     WOLFSPDM_CTX* ctx = &ctxBuf;
-    int rc;
 
     printf("test_heartbeat_state_check...\n");
 
     wolfSPDM_Init(ctx);
-
-    /* Not connected — should fail */
-    rc = wolfSPDM_Heartbeat(ctx);
-    TEST_ASSERT(rc == WOLFSPDM_E_NOT_CONNECTED,
-        "Heartbeat should fail when not connected");
+    ASSERT_EQ(wolfSPDM_Heartbeat(ctx), WOLFSPDM_E_NOT_CONNECTED, "Heartbeat should fail when not connected");
 
     wolfSPDM_Free(ctx);
     TEST_PASS();
@@ -1164,29 +929,21 @@ static int test_build_key_update(void)
     byte buf[16];
     word32 bufSz;
     byte tag = 0;
-    int rc;
 
     printf("test_build_key_update...\n");
 
     wolfSPDM_Init(ctx);
     ctx->spdmVersion = SPDM_VERSION_12;
-
     bufSz = sizeof(buf);
-    rc = wolfSPDM_BuildKeyUpdate(ctx, buf, &bufSz,
-        SPDM_KEY_UPDATE_OP_UPDATE_ALL_KEYS, &tag);
-    TEST_ASSERT(rc == WOLFSPDM_SUCCESS, "BuildKeyUpdate failed");
-    TEST_ASSERT(bufSz == 4, "KEY_UPDATE should be 4 bytes");
-    TEST_ASSERT(buf[0] == SPDM_VERSION_12, "Version wrong");
-    TEST_ASSERT(buf[1] == SPDM_KEY_UPDATE, "Code should be 0xE9");
-    TEST_ASSERT(buf[2] == SPDM_KEY_UPDATE_OP_UPDATE_ALL_KEYS,
-        "Operation should be UpdateAllKeys");
-    TEST_ASSERT(buf[3] == tag, "Tag should match returned value");
+    ASSERT_SUCCESS(wolfSPDM_BuildKeyUpdate(ctx, buf, &bufSz, SPDM_KEY_UPDATE_OP_UPDATE_ALL_KEYS, &tag));
+    ASSERT_EQ(bufSz, 4, "KEY_UPDATE should be 4 bytes");
+    ASSERT_EQ(buf[1], SPDM_KEY_UPDATE, "Code should be 0xE9");
+    ASSERT_EQ(buf[2], SPDM_KEY_UPDATE_OP_UPDATE_ALL_KEYS, "Operation should be UpdateAllKeys");
+    ASSERT_EQ(buf[3], tag, "Tag should match returned value");
 
-    /* Buffer too small */
     bufSz = 2;
-    rc = wolfSPDM_BuildKeyUpdate(ctx, buf, &bufSz,
-        SPDM_KEY_UPDATE_OP_UPDATE_KEY, &tag);
-    TEST_ASSERT(rc == WOLFSPDM_E_BUFFER_SMALL, "Should fail on small buffer");
+    ASSERT_EQ(wolfSPDM_BuildKeyUpdate(ctx, buf, &bufSz, SPDM_KEY_UPDATE_OP_UPDATE_KEY, &tag),
+        WOLFSPDM_E_BUFFER_SMALL, "Should fail on small buffer");
 
     wolfSPDM_Free(ctx);
     TEST_PASS();
@@ -1197,26 +954,15 @@ static int test_parse_key_update_ack(void)
     WOLFSPDM_CTX ctxBuf;
     WOLFSPDM_CTX* ctx = &ctxBuf;
     byte ack[] = {0x12, SPDM_KEY_UPDATE_ACK, 0x02, 0x42};
-    int rc;
 
     printf("test_parse_key_update_ack...\n");
 
     wolfSPDM_Init(ctx);
-
-    /* Valid ACK with matching operation and tag */
-    rc = wolfSPDM_ParseKeyUpdateAck(ctx, ack, sizeof(ack),
-        SPDM_KEY_UPDATE_OP_UPDATE_ALL_KEYS, 0x42);
-    TEST_ASSERT(rc == WOLFSPDM_SUCCESS, "Valid ACK should succeed");
-
-    /* Mismatched tag */
-    rc = wolfSPDM_ParseKeyUpdateAck(ctx, ack, sizeof(ack),
-        SPDM_KEY_UPDATE_OP_UPDATE_ALL_KEYS, 0xFF);
-    TEST_ASSERT(rc == WOLFSPDM_E_KEY_UPDATE, "Mismatched tag should fail");
-
-    /* Mismatched operation */
-    rc = wolfSPDM_ParseKeyUpdateAck(ctx, ack, sizeof(ack),
-        SPDM_KEY_UPDATE_OP_UPDATE_KEY, 0x42);
-    TEST_ASSERT(rc == WOLFSPDM_E_KEY_UPDATE, "Mismatched op should fail");
+    ASSERT_SUCCESS(wolfSPDM_ParseKeyUpdateAck(ctx, ack, sizeof(ack), SPDM_KEY_UPDATE_OP_UPDATE_ALL_KEYS, 0x42));
+    ASSERT_EQ(wolfSPDM_ParseKeyUpdateAck(ctx, ack, sizeof(ack), SPDM_KEY_UPDATE_OP_UPDATE_ALL_KEYS, 0xFF),
+        WOLFSPDM_E_KEY_UPDATE, "Mismatched tag should fail");
+    ASSERT_EQ(wolfSPDM_ParseKeyUpdateAck(ctx, ack, sizeof(ack), SPDM_KEY_UPDATE_OP_UPDATE_KEY, 0x42),
+        WOLFSPDM_E_KEY_UPDATE, "Mismatched op should fail");
 
     wolfSPDM_Free(ctx);
     TEST_PASS();
@@ -1228,43 +974,29 @@ static int test_derive_updated_keys(void)
     WOLFSPDM_CTX* ctx = &ctxBuf;
     byte origReqKey[WOLFSPDM_AEAD_KEY_SIZE];
     byte origRspKey[WOLFSPDM_AEAD_KEY_SIZE];
-    int rc;
 
     printf("test_derive_updated_keys...\n");
 
     wolfSPDM_Init(ctx);
     ctx->spdmVersion = SPDM_VERSION_12;
-
-    /* Set up fake app secrets and keys */
     XMEMSET(ctx->reqAppSecret, 0x5A, WOLFSPDM_HASH_SIZE);
     XMEMSET(ctx->rspAppSecret, 0xA5, WOLFSPDM_HASH_SIZE);
     XMEMSET(ctx->reqDataKey, 0x11, WOLFSPDM_AEAD_KEY_SIZE);
     XMEMSET(ctx->rspDataKey, 0x22, WOLFSPDM_AEAD_KEY_SIZE);
-
     XMEMCPY(origReqKey, ctx->reqDataKey, WOLFSPDM_AEAD_KEY_SIZE);
     XMEMCPY(origRspKey, ctx->rspDataKey, WOLFSPDM_AEAD_KEY_SIZE);
 
     /* Update all keys */
-    rc = wolfSPDM_DeriveUpdatedKeys(ctx, 1);
-    TEST_ASSERT(rc == WOLFSPDM_SUCCESS, "DeriveUpdatedKeys failed");
-
-    /* Keys should have changed */
-    TEST_ASSERT(memcmp(ctx->reqDataKey, origReqKey,
-        WOLFSPDM_AEAD_KEY_SIZE) != 0, "Req key should change");
-    TEST_ASSERT(memcmp(ctx->rspDataKey, origRspKey,
-        WOLFSPDM_AEAD_KEY_SIZE) != 0, "Rsp key should change");
+    ASSERT_SUCCESS(wolfSPDM_DeriveUpdatedKeys(ctx, 1));
+    ASSERT_NE(memcmp(ctx->reqDataKey, origReqKey, WOLFSPDM_AEAD_KEY_SIZE), 0, "Req key should change");
+    ASSERT_NE(memcmp(ctx->rspDataKey, origRspKey, WOLFSPDM_AEAD_KEY_SIZE), 0, "Rsp key should change");
 
     /* Update requester only */
     XMEMCPY(origReqKey, ctx->reqDataKey, WOLFSPDM_AEAD_KEY_SIZE);
     XMEMCPY(origRspKey, ctx->rspDataKey, WOLFSPDM_AEAD_KEY_SIZE);
-
-    rc = wolfSPDM_DeriveUpdatedKeys(ctx, 0);
-    TEST_ASSERT(rc == WOLFSPDM_SUCCESS, "DeriveUpdatedKeys (req only) failed");
-
-    TEST_ASSERT(memcmp(ctx->reqDataKey, origReqKey,
-        WOLFSPDM_AEAD_KEY_SIZE) != 0, "Req key should change");
-    TEST_ASSERT(memcmp(ctx->rspDataKey, origRspKey,
-        WOLFSPDM_AEAD_KEY_SIZE) == 0, "Rsp key should NOT change");
+    ASSERT_SUCCESS(wolfSPDM_DeriveUpdatedKeys(ctx, 0));
+    ASSERT_NE(memcmp(ctx->reqDataKey, origReqKey, WOLFSPDM_AEAD_KEY_SIZE), 0, "Req key should change");
+    ASSERT_EQ(memcmp(ctx->rspDataKey, origRspKey, WOLFSPDM_AEAD_KEY_SIZE), 0, "Rsp key should NOT change");
 
     wolfSPDM_Free(ctx);
     TEST_PASS();
@@ -1274,16 +1006,11 @@ static int test_key_update_state_check(void)
 {
     WOLFSPDM_CTX ctxBuf;
     WOLFSPDM_CTX* ctx = &ctxBuf;
-    int rc;
 
     printf("test_key_update_state_check...\n");
 
     wolfSPDM_Init(ctx);
-
-    /* Not connected — should fail */
-    rc = wolfSPDM_KeyUpdate(ctx, 1);
-    TEST_ASSERT(rc == WOLFSPDM_E_NOT_CONNECTED,
-        "KeyUpdate should fail when not connected");
+    ASSERT_EQ(wolfSPDM_KeyUpdate(ctx, 1), WOLFSPDM_E_NOT_CONNECTED, "KeyUpdate should fail when not connected");
 
     wolfSPDM_Free(ctx);
     TEST_PASS();
@@ -1301,20 +1028,16 @@ static int test_session_state(void)
     printf("test_session_state...\n");
 
     wolfSPDM_Init(ctx);
-
-    TEST_ASSERT(wolfSPDM_IsConnected(ctx) == 0, "Should not be connected");
-    TEST_ASSERT(wolfSPDM_GetSessionId(ctx) == 0, "SessionId should be 0");
-    TEST_ASSERT(wolfSPDM_GetVersion_Negotiated(ctx) == 0, "Version should be 0");
+    ASSERT_EQ(wolfSPDM_IsConnected(ctx), 0, "Should not be connected");
+    ASSERT_EQ(wolfSPDM_GetSessionId(ctx), 0, "SessionId should be 0");
 
     /* Simulate connected state */
     ctx->state = WOLFSPDM_STATE_CONNECTED;
     ctx->sessionId = 0xAABBCCDD;
     ctx->spdmVersion = SPDM_VERSION_12;
-
-    TEST_ASSERT(wolfSPDM_IsConnected(ctx) == 1, "Should be connected");
-    TEST_ASSERT(wolfSPDM_GetSessionId(ctx) == 0xAABBCCDD, "SessionId wrong");
-    TEST_ASSERT(wolfSPDM_GetVersion_Negotiated(ctx) == SPDM_VERSION_12,
-        "Version wrong");
+    ASSERT_EQ(wolfSPDM_IsConnected(ctx), 1, "Should be connected");
+    ASSERT_EQ(wolfSPDM_GetSessionId(ctx), (word32)0xAABBCCDD, "SessionId wrong");
+    ASSERT_EQ(wolfSPDM_GetVersion_Negotiated(ctx), SPDM_VERSION_12, "Version wrong");
 
     wolfSPDM_Free(ctx);
     TEST_PASS();

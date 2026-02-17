@@ -296,7 +296,6 @@ int wolfSPDM_DeriveAppDataKeys(WOLFSPDM_CTX* ctx)
 int wolfSPDM_DeriveUpdatedKeys(WOLFSPDM_CTX* ctx, int updateAll)
 {
     byte newReqAppSecret[WOLFSPDM_HASH_SIZE];
-    byte newRspAppSecret[WOLFSPDM_HASH_SIZE];
     int rc;
 
     if (ctx == NULL) {
@@ -333,6 +332,8 @@ int wolfSPDM_DeriveUpdatedKeys(WOLFSPDM_CTX* ctx, int updateAll)
 
     /* Optionally update responder key */
     if (updateAll) {
+        byte newRspAppSecret[WOLFSPDM_HASH_SIZE];
+
         rc = wolfSPDM_HkdfExpandLabel(ctx->spdmVersion, ctx->rspAppSecret,
             WOLFSPDM_HASH_SIZE, SPDM_LABEL_UPDATE, NULL, 0,
             newRspAppSecret, WOLFSPDM_HASH_SIZE);
@@ -356,7 +357,6 @@ int wolfSPDM_DeriveUpdatedKeys(WOLFSPDM_CTX* ctx, int updateAll)
 
         /* Save new responder secret for future updates */
         XMEMCPY(ctx->rspAppSecret, newRspAppSecret, WOLFSPDM_HASH_SIZE);
-
     }
 
     return WOLFSPDM_SUCCESS;
