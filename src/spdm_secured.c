@@ -108,7 +108,6 @@ int wolfSPDM_EncryptInternal(WOLFSPDM_CTX* ctx,
     word16 recordLen;
     word32 hdrSz;
     word32 aadSz;
-    word32 offset;
     int rc;
 
     if (ctx == NULL || plain == NULL || enc == NULL || encSz == NULL) {
@@ -163,7 +162,6 @@ int wolfSPDM_EncryptInternal(WOLFSPDM_CTX* ctx,
         SPDM_Set32LE(&enc[0], ctx->sessionId);
         SPDM_Set64LE(&enc[4], ctx->reqSeqNum);
         SPDM_Set16LE(&enc[12], recordLen);
-        offset = 14;
 
         aadSz = 14;
         XMEMCPY(aad, enc, aadSz);
@@ -196,7 +194,6 @@ int wolfSPDM_EncryptInternal(WOLFSPDM_CTX* ctx,
         SPDM_Set32LE(&enc[0], ctx->sessionId);
         SPDM_Set16LE(&enc[4], (word16)ctx->reqSeqNum);
         SPDM_Set16LE(&enc[6], recordLen);
-        offset = 8;
 
         aadSz = 8;
         XMEMCPY(aad, enc, aadSz);

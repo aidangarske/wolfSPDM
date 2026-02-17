@@ -60,7 +60,7 @@ jobs:
       if: steps.cache-spdm-emu.outputs.cache-hit != 'true'
       run: |
         cd ~
-        git clone --depth 1 https://github.com/DMTF/spdm-emu.git
+        git clone --depth 1 --recursive https://github.com/DMTF/spdm-emu.git
         cd spdm-emu
         mkdir build && cd build
         cmake -DARCH=x64 -DTOOLCHAIN=GCC -DTARGET=Release -DCRYPTO=mbedtls ..
