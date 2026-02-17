@@ -19,12 +19,13 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y autoconf automake libtool cmake libmbedtls-dev
 
+    # Cache period rotates every ~15 days so dependencies stay fresh
     - name: Compute cache period
       id: cache-period
       run: |
         echo "biweekly=$(( $(date +%s) / 1296000 ))" >> $GITHUB_OUTPUT
 
-    # --- Build wolfSSL ---
+    # --- Build wolfSSL (cached) ---
     - name: Cache wolfSSL
       id: cache-wolfssl
       uses: actions/cache@v4
@@ -44,7 +45,7 @@ jobs:
         make -j$(nproc)
         make install
 
-    # --- Build wolfSPDM ---
+    # --- Build wolfSPDM (always, this is what we're testing) ---
     - name: Build and install wolfSPDM
       run: |
         ./autogen.sh
@@ -53,7 +54,7 @@ jobs:
         make -j$(nproc)
         make install
 
-    # --- Build spdm-emu ---
+    # --- Build spdm-emu (cached) ---
     - name: Cache spdm-emu
       id: cache-spdm-emu
       uses: actions/cache@v4
@@ -71,15 +72,15 @@ jobs:
         cmake -DARCH=x64 -DTOOLCHAIN=GCC -DTARGET=Release -DCRYPTO=mbedtls ..
         make copy_sample_key && make -j$(nproc)
 
-    # --- Build wolfTPM ---
-    - name: Cache wolfTPM source
+    # --- Build wolfTPM (cached, dynamically links wolfspdm at runtime) ---
+    - name: Cache wolfTPM
       id: cache-wolftpm
       uses: actions/cache@v4
       with:
         path: ~/wolfTPM
         key: wolftpm-${{ steps.cache-period.outputs.biweekly }}
 
-    - name: Clone wolfTPM
+    - name: Build wolfTPM
       if: steps.cache-wolftpm.outputs.cache-hit != 'true'
       run: |
         cd ~
@@ -88,10 +89,6 @@ jobs:
           https://github.com/aidangarske/wolfTPM.git wolfTPM
         cd wolfTPM
         ./autogen.sh
-
-    - name: Build wolfTPM
-      run: |
-        cd ~/wolfTPM
         ./configure --enable-spdm --enable-swtpm \
                     --with-wolfspdm=$HOME/wolfspdm-install \
                     --with-wolfcrypt=$HOME/wolfssl-install
