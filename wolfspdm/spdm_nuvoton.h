@@ -51,9 +51,7 @@
 extern "C" {
 #endif
 
-/* ==========================================================================
- * TCG SPDM Binding Constants (per TCG SPDM Binding Spec v1.0)
- * ========================================================================== */
+/* --- TCG SPDM Binding Constants (per TCG SPDM Binding Spec v1.0) --- */
 
 /* Message Tags */
 #define WOLFSPDM_TCG_TAG_CLEAR          0x8101  /* Clear (unencrypted) message */
@@ -67,9 +65,7 @@ extern "C" {
 #define WOLFSPDM_FIPS_NON_FIPS          0x00
 #define WOLFSPDM_FIPS_APPROVED          0x01
 
-/* ==========================================================================
- * Nuvoton Vendor-Defined Command Codes
- * ========================================================================== */
+/* --- Nuvoton Vendor-Defined Command Codes --- */
 
 /* 8-byte ASCII vendor codes for SPDM VENDOR_DEFINED messages */
 #define WOLFSPDM_VDCODE_LEN             8
@@ -84,9 +80,7 @@ extern "C" {
 #define WOLFSPDM_SPDMONLY_LOCK          0x01
 #define WOLFSPDM_SPDMONLY_UNLOCK        0x00
 
-/* ==========================================================================
- * TCG Binding Header Structures
- * ========================================================================== */
+/* --- TCG Binding Header Structures --- */
 
 /* Clear message header (tag 0x8101)
  * Layout: tag(2/BE) + size(4/BE) + connectionHandle(4/BE) +
@@ -112,9 +106,7 @@ typedef struct WOLFSPDM_TCG_SECURED_HDR {
     word32  reserved;         /* Must be 0 */
 } WOLFSPDM_TCG_SECURED_HDR;
 
-/* ==========================================================================
- * Nuvoton SPDM Status
- * ========================================================================== */
+/* --- Nuvoton SPDM Status --- */
 
 typedef struct WOLFSPDM_NUVOTON_STATUS {
     int     spdmEnabled;      /* SPDM is enabled on the TPM */
@@ -125,9 +117,7 @@ typedef struct WOLFSPDM_NUVOTON_STATUS {
     byte    specVersionMinor; /* SPDM spec version minor (1=1.1, 3=1.3) */
 } WOLFSPDM_NUVOTON_STATUS;
 
-/* ==========================================================================
- * TCG Binding Message Framing Functions
- * ========================================================================== */
+/* --- TCG Binding Message Framing Functions --- */
 
 /**
  * Build a TCG SPDM clear message (tag 0x8101).
@@ -202,9 +192,7 @@ int wolfSPDM_ParseTcgSecuredMessage(
     byte* mac, word32* macSz,
     WOLFSPDM_TCG_SECURED_HDR* hdr);
 
-/* ==========================================================================
- * Vendor-Defined Message Helpers
- * ========================================================================== */
+/* --- Vendor-Defined Message Helpers --- */
 
 /**
  * Build an SPDM VENDOR_DEFINED_REQUEST message.
@@ -236,9 +224,7 @@ int wolfSPDM_ParseVendorDefined(
     char* vdCode,
     byte* payload, word32* payloadSz);
 
-/* ==========================================================================
- * Nuvoton-Specific SPDM Functions
- * ========================================================================== */
+/* --- Nuvoton-Specific SPDM Functions --- */
 
 /**
  * Get the TPM's SPDM-Identity public key (GET_PUBK vendor command).
@@ -314,9 +300,7 @@ int wolfSPDM_SetRequesterKeyTPMT(WOLFSPDM_CTX* ctx,
  */
 int wolfSPDM_ConnectNuvoton(WOLFSPDM_CTX* ctx);
 
-/* ==========================================================================
- * Nuvoton Context Fields
- * ========================================================================== */
+/* --- Nuvoton Context Fields --- */
 
 /* These fields are added to WOLFSPDM_CTX when WOLFSPDM_NUVOTON is defined */
 

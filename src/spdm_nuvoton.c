@@ -36,77 +36,15 @@
 #include <wolfspdm/spdm_nuvoton.h>
 #include <string.h>
 
-/* ==========================================================================
- * Internal Byte-Order Helpers
- * ========================================================================== */
+/* Check for SPDM ERROR in response payload */
+#define SPDM_CHECK_ERROR_RSP(ctx, buf, sz, label) \
+    if ((sz) >= 4 && (buf)[1] == SPDM_ERROR) { \
+        wolfSPDM_DebugPrint(ctx, label ": SPDM ERROR 0x%02x 0x%02x\n", \
+            (buf)[2], (buf)[3]); \
+        return WOLFSPDM_E_PEER_ERROR; \
+    }
 
-/* Store a 16-bit value in big-endian format */
-static void SPDM_Set16BE(byte* buf, word16 val)
-{
-    buf[0] = (byte)(val >> 8);
-    buf[1] = (byte)(val & 0xFF);
-}
-
-/* Read a 16-bit value from big-endian format */
-static word16 SPDM_Get16BE(const byte* buf)
-{
-    return (word16)((buf[0] << 8) | buf[1]);
-}
-
-/* Store a 16-bit value in little-endian format */
-static void SPDM_Set16LE(byte* buf, word16 val)
-{
-    buf[0] = (byte)(val & 0xFF);
-    buf[1] = (byte)(val >> 8);
-}
-
-/* Read a 16-bit value from little-endian format */
-static word16 SPDM_Get16LE(const byte* buf)
-{
-    return (word16)(buf[0] | (buf[1] << 8));
-}
-
-/* Store a 32-bit value in big-endian format */
-static void SPDM_Set32BE(byte* buf, word32 val)
-{
-    buf[0] = (byte)(val >> 24);
-    buf[1] = (byte)(val >> 16);
-    buf[2] = (byte)(val >> 8);
-    buf[3] = (byte)(val & 0xFF);
-}
-
-/* Read a 32-bit value from big-endian format */
-static word32 SPDM_Get32BE(const byte* buf)
-{
-    return ((word32)buf[0] << 24) | ((word32)buf[1] << 16) |
-           ((word32)buf[2] << 8) | (word32)buf[3];
-}
-
-/* Store a 64-bit value in little-endian format */
-static void SPDM_Set64LE(byte* buf, word64 val)
-{
-    buf[0] = (byte)(val & 0xFF);
-    buf[1] = (byte)((val >> 8) & 0xFF);
-    buf[2] = (byte)((val >> 16) & 0xFF);
-    buf[3] = (byte)((val >> 24) & 0xFF);
-    buf[4] = (byte)((val >> 32) & 0xFF);
-    buf[5] = (byte)((val >> 40) & 0xFF);
-    buf[6] = (byte)((val >> 48) & 0xFF);
-    buf[7] = (byte)((val >> 56) & 0xFF);
-}
-
-/* Read a 64-bit value from little-endian format */
-static word64 SPDM_Get64LE(const byte* buf)
-{
-    return (word64)buf[0] | ((word64)buf[1] << 8) |
-           ((word64)buf[2] << 16) | ((word64)buf[3] << 24) |
-           ((word64)buf[4] << 32) | ((word64)buf[5] << 40) |
-           ((word64)buf[6] << 48) | ((word64)buf[7] << 56);
-}
-
-/* ==========================================================================
- * TCG SPDM Binding Message Framing
- * ========================================================================== */
+/* --- TCG SPDM Binding Message Framing --- */
 
 int wolfSPDM_BuildTcgClearMessage(
     WOLFSPDM_CTX* ctx,
@@ -341,9 +279,7 @@ int wolfSPDM_ParseTcgSecuredMessage(
     return (int)payloadSz;
 }
 
-/* ==========================================================================
- * SPDM Vendor Defined Message Helpers
- * ========================================================================== */
+/* --- SPDM Vendor Defined Message Helpers --- */
 
 /* SPDM message codes */
 #define SPDM_VERSION_1_3              0x13
@@ -465,9 +401,7 @@ int wolfSPDM_ParseVendorDefined(
     return (int)dataLen;
 }
 
-/* ==========================================================================
- * Nuvoton-Specific SPDM Functions
- * ========================================================================== */
+/* --- Nuvoton-Specific SPDM Functions --- */
 
 /* Helper: Send TCG clear message and receive response */
 static int wolfSPDM_Nuvoton_SendClear(
@@ -558,12 +492,7 @@ int wolfSPDM_Nuvoton_GetPubKey(
         return rc;
     }
 
-    /* Check for SPDM ERROR response */
-    if (spdmPayloadSz >= 4 && spdmPayload[1] == SPDM_ERROR) {
-        wolfSPDM_DebugPrint(ctx, "GET_PUBK: SPDM ERROR 0x%02x 0x%02x\n",
-            spdmPayload[2], spdmPayload[3]);
-        return WOLFSPDM_E_PEER_ERROR;
-    }
+    SPDM_CHECK_ERROR_RSP(ctx, spdmPayload, spdmPayloadSz, "GET_PUBK");
 
     /* Parse vendor-defined response */
     rspPayloadSz = sizeof(rspPayload);
@@ -608,10 +537,6 @@ int wolfSPDM_Nuvoton_GivePubKey(
     int rc;
     byte spdmMsg[256];
     int spdmMsgSz;
-    byte encBuf[WOLFSPDM_MAX_MSG_SIZE];
-    word32 encSz;
-    byte rxBuf[512];
-    word32 rxSz;
     byte decBuf[256];
     word32 decSz;
 
@@ -633,63 +558,18 @@ int wolfSPDM_Nuvoton_GivePubKey(
     }
 
     /* GIVE_PUB is sent as a SECURED (encrypted) message per Nuvoton spec Rev 1.11.
-     * Section 4.2.4 shows GIVE_PUB_KEY uses tag 0x8201 (secured), not 0x8101 (clear).
-     *
-     * Note: GIVE_PUB is an application-phase vendor command, NOT part of the
-     * SPDM handshake transcript. TH2 only includes handshake messages. */
-
-    encSz = sizeof(encBuf);
-    rc = wolfSPDM_EncryptMessage(ctx, spdmMsg, (word32)spdmMsgSz,
-        encBuf, &encSz);
-    if (rc != WOLFSPDM_SUCCESS) {
-        wolfSPDM_DebugPrint(ctx, "GIVE_PUB: Encrypt failed %d\n", rc);
-        return rc;
-    }
-
-    /* Send encrypted message */
-    if (ctx->ioCb == NULL) {
-        return WOLFSPDM_E_IO_FAIL;
-    }
-
-    rxSz = sizeof(rxBuf);
-    rc = ctx->ioCb(ctx, encBuf, encSz, rxBuf, &rxSz, ctx->ioUserCtx);
-    if (rc != 0) {
-        wolfSPDM_DebugPrint(ctx, "GIVE_PUB: I/O failed %d\n", rc);
-        return WOLFSPDM_E_IO_FAIL;
-    }
-
-    /* Check if response is unencrypted SPDM message (likely an error).
-     * SPDM messages start with version byte (0x10-0x1F).
-     * Encrypted records start with session ID (first byte is low byte of reqSessionId). */
-    if (rxSz >= 2 && rxBuf[0] >= 0x10 && rxBuf[0] <= 0x1F) {
-        /* Unencrypted SPDM message - check if it's an error */
-        if (rxBuf[1] == SPDM_ERROR) {
-            wolfSPDM_DebugPrint(ctx, "GIVE_PUB: TPM returned unencrypted SPDM ERROR 0x%02x 0x%02x\n",
-                (rxSz >= 3) ? rxBuf[2] : 0, (rxSz >= 4) ? rxBuf[3] : 0);
-            return WOLFSPDM_E_PEER_ERROR;
-        }
-        wolfSPDM_DebugPrint(ctx, "GIVE_PUB: Unexpected unencrypted response code 0x%02x\n",
-            rxBuf[1]);
-        return WOLFSPDM_E_PEER_ERROR;
-    }
-
-    /* Decrypt response (encrypted record format) */
+     * Section 4.2.4 shows GIVE_PUB_KEY uses tag 0x8201 (secured), not 0x8101 (clear). */
     decSz = sizeof(decBuf);
-    rc = wolfSPDM_DecryptMessage(ctx, rxBuf, rxSz, decBuf, &decSz);
+    rc = wolfSPDM_SecuredExchange(ctx, spdmMsg, (word32)spdmMsgSz,
+        decBuf, &decSz);
     if (rc != WOLFSPDM_SUCCESS) {
-        wolfSPDM_DebugPrint(ctx, "GIVE_PUB: Decrypt failed %d\n", rc);
+        wolfSPDM_DebugPrint(ctx, "GIVE_PUB: SecuredExchange failed %d\n", rc);
         return rc;
     }
 
-    /* Check for SPDM ERROR response in decrypted payload */
-    if (decSz >= 4 && decBuf[1] == SPDM_ERROR) {
-        wolfSPDM_DebugPrint(ctx, "GIVE_PUB: SPDM ERROR 0x%02x 0x%02x\n",
-            decBuf[2], decBuf[3]);
-        return WOLFSPDM_E_PEER_ERROR;
-    }
+    SPDM_CHECK_ERROR_RSP(ctx, decBuf, decSz, "GIVE_PUB");
 
     wolfSPDM_DebugPrint(ctx, "GIVE_PUB: Success\n");
-
     return WOLFSPDM_SUCCESS;
 }
 
@@ -740,12 +620,7 @@ int wolfSPDM_Nuvoton_GetStatus(
         return rc;
     }
 
-    /* Check for SPDM ERROR response */
-    if (spdmPayloadSz >= 4 && spdmPayload[1] == SPDM_ERROR) {
-        wolfSPDM_DebugPrint(ctx, "GET_STS_: SPDM ERROR 0x%02x 0x%02x\n",
-            spdmPayload[2], spdmPayload[3]);
-        return WOLFSPDM_E_PEER_ERROR;
-    }
+    SPDM_CHECK_ERROR_RSP(ctx, spdmPayload, spdmPayloadSz, "GET_STS_");
 
     /* Parse vendor-defined response */
     rspPayloadSz = sizeof(rspPayload);
@@ -798,10 +673,6 @@ int wolfSPDM_Nuvoton_SetOnlyMode(
     int rc;
     byte spdmMsg[256];
     int spdmMsgSz;
-    byte encBuf[WOLFSPDM_MAX_MSG_SIZE];
-    word32 encSz;
-    byte rxBuf[512];
-    word32 rxSz;
     byte decBuf[256];
     word32 decSz;
     byte param[1];
@@ -826,47 +697,21 @@ int wolfSPDM_Nuvoton_SetOnlyMode(
         return spdmMsgSz;
     }
 
-    /* Encrypt the message */
-    encSz = sizeof(encBuf);
-    rc = wolfSPDM_EncryptMessage(ctx, spdmMsg, (word32)spdmMsgSz,
-        encBuf, &encSz);
-    if (rc != WOLFSPDM_SUCCESS) {
-        return rc;
-    }
-
-    /* Send encrypted message */
-    if (ctx->ioCb == NULL) {
-        return WOLFSPDM_E_IO_FAIL;
-    }
-
-    rxSz = sizeof(rxBuf);
-    rc = ctx->ioCb(ctx, encBuf, encSz, rxBuf, &rxSz, ctx->ioUserCtx);
-    if (rc != 0) {
-        return WOLFSPDM_E_IO_FAIL;
-    }
-
-    /* Decrypt response */
+    /* Send encrypted via SecuredExchange */
     decSz = sizeof(decBuf);
-    rc = wolfSPDM_DecryptMessage(ctx, rxBuf, rxSz, decBuf, &decSz);
+    rc = wolfSPDM_SecuredExchange(ctx, spdmMsg, (word32)spdmMsgSz,
+        decBuf, &decSz);
     if (rc != WOLFSPDM_SUCCESS) {
         return rc;
     }
 
-    /* Check for SPDM ERROR response */
-    if (decSz >= 4 && decBuf[1] == SPDM_ERROR) {
-        wolfSPDM_DebugPrint(ctx, "SPDMONLY: SPDM ERROR 0x%02x 0x%02x\n",
-            decBuf[2], decBuf[3]);
-        return WOLFSPDM_E_PEER_ERROR;
-    }
+    SPDM_CHECK_ERROR_RSP(ctx, decBuf, decSz, "SPDMONLY");
 
     wolfSPDM_DebugPrint(ctx, "SPDMONLY: Success\n");
-
     return WOLFSPDM_SUCCESS;
 }
 
-/* ==========================================================================
- * Nuvoton SPDM Connection Flow
- * ========================================================================== */
+/* --- Nuvoton SPDM Connection Flow --- */
 
 /* Nuvoton-specific connection flow:
  * GET_VERSION -> GET_PUB_KEY -> KEY_EXCHANGE -> GIVE_PUB_KEY -> FINISH
@@ -901,16 +746,9 @@ int wolfSPDM_ConnectNuvoton(WOLFSPDM_CTX* ctx)
     ctx->state = WOLFSPDM_STATE_INIT;
     wolfSPDM_TranscriptReset(ctx);
 
-    /* Step 1: GET_VERSION / VERSION
-     * Note: For Nuvoton, GET_VERSION uses TCG binding header
-     * but the message parsing is the same as standard SPDM */
-    wolfSPDM_DebugPrint(ctx, "Nuvoton Step 1: GET_VERSION\n");
-    rc = wolfSPDM_GetVersion(ctx);
-    if (rc != WOLFSPDM_SUCCESS) {
-        wolfSPDM_DebugPrint(ctx, "GET_VERSION failed: %d\n", rc);
-        ctx->state = WOLFSPDM_STATE_ERROR;
-        return rc;
-    }
+    /* Step 1: GET_VERSION / VERSION */
+    SPDM_CONNECT_STEP(ctx, "Nuvoton Step 1: GET_VERSION\n",
+        wolfSPDM_GetVersion(ctx));
 
     /* Step 2: GET_PUBK (Nuvoton vendor command)
      * Gets the TPM's SPDM-Identity public key (TPMT_PUBLIC format) */
@@ -928,38 +766,16 @@ int wolfSPDM_ConnectNuvoton(WOLFSPDM_CTX* ctx)
      * For Nuvoton, the cert_chain_buffer_hash is SHA-384(TPMT_PUBLIC)
      * instead of the standard certificate chain hash */
     if (ctx->hasRspPubKey && ctx->rspPubKeyLen > 0) {
-        wc_Sha384 sha;
-
         wolfSPDM_DebugPrint(ctx, "Nuvoton: Computing Ct = SHA-384(TPMT_PUBLIC[%u])\n",
             ctx->rspPubKeyLen);
-
-        rc = wc_InitSha384(&sha);
-        if (rc != 0) {
-            wolfSPDM_DebugPrint(ctx, "Nuvoton: SHA-384 init failed\n");
+        rc = wolfSPDM_Sha384Hash(ctx->certChainHash,
+            ctx->rspPubKey, ctx->rspPubKeyLen, NULL, 0, NULL, 0);
+        if (rc != WOLFSPDM_SUCCESS) {
             ctx->state = WOLFSPDM_STATE_ERROR;
-            return WOLFSPDM_E_CRYPTO_FAIL;
+            return rc;
         }
-
-        rc = wc_Sha384Update(&sha, ctx->rspPubKey, ctx->rspPubKeyLen);
-        if (rc != 0) {
-            wc_Sha384Free(&sha);
-            wolfSPDM_DebugPrint(ctx, "Nuvoton: SHA-384 update failed\n");
-            ctx->state = WOLFSPDM_STATE_ERROR;
-            return WOLFSPDM_E_CRYPTO_FAIL;
-        }
-
-        rc = wc_Sha384Final(&sha, ctx->certChainHash);
-        wc_Sha384Free(&sha);
-        if (rc != 0) {
-            wolfSPDM_DebugPrint(ctx, "Nuvoton: SHA-384 final failed\n");
-            ctx->state = WOLFSPDM_STATE_ERROR;
-            return WOLFSPDM_E_CRYPTO_FAIL;
-        }
-
-        /* Add Ct to transcript */
         rc = wolfSPDM_TranscriptAdd(ctx, ctx->certChainHash, WOLFSPDM_HASH_SIZE);
         if (rc != WOLFSPDM_SUCCESS) {
-            wolfSPDM_DebugPrint(ctx, "Nuvoton: Failed to add Ct to transcript\n");
             ctx->state = WOLFSPDM_STATE_ERROR;
             return rc;
         }
@@ -968,14 +784,8 @@ int wolfSPDM_ConnectNuvoton(WOLFSPDM_CTX* ctx)
         wolfSPDM_DebugPrint(ctx, "Nuvoton: Warning - no responder public key for Ct\n");
     }
 
-    /* Step 3: KEY_EXCHANGE */
-    wolfSPDM_DebugPrint(ctx, "Nuvoton Step 3: KEY_EXCHANGE\n");
-    rc = wolfSPDM_KeyExchange(ctx);
-    if (rc != WOLFSPDM_SUCCESS) {
-        wolfSPDM_DebugPrint(ctx, "KEY_EXCHANGE failed: %d\n", rc);
-        ctx->state = WOLFSPDM_STATE_ERROR;
-        return rc;
-    }
+    SPDM_CONNECT_STEP(ctx, "Nuvoton Step 3: KEY_EXCHANGE\n",
+        wolfSPDM_KeyExchange(ctx));
 
     /* Step 4: GIVE_PUB (Nuvoton vendor command) - sent as SECURED message
      * Gives the host's SPDM-Identity public key to the TPM.
@@ -996,15 +806,9 @@ int wolfSPDM_ConnectNuvoton(WOLFSPDM_CTX* ctx)
         wolfSPDM_DebugPrint(ctx, "Nuvoton Step 4: GIVE_PUB (skipped, no host key)\n");
     }
 
-    /* Step 5: FINISH (first encrypted message)
-     * Completes the handshake with RequesterVerifyData */
-    wolfSPDM_DebugPrint(ctx, "Nuvoton Step 5: FINISH\n");
-    rc = wolfSPDM_Finish(ctx);
-    if (rc != WOLFSPDM_SUCCESS) {
-        wolfSPDM_DebugPrint(ctx, "FINISH failed: %d\n", rc);
-        ctx->state = WOLFSPDM_STATE_ERROR;
-        return rc;
-    }
+    /* Step 5: FINISH */
+    SPDM_CONNECT_STEP(ctx, "Nuvoton Step 5: FINISH\n",
+        wolfSPDM_Finish(ctx));
 
     ctx->state = WOLFSPDM_STATE_CONNECTED;
     wolfSPDM_DebugPrint(ctx, "Nuvoton: SPDM Session Established! "

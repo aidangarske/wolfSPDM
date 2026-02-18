@@ -45,14 +45,13 @@
 #include <wolfssl/wolfcrypt/kdf.h>
 #include <wolfssl/wolfcrypt/aes.h>
 #include <wolfssl/wolfcrypt/memory.h>
+#include <wolfssl/wolfcrypt/asn_public.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/* ==========================================================================
- * State Machine Constants
- * ========================================================================== */
+/* --- State Machine Constants --- */
 
 #define WOLFSPDM_STATE_INIT         0   /* Initial state */
 #define WOLFSPDM_STATE_VERSION      1   /* GET_VERSION complete */
@@ -64,10 +63,23 @@ extern "C" {
 #define WOLFSPDM_STATE_FINISH       7   /* FINISH complete */
 #define WOLFSPDM_STATE_CONNECTED    8   /* Session established */
 #define WOLFSPDM_STATE_ERROR        9   /* Error state */
+#ifndef NO_WOLFSPDM_MEAS
+#define WOLFSPDM_STATE_MEASURED     10  /* Measurements retrieved */
+#endif
 
-/* ==========================================================================
- * Internal Context Structure
- * ========================================================================== */
+/* --- Measurement Block Structure --- */
+
+#ifndef NO_WOLFSPDM_MEAS
+typedef struct WOLFSPDM_MEAS_BLOCK {
+    byte   index;                                   /* SPDM measurement index (1-based) */
+    byte   measurementSpec;                         /* Measurement specification (1=DMTF) */
+    byte   dmtfType;                                /* DMTFSpecMeasurementValueType */
+    word16 valueSize;                               /* Actual value size in bytes */
+    byte   value[WOLFSPDM_MAX_MEAS_VALUE_SIZE];     /* Measurement value (digest/raw) */
+} WOLFSPDM_MEAS_BLOCK;
+#endif /* !NO_WOLFSPDM_MEAS */
+
+/* --- Internal Context Structure --- */
 
 struct WOLFSPDM_CTX {
     /* State machine */
@@ -117,6 +129,7 @@ struct WOLFSPDM_CTX {
     /* Transcript hash for TH1/TH2 computation */
     byte transcript[WOLFSPDM_MAX_TRANSCRIPT];
     word32 transcriptLen;
+    word32 vcaLen;  /* VCA transcript size (after ALGORITHMS, used by measurement sig) */
 
     /* Certificate chain buffer for Ct computation */
     byte certChain[WOLFSPDM_MAX_CERT_CHAIN];
@@ -164,11 +177,150 @@ struct WOLFSPDM_CTX {
     /* Message buffers */
     byte sendBuf[WOLFSPDM_MAX_MSG_SIZE + WOLFSPDM_AEAD_TAG_SIZE];
     byte recvBuf[WOLFSPDM_MAX_MSG_SIZE + WOLFSPDM_AEAD_TAG_SIZE];
+
+#ifndef NO_WOLFSPDM_MEAS
+    /* Measurement data */
+    WOLFSPDM_MEAS_BLOCK measBlocks[WOLFSPDM_MAX_MEAS_BLOCKS];
+    word32 measBlockCount;
+    byte   measNonce[32];                           /* Nonce for signed measurements */
+    byte   measSummaryHash[WOLFSPDM_HASH_SIZE];     /* Summary hash from response */
+    byte   measSignature[WOLFSPDM_ECC_SIG_SIZE];    /* Captured signature (96 bytes P-384) */
+    word32 measSignatureSize;                       /* 0 if unsigned, 96 if signed */
+    int    hasMeasurements;
+
+#ifndef NO_WOLFSPDM_MEAS_VERIFY
+    /* Saved GET_MEASUREMENTS request for L1/L2 transcript */
+    byte            measReqMsg[48];                 /* Saved request (max 37 bytes) */
+    word32          measReqMsgSz;
+#endif /* !NO_WOLFSPDM_MEAS_VERIFY */
+#endif /* !NO_WOLFSPDM_MEAS */
+
+    /* Responder identity for signature verification (measurements + challenge) */
+    ecc_key         responderPubKey;                /* Extracted from cert chain leaf */
+    int             hasResponderPubKey;             /* 1 if key extracted successfully */
+
+    /* Certificate chain validation */
+    byte   trustedCAs[WOLFSPDM_MAX_CERT_CHAIN];    /* DER-encoded root CAs */
+    word32 trustedCAsSz;
+    int    hasTrustedCAs;                           /* 1 if CAs loaded */
+
+#ifndef NO_WOLFSPDM_CHALLENGE
+    /* Challenge authentication */
+    byte   challengeNonce[32];                      /* Saved nonce from CHALLENGE request */
+    byte   challengeMeasHashType;                   /* MeasurementSummaryHashType from req */
+
+    /* Running M1/M2 hash for CHALLENGE_AUTH signature verification.
+     * Per DSP0274, M1/M2 = A || B || C where:
+     *   A = VCA (GET_VERSION..ALGORITHMS)
+     *   B = GET_DIGESTS + DIGESTS + GET_CERTIFICATE + CERTIFICATE (all chunks)
+     *   C = CHALLENGE + CHALLENGE_AUTH (before sig)
+     * This hash accumulates A+B during NegAlgo/GetDigests/GetCertificate,
+     * then C is added in VerifyChallengeAuthSig. */
+    wc_Sha384 m1m2Hash;
+    int       m1m2HashInit;                         /* 1 if m1m2Hash is initialized */
+#endif
+
+    /* Key update state — app secrets for re-derivation */
+    byte   reqAppSecret[WOLFSPDM_HASH_SIZE];        /* 48 bytes */
+    byte   rspAppSecret[WOLFSPDM_HASH_SIZE];        /* 48 bytes */
 };
 
-/* ==========================================================================
- * Internal Function Declarations - Transcript
- * ========================================================================== */
+/* --- Byte-Order Helpers --- */
+
+static WC_INLINE void SPDM_Set16LE(byte* buf, word16 val) {
+    buf[0] = (byte)(val & 0xFF); buf[1] = (byte)(val >> 8);
+}
+static WC_INLINE word16 SPDM_Get16LE(const byte* buf) {
+    return (word16)(buf[0] | (buf[1] << 8));
+}
+static WC_INLINE void SPDM_Set16BE(byte* buf, word16 val) {
+    buf[0] = (byte)(val >> 8); buf[1] = (byte)(val & 0xFF);
+}
+static WC_INLINE word16 SPDM_Get16BE(const byte* buf) {
+    return (word16)((buf[0] << 8) | buf[1]);
+}
+static WC_INLINE void SPDM_Set32LE(byte* buf, word32 val) {
+    buf[0] = (byte)(val & 0xFF);       buf[1] = (byte)((val >> 8) & 0xFF);
+    buf[2] = (byte)((val >> 16) & 0xFF); buf[3] = (byte)((val >> 24) & 0xFF);
+}
+static WC_INLINE word32 SPDM_Get32LE(const byte* buf) {
+    return (word32)buf[0] | ((word32)buf[1] << 8) |
+           ((word32)buf[2] << 16) | ((word32)buf[3] << 24);
+}
+static WC_INLINE void SPDM_Set32BE(byte* buf, word32 val) {
+    buf[0] = (byte)(val >> 24);         buf[1] = (byte)((val >> 16) & 0xFF);
+    buf[2] = (byte)((val >> 8) & 0xFF); buf[3] = (byte)(val & 0xFF);
+}
+static WC_INLINE word32 SPDM_Get32BE(const byte* buf) {
+    return ((word32)buf[0] << 24) | ((word32)buf[1] << 16) |
+           ((word32)buf[2] << 8) | (word32)buf[3];
+}
+static WC_INLINE void SPDM_Set64LE(byte* buf, word64 val) {
+    buf[0] = (byte)(val & 0xFF);         buf[1] = (byte)((val >> 8) & 0xFF);
+    buf[2] = (byte)((val >> 16) & 0xFF); buf[3] = (byte)((val >> 24) & 0xFF);
+    buf[4] = (byte)((val >> 32) & 0xFF); buf[5] = (byte)((val >> 40) & 0xFF);
+    buf[6] = (byte)((val >> 48) & 0xFF); buf[7] = (byte)((val >> 56) & 0xFF);
+}
+static WC_INLINE word64 SPDM_Get64LE(const byte* buf) {
+    return (word64)buf[0] | ((word64)buf[1] << 8) |
+           ((word64)buf[2] << 16) | ((word64)buf[3] << 24) |
+           ((word64)buf[4] << 32) | ((word64)buf[5] << 40) |
+           ((word64)buf[6] << 48) | ((word64)buf[7] << 56);
+}
+
+/* Build IV: BaseIV XOR zero-extended sequence number (DSP0277) */
+static WC_INLINE void wolfSPDM_BuildIV(byte* iv, const byte* baseIv,
+    word64 seqNum, int nuvotonMode)
+{
+    XMEMCPY(iv, baseIv, WOLFSPDM_AEAD_IV_SIZE);
+#ifdef WOLFSPDM_NUVOTON
+    if (nuvotonMode) {
+        byte seq[8]; int i;
+        SPDM_Set64LE(seq, seqNum);
+        for (i = 0; i < 8; i++) iv[i] ^= seq[i];
+    }
+    else
+#endif
+    {
+        (void)nuvotonMode;
+        iv[0] ^= (byte)(seqNum & 0xFF);
+        iv[1] ^= (byte)((seqNum >> 8) & 0xFF);
+    }
+}
+
+/* --- Connect Step Macro --- */
+
+#define SPDM_CONNECT_STEP(ctx, msg, func) do { \
+    wolfSPDM_DebugPrint(ctx, msg); \
+    rc = func; \
+    if (rc != WOLFSPDM_SUCCESS) { ctx->state = WOLFSPDM_STATE_ERROR; return rc; } \
+} while (0)
+
+/* --- Argument Validation Macros --- */
+
+#define SPDM_CHECK_BUILD_ARGS(ctx, buf, bufSz, minSz) \
+    if ((ctx) == NULL || (buf) == NULL || (bufSz) == NULL || *(bufSz) < (minSz)) \
+        return WOLFSPDM_E_BUFFER_SMALL
+
+#define SPDM_CHECK_PARSE_ARGS(ctx, buf, bufSz, minSz) \
+    if ((ctx) == NULL || (buf) == NULL || (bufSz) < (minSz)) \
+        return WOLFSPDM_E_INVALID_ARG
+
+/* --- Response Code Check Macro --- */
+
+#define SPDM_CHECK_RESPONSE(ctx, buf, bufSz, expected, fallbackErr) \
+    do { \
+        if ((buf)[1] != (expected)) { \
+            int _ec; \
+            if (wolfSPDM_CheckError((buf), (bufSz), &_ec)) { \
+                wolfSPDM_DebugPrint((ctx), "SPDM error: 0x%02x\n", _ec); \
+                return WOLFSPDM_E_PEER_ERROR; \
+            } \
+            return (fallbackErr); \
+        } \
+    } while (0)
+
+/* --- Internal Function Declarations - Transcript --- */
 
 /* Reset transcript buffer */
 void wolfSPDM_TranscriptReset(WOLFSPDM_CTX* ctx);
@@ -185,9 +337,13 @@ int wolfSPDM_TranscriptHash(WOLFSPDM_CTX* ctx, byte* hash);
 /* Compute Ct = Hash(certificate_chain) */
 int wolfSPDM_ComputeCertChainHash(WOLFSPDM_CTX* ctx);
 
-/* ==========================================================================
- * Internal Function Declarations - Crypto
- * ========================================================================== */
+/* SHA-384 hash helper: Hash(d1 || d2 || d3), pass NULL/0 for unused buffers */
+int wolfSPDM_Sha384Hash(byte* out,
+    const byte* d1, word32 d1Sz,
+    const byte* d2, word32 d2Sz,
+    const byte* d3, word32 d3Sz);
+
+/* --- Internal Function Declarations - Crypto --- */
 
 /* Generate ephemeral P-384 key for ECDHE */
 int wolfSPDM_GenerateEphemeralKey(WOLFSPDM_CTX* ctx);
@@ -208,9 +364,7 @@ int wolfSPDM_GetRandom(WOLFSPDM_CTX* ctx, byte* out, word32 outSz);
 int wolfSPDM_SignHash(WOLFSPDM_CTX* ctx, const byte* hash, word32 hashSz,
     byte* sig, word32* sigSz);
 
-/* ==========================================================================
- * Internal Function Declarations - Key Derivation
- * ========================================================================== */
+/* --- Internal Function Declarations - Key Derivation --- */
 
 /* Derive all keys from shared secret and TH1 */
 int wolfSPDM_DeriveHandshakeKeys(WOLFSPDM_CTX* ctx, const byte* th1Hash);
@@ -227,9 +381,7 @@ int wolfSPDM_HkdfExpandLabel(byte spdmVersion, const byte* secret, word32 secret
 int wolfSPDM_ComputeVerifyData(const byte* finishedKey, const byte* thHash,
     byte* verifyData);
 
-/* ==========================================================================
- * Internal Function Declarations - Message Building
- * ========================================================================== */
+/* --- Internal Function Declarations - Message Building --- */
 
 /* Build GET_VERSION request */
 int wolfSPDM_BuildGetVersion(byte* buf, word32* bufSz);
@@ -256,9 +408,7 @@ int wolfSPDM_BuildFinish(WOLFSPDM_CTX* ctx, byte* buf, word32* bufSz);
 /* Build END_SESSION request */
 int wolfSPDM_BuildEndSession(WOLFSPDM_CTX* ctx, byte* buf, word32* bufSz);
 
-/* ==========================================================================
- * Internal Function Declarations - Message Parsing
- * ========================================================================== */
+/* --- Internal Function Declarations - Message Parsing --- */
 
 /* Parse VERSION response */
 int wolfSPDM_ParseVersion(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufSz);
@@ -285,9 +435,7 @@ int wolfSPDM_ParseFinishRsp(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufSz);
 /* Check for ERROR response */
 int wolfSPDM_CheckError(const byte* buf, word32 bufSz, int* errorCode);
 
-/* ==========================================================================
- * Internal Function Declarations - Secured Messaging
- * ========================================================================== */
+/* --- Internal Function Declarations - Secured Messaging --- */
 
 /* Encrypt plaintext using session keys */
 int wolfSPDM_EncryptInternal(WOLFSPDM_CTX* ctx,
@@ -299,9 +447,7 @@ int wolfSPDM_DecryptInternal(WOLFSPDM_CTX* ctx,
     const byte* enc, word32 encSz,
     byte* plain, word32* plainSz);
 
-/* ==========================================================================
- * Internal Utility Functions
- * ========================================================================== */
+/* --- Internal Utility Functions --- */
 
 /* Send message via I/O callback and receive response */
 int wolfSPDM_SendReceive(WOLFSPDM_CTX* ctx,
@@ -314,6 +460,71 @@ void wolfSPDM_DebugPrint(WOLFSPDM_CTX* ctx, const char* fmt, ...);
 /* Hex dump for debugging */
 void wolfSPDM_DebugHex(WOLFSPDM_CTX* ctx, const char* label,
     const byte* data, word32 len);
+
+/* --- Internal Function Declarations - Measurements --- */
+
+#ifndef NO_WOLFSPDM_MEAS
+/* Build GET_MEASUREMENTS request */
+int wolfSPDM_BuildGetMeasurements(WOLFSPDM_CTX* ctx, byte* buf, word32* bufSz,
+    byte operation, byte requestSig);
+
+/* Parse MEASUREMENTS response */
+int wolfSPDM_ParseMeasurements(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufSz);
+
+#ifndef NO_WOLFSPDM_MEAS_VERIFY
+/* Verify measurement signature (L1/L2 transcript) */
+int wolfSPDM_VerifyMeasurementSig(WOLFSPDM_CTX* ctx,
+    const byte* rspBuf, word32 rspBufSz,
+    const byte* reqMsg, word32 reqMsgSz);
+#endif /* !NO_WOLFSPDM_MEAS_VERIFY */
+#endif /* !NO_WOLFSPDM_MEAS */
+
+/* --- Internal Function Declarations - Certificate Chain Validation --- */
+
+/* Extract responder's public key from certificate chain leaf cert */
+int wolfSPDM_ExtractResponderPubKey(WOLFSPDM_CTX* ctx);
+
+/* Validate certificate chain using trusted CAs and extract public key */
+int wolfSPDM_ValidateCertChain(WOLFSPDM_CTX* ctx);
+
+/* --- Internal Function Declarations - Challenge --- */
+
+#ifndef NO_WOLFSPDM_CHALLENGE
+/* Build CHALLENGE request */
+int wolfSPDM_BuildChallenge(WOLFSPDM_CTX* ctx, byte* buf, word32* bufSz,
+    int slotId, byte measHashType);
+
+/* Parse CHALLENGE_AUTH response */
+int wolfSPDM_ParseChallengeAuth(WOLFSPDM_CTX* ctx, const byte* buf,
+    word32 bufSz, word32* sigOffset);
+
+/* Verify CHALLENGE_AUTH signature */
+int wolfSPDM_VerifyChallengeAuthSig(WOLFSPDM_CTX* ctx,
+    const byte* rspBuf, word32 rspBufSz,
+    const byte* reqMsg, word32 reqMsgSz, word32 sigOffset);
+#endif /* !NO_WOLFSPDM_CHALLENGE */
+
+/* --- Internal Function Declarations - Heartbeat --- */
+
+/* Build HEARTBEAT request */
+int wolfSPDM_BuildHeartbeat(WOLFSPDM_CTX* ctx, byte* buf, word32* bufSz);
+
+/* Parse HEARTBEAT_ACK response */
+int wolfSPDM_ParseHeartbeatAck(WOLFSPDM_CTX* ctx, const byte* buf,
+    word32 bufSz);
+
+/* --- Internal Function Declarations - Key Update --- */
+
+/* Build KEY_UPDATE request */
+int wolfSPDM_BuildKeyUpdate(WOLFSPDM_CTX* ctx, byte* buf, word32* bufSz,
+    byte operation, byte* tag);
+
+/* Parse KEY_UPDATE_ACK response */
+int wolfSPDM_ParseKeyUpdateAck(WOLFSPDM_CTX* ctx, const byte* buf,
+    word32 bufSz, byte operation, byte tag);
+
+/* Derive updated keys from saved app secrets */
+int wolfSPDM_DeriveUpdatedKeys(WOLFSPDM_CTX* ctx, int updateAll);
 
 #ifdef __cplusplus
 }

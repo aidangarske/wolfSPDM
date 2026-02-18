@@ -37,9 +37,7 @@ extern "C" {
     #include <wolfssl/wolfcrypt/types.h>
 #endif
 
-/* ==========================================================================
- * SPDM Protocol Constants (DMTF DSP0274 / DSP0277)
- * ========================================================================== */
+/* --- SPDM Protocol Constants (DMTF DSP0274 / DSP0277) --- */
 
 /* SPDM Version Numbers */
 #define SPDM_VERSION_10             0x10    /* SPDM 1.0 (for GET_VERSION) */
@@ -109,10 +107,8 @@ extern "C" {
 #define SPDM_ERROR_RESPONSE_NOT_READY   0x42
 #define SPDM_ERROR_REQUEST_RESYNCH      0x43
 
-/* ==========================================================================
- * Algorithm Set B (FIPS 140-3 Level 3 compliant)
- * This implementation ONLY supports Algorithm Set B for simplicity.
- * ========================================================================== */
+/* --- Algorithm Set B (FIPS 140-3 Level 3 compliant) ---
+ * This implementation ONLY supports Algorithm Set B for simplicity. */
 
 /* Hash Algorithms */
 #define SPDM_HASH_ALGO_SHA_384      0x00000002  /* TPM_ALG_SHA384 */
@@ -139,9 +135,7 @@ extern "C" {
 #define WOLFSPDM_AEAD_TAG_SIZE      16  /* AES-GCM tag size */
 #define WOLFSPDM_HMAC_SIZE          48  /* HMAC-SHA384 output size */
 
-/* ==========================================================================
- * Capability Flags (per DSP0274)
- * ========================================================================== */
+/* --- Capability Flags (per DSP0274) --- */
 
 /* Requester Capabilities (GET_CAPABILITIES flags) */
 #define SPDM_CAP_CERT_CAP           0x00000002  /* Certificate support */
@@ -164,20 +158,17 @@ extern "C" {
 /* Default requester capabilities for Algorithm Set B session */
 #define WOLFSPDM_DEFAULT_REQ_CAPS   (SPDM_CAP_CERT_CAP | SPDM_CAP_CHAL_CAP | \
                                      SPDM_CAP_ENCRYPT_CAP | SPDM_CAP_MAC_CAP | \
-                                     SPDM_CAP_KEY_EX_CAP)
+                                     SPDM_CAP_KEY_EX_CAP | SPDM_CAP_HBEAT_CAP | \
+                                     SPDM_CAP_KEY_UPD_CAP)
 
-/* ==========================================================================
- * Buffer/Message Size Limits
- * ========================================================================== */
+/* --- Buffer/Message Size Limits --- */
 
 #define WOLFSPDM_MAX_MSG_SIZE       4096    /* Maximum SPDM message size */
 #define WOLFSPDM_MAX_CERT_CHAIN     4096    /* Maximum certificate chain size */
 #define WOLFSPDM_MAX_TRANSCRIPT     4096    /* Maximum transcript buffer */
 #define WOLFSPDM_RANDOM_SIZE        32      /* Random data in KEY_EXCHANGE */
 
-/* ==========================================================================
- * MCTP Transport Constants (for TCP/socket transport)
- * ========================================================================== */
+/* --- MCTP Transport Constants (for TCP/socket transport) --- */
 
 #define MCTP_MESSAGE_TYPE_SPDM      0x05    /* SPDM over MCTP */
 #define MCTP_MESSAGE_TYPE_SECURED   0x06    /* Secured SPDM over MCTP */
@@ -193,9 +184,42 @@ extern "C" {
 #define SOCKET_SPDM_COMMAND_NORMAL  0x00000001
 #endif
 
-/* ==========================================================================
- * Key Derivation Labels (SPDM 1.2 per DSP0277)
- * ========================================================================== */
+#ifndef NO_WOLFSPDM_MEAS
+/* --- Measurement Constants (DSP0274 Section 10.11) --- */
+
+/* MeasurementSummaryHashType (Param1 of GET_MEASUREMENTS) */
+#define SPDM_MEAS_SUMMARY_HASH_NONE     0x00
+#define SPDM_MEAS_SUMMARY_HASH_TCB      0x01
+#define SPDM_MEAS_SUMMARY_HASH_ALL      0xFF
+
+/* MeasurementOperation (Param2 of GET_MEASUREMENTS) */
+#define SPDM_MEAS_OPERATION_TOTAL_NUMBER 0x00
+#define SPDM_MEAS_OPERATION_ALL          0xFF
+
+/* Request signature bit in Param1 */
+#define SPDM_MEAS_REQUEST_SIG_BIT       0x01
+
+/* DMTFSpecMeasurementValueType (DSP0274 Table 22) */
+#define SPDM_MEAS_VALUE_TYPE_IMMUTABLE_ROM   0x00
+#define SPDM_MEAS_VALUE_TYPE_MUTABLE_FW      0x01
+#define SPDM_MEAS_VALUE_TYPE_HW_CONFIG       0x02
+#define SPDM_MEAS_VALUE_TYPE_FW_CONFIG       0x03
+#define SPDM_MEAS_VALUE_TYPE_MEAS_MANIFEST   0x04
+#define SPDM_MEAS_VALUE_TYPE_VERSION         0x05
+#define SPDM_MEAS_VALUE_TYPE_RAW_BIT         0x80  /* Bit 7: raw vs digest */
+
+/* Configurable limits (override with -D at compile time) */
+#ifndef WOLFSPDM_MAX_MEAS_BLOCKS
+#define WOLFSPDM_MAX_MEAS_BLOCKS        16
+#endif
+#ifndef WOLFSPDM_MAX_MEAS_VALUE_SIZE
+#define WOLFSPDM_MAX_MEAS_VALUE_SIZE    64  /* Fits SHA-512; SHA-384 uses 48 */
+#endif
+
+#define WOLFSPDM_MEAS_BLOCK_HDR_SIZE    4   /* Index(1) + MeasSpec(1) + Size(2 LE) */
+#endif /* !NO_WOLFSPDM_MEAS */
+
+/* --- Key Derivation Labels (SPDM 1.2 per DSP0277) --- */
 
 #define SPDM_BIN_CONCAT_PREFIX_12   "spdm1.2 "
 #define SPDM_BIN_CONCAT_PREFIX_13   "spdm1.3 "
@@ -209,6 +233,12 @@ extern "C" {
 #define SPDM_LABEL_FINISHED         "finished"
 #define SPDM_LABEL_KEY              "key"
 #define SPDM_LABEL_IV               "iv"
+#define SPDM_LABEL_UPDATE           "traffic upd"
+
+/* KEY_UPDATE Operations (DSP0274 Section 10.9) */
+#define SPDM_KEY_UPDATE_OP_UPDATE_KEY      1
+#define SPDM_KEY_UPDATE_OP_UPDATE_ALL_KEYS 2
+#define SPDM_KEY_UPDATE_OP_VERIFY_NEW_KEY  3
 
 #ifdef __cplusplus
 }

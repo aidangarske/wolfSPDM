@@ -1,0 +1,112 @@
+name: SPDM Emulator Integration Test
+
+on:
+  push:
+    branches: [ 'master', 'main', 'release/**' ]
+  pull_request:
+    branches: [ '*' ]
+
+jobs:
+  spdm-emu-test:
+    name: SPDM emulator integration test
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y autoconf automake libtool cmake libmbedtls-dev
+
+    # Cache period rotates every ~15 days so dependencies stay fresh
+    - name: Compute cache period
+      id: cache-period
+      run: |
+        echo "biweekly=$(( $(date +%s) / 1296000 ))" >> $GITHUB_OUTPUT
+
+    # --- Build wolfSSL (cached) ---
+    - name: Cache wolfSSL
+      id: cache-wolfssl
+      uses: actions/cache@v4
+      with:
+        path: ~/wolfssl-install
+        key: wolfssl-${{ steps.cache-period.outputs.biweekly }}
+
+    - name: Build wolfSSL
+      if: steps.cache-wolfssl.outputs.cache-hit != 'true'
+      run: |
+        cd ~
+        git clone --depth 1 https://github.com/wolfSSL/wolfssl.git
+        cd wolfssl
+        ./autogen.sh
+        ./configure --enable-wolftpm --enable-all \
+                    --prefix=$HOME/wolfssl-install
+        make -j$(nproc)
+        make install
+
+    # --- Build wolfSPDM (always, this is what we're testing) ---
+    - name: Build and install wolfSPDM
+      run: |
+        ./autogen.sh
+        ./configure --with-wolfssl=$HOME/wolfssl-install \
+                    --prefix=$HOME/wolfspdm-install
+        make -j$(nproc)
+        make install
+
+    # --- Build spdm-emu (cached) ---
+    - name: Cache spdm-emu
+      id: cache-spdm-emu
+      uses: actions/cache@v4
+      with:
+        path: ~/spdm-emu
+        key: spdm-emu-${{ steps.cache-period.outputs.biweekly }}
+
+    - name: Build spdm-emu
+      if: steps.cache-spdm-emu.outputs.cache-hit != 'true'
+      run: |
+        cd ~
+        git clone --depth 1 --recursive https://github.com/DMTF/spdm-emu.git
+        cd spdm-emu
+        mkdir build && cd build
+        cmake -DARCH=x64 -DTOOLCHAIN=GCC -DTARGET=Release -DCRYPTO=mbedtls ..
+        make copy_sample_key && make -j$(nproc)
+
+    # --- Build wolfTPM (cached, dynamically links wolfspdm at runtime) ---
+    - name: Cache wolfTPM
+      id: cache-wolftpm
+      uses: actions/cache@v4
+      with:
+        path: ~/wolfTPM
+        key: wolftpm-${{ steps.cache-period.outputs.biweekly }}
+
+    - name: Build wolfTPM
+      if: steps.cache-wolftpm.outputs.cache-hit != 'true'
+      run: |
+        cd ~
+        # TODO: Switch to wolfSSL/wolfTPM once PR #453 is merged
+        git clone --depth 1 -b add-wolfspdm-backend \
+          https://github.com/aidangarske/wolfTPM.git wolfTPM
+        cd wolfTPM
+        ./autogen.sh
+        ./configure --enable-spdm --enable-swtpm \
+                    --with-wolfspdm=$HOME/wolfspdm-install \
+                    --with-wolfcrypt=$HOME/wolfssl-install
+        make -j$(nproc)
+
+    # --- Run integration tests ---
+    - name: Run SPDM emulator tests
+      run: |
+        cd ~/wolfTPM
+        export LD_LIBRARY_PATH=$HOME/wolfspdm-install/lib:$HOME/wolfssl-install/lib
+        export SPDM_EMU_PATH=$HOME/spdm-emu/build/bin
+        ./examples/spdm/spdm_test.sh --emu
+
+    - name: Upload logs on failure
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: spdm-emu-test-logs
+        path: |
+          config.log
+          ~/wolfTPM/config.log

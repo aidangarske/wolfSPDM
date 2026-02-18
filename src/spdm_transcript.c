@@ -22,17 +22,11 @@
 #include "spdm_internal.h"
 #include <string.h>
 
-/* ==========================================================================
- * Transcript Management
- *
- * SPDM uses transcript hashing for key derivation:
- *   VCA = GET_VERSION || VERSION || GET_CAPS || CAPS || NEG_ALGO || ALGO
- *   Ct  = Hash(certificate_chain)
- *   TH1 = Hash(VCA || Ct || KEY_EXCHANGE || KEY_EXCHANGE_RSP_partial || Signature)
- *   TH2 = Hash(VCA || Ct || message_k || FINISH_header)
- *
- * where message_k = KEY_EXCHANGE || KEY_EXCHANGE_RSP_partial || Signature || ResponderVerifyData
- * ========================================================================== */
+/* --- Transcript Management ---
+ * VCA = GET_VERSION || VERSION || GET_CAPS || CAPS || NEG_ALGO || ALGO
+ * Ct  = Hash(certificate_chain)
+ * TH1 = Hash(VCA || Ct || KEY_EXCHANGE || KEY_EXCHANGE_RSP_partial || Signature)
+ * TH2 = Hash(VCA || Ct || message_k || FINISH_header) */
 
 void wolfSPDM_TranscriptReset(WOLFSPDM_CTX* ctx)
 {
@@ -86,70 +80,53 @@ int wolfSPDM_CertChainAdd(WOLFSPDM_CTX* ctx, const byte* data, word32 len)
     return WOLFSPDM_SUCCESS;
 }
 
-int wolfSPDM_TranscriptHash(WOLFSPDM_CTX* ctx, byte* hash)
+int wolfSPDM_Sha384Hash(byte* out,
+    const byte* d1, word32 d1Sz,
+    const byte* d2, word32 d2Sz,
+    const byte* d3, word32 d3Sz)
 {
     wc_Sha384 sha;
     int rc;
 
+    rc = wc_InitSha384(&sha);
+    if (rc != 0) return WOLFSPDM_E_CRYPTO_FAIL;
+    if (d1 != NULL && d1Sz > 0) {
+        rc = wc_Sha384Update(&sha, d1, d1Sz);
+        if (rc != 0) { wc_Sha384Free(&sha); return WOLFSPDM_E_CRYPTO_FAIL; }
+    }
+    if (d2 != NULL && d2Sz > 0) {
+        rc = wc_Sha384Update(&sha, d2, d2Sz);
+        if (rc != 0) { wc_Sha384Free(&sha); return WOLFSPDM_E_CRYPTO_FAIL; }
+    }
+    if (d3 != NULL && d3Sz > 0) {
+        rc = wc_Sha384Update(&sha, d3, d3Sz);
+        if (rc != 0) { wc_Sha384Free(&sha); return WOLFSPDM_E_CRYPTO_FAIL; }
+    }
+    rc = wc_Sha384Final(&sha, out);
+    wc_Sha384Free(&sha);
+    return (rc == 0) ? WOLFSPDM_SUCCESS : WOLFSPDM_E_CRYPTO_FAIL;
+}
+
+int wolfSPDM_TranscriptHash(WOLFSPDM_CTX* ctx, byte* hash)
+{
     if (ctx == NULL || hash == NULL) {
         return WOLFSPDM_E_INVALID_ARG;
     }
-
-    rc = wc_InitSha384(&sha);
-    if (rc != 0) {
-        return WOLFSPDM_E_CRYPTO_FAIL;
-    }
-
-    rc = wc_Sha384Update(&sha, ctx->transcript, ctx->transcriptLen);
-    if (rc != 0) {
-        wc_Sha384Free(&sha);
-        return WOLFSPDM_E_CRYPTO_FAIL;
-    }
-
-    rc = wc_Sha384Final(&sha, hash);
-    wc_Sha384Free(&sha);
-
-    if (rc != 0) {
-        return WOLFSPDM_E_CRYPTO_FAIL;
-    }
-
-    return WOLFSPDM_SUCCESS;
+    return wolfSPDM_Sha384Hash(hash, ctx->transcript, ctx->transcriptLen,
+        NULL, 0, NULL, 0);
 }
 
 int wolfSPDM_ComputeCertChainHash(WOLFSPDM_CTX* ctx)
 {
-    wc_Sha384 sha;
-    int rc;
-
     if (ctx == NULL) {
         return WOLFSPDM_E_INVALID_ARG;
     }
-
     if (ctx->certChainLen == 0) {
-        /* No certificate chain - Ct is zeros */
         XMEMSET(ctx->certChainHash, 0, sizeof(ctx->certChainHash));
         return WOLFSPDM_SUCCESS;
     }
 
-    rc = wc_InitSha384(&sha);
-    if (rc != 0) {
-        return WOLFSPDM_E_CRYPTO_FAIL;
-    }
-
-    rc = wc_Sha384Update(&sha, ctx->certChain, ctx->certChainLen);
-    if (rc != 0) {
-        wc_Sha384Free(&sha);
-        return WOLFSPDM_E_CRYPTO_FAIL;
-    }
-
-    rc = wc_Sha384Final(&sha, ctx->certChainHash);
-    wc_Sha384Free(&sha);
-
-    if (rc != 0) {
-        return WOLFSPDM_E_CRYPTO_FAIL;
-    }
-
     wolfSPDM_DebugPrint(ctx, "Ct = Hash(cert_chain[%u])\n", ctx->certChainLen);
-
-    return WOLFSPDM_SUCCESS;
+    return wolfSPDM_Sha384Hash(ctx->certChainHash,
+        ctx->certChain, ctx->certChainLen, NULL, 0, NULL, 0);
 }

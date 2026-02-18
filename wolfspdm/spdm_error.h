@@ -49,6 +49,12 @@ enum WOLFSPDM_ERROR {
     WOLFSPDM_E_ALGO_MISMATCH    = -18,  /* Algorithm negotiation failed */
     WOLFSPDM_E_SESSION_INVALID  = -19,  /* Session ID invalid or mismatch */
     WOLFSPDM_E_KEY_EXCHANGE     = -20,  /* Key exchange failed */
+    WOLFSPDM_E_MEASUREMENT      = -21,  /* Measurement retrieval/parsing failed */
+    WOLFSPDM_E_MEAS_NOT_VERIFIED = -22, /* Measurements retrieved but not signature-verified */
+    WOLFSPDM_E_MEAS_SIG_FAIL    = -23,  /* Measurement signature verification failed */
+    WOLFSPDM_E_CERT_PARSE       = -24,  /* Failed to parse responder certificate */
+    WOLFSPDM_E_CHALLENGE         = -25,  /* Challenge authentication failed */
+    WOLFSPDM_E_KEY_UPDATE        = -26,  /* Key update failed */
 };
 
 /* Get human-readable error string */

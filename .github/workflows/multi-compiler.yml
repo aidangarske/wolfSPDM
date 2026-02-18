@@ -1,0 +1,67 @@
+name: Multiple Compilers
+
+on:
+  push:
+    branches: [ 'master', 'main', 'release/**' ]
+  pull_request:
+    branches: [ '*' ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compiler_test:
+    name: ${{ matrix.cc }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - cc: gcc-11
+          - cc: gcc-12
+          - cc: gcc-13
+          - cc: clang-14
+          - cc: clang-15
+          - cc: clang-17
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install compiler and tools
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y ${{ matrix.cc }} autoconf automake libtool
+
+    - name: Cache wolfSSL
+      id: cache-wolfssl
+      uses: actions/cache@v4
+      with:
+        path: ~/wolfssl-install
+        key: wolfssl-ubuntu-latest-v1
+
+    - name: Build wolfSSL
+      if: steps.cache-wolfssl.outputs.cache-hit != 'true'
+      run: |
+        cd ~
+        git clone --depth 1 https://github.com/wolfSSL/wolfssl.git
+        cd wolfssl
+        ./autogen.sh
+        ./configure --enable-ecc --enable-sha384 --enable-aesgcm --enable-hkdf \
+                    --enable-ecccustcurves --enable-keygen \
+                    --prefix=$HOME/wolfssl-install
+        make -j$(nproc)
+        make install
+
+    - name: Build wolfSPDM with ${{ matrix.cc }}
+      run: |
+        ./autogen.sh
+        CC=${{ matrix.cc }} ./configure --with-wolfssl=$HOME/wolfssl-install \
+                                        --enable-nuvoton
+        make -j$(nproc) CFLAGS="-Wall -Wextra -Werror"
+
+    - name: Run unit tests
+      run: make check
+      env:
+        LD_LIBRARY_PATH: ${{ github.workspace }}/src/.libs:$HOME/wolfssl-install/lib
