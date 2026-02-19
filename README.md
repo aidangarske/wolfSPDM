@@ -1,6 +1,6 @@
 # wolfSPDM
 
-Lightweight SPDM 1.2+ requester-only stack implementation using wolfSSL/wolfCrypt
+Lightweight SPDM 1.2+ requester-only stack implementation using wolfSSL/wolfCrypt with no dynamic memory allocations
 
 ## Overview
 
@@ -31,13 +31,15 @@ wolfSSL with the required crypto algorithms:
 git clone https://github.com/wolfSSL/wolfssl.git
 cd wolfssl
 ./autogen.sh
-./configure --enable-wolftpm --enable-all
-or
-./configure --enable-wolftpm --enable-ecc --enable-sha384 --enable-aesgcm --enable-hkdf
+./configure --enable-wolftpm --enable-ecc --enable-sha384 --enable-aesgcm --enable-hkdf --enable-sp
 make
 sudo make install
 sudo ldconfig
 ```
+
+The `--enable-sp` flag enables Single Precision math with optimized ECC P-384
+support, which is required for SPDM Algorithm Set B on platforms like ARM64.
+For a broader feature set, `--enable-all` can be used instead.
 
 ## Building
 
@@ -85,6 +87,17 @@ WOLFSPDM_CTX* ctx = wolfSPDM_New();
 wolfSPDM_Free(ctx);  /* frees heap memory */
 ```
 
+## Build Order
+
+wolfSPDM depends on wolfSSL, and wolfTPM depends on both. When changing
+wolfSSL configuration, **all three must be rebuilt in order** because
+wolfSPDM's static context size (`WOLFSPDM_CTX_STATIC_SIZE`) depends on
+wolfSSL internal struct sizes (`ecc_key`, `wc_Sha384`, `WC_RNG`, etc.):
+
+```
+wolfSSL (sudo make install) → wolfSPDM (make) → wolfTPM (make)
+```
+
 ## Testing with spdm-emu Emulator
 
 ```bash
@@ -94,18 +107,27 @@ cd spdm-emu && mkdir build && cd build
 cmake -DARCH=x64 -DTOOLCHAIN=GCC -DTARGET=Release -DCRYPTO=mbedtls ..
 make copy_sample_key && make
 
+# Build wolfSSL
+cd wolfssl
+./autogen.sh
+./configure --enable-wolftpm --enable-ecc --enable-sha384 --enable-aesgcm --enable-hkdf --enable-sp
+make
+sudo make install
+sudo ldconfig
+
 # Build wolfSPDM
 cd wolfSPDM
+./autogen.sh
 ./configure
 make
 
-# Build wolfTPM
+# Build wolfTPM (point --with-wolfspdm to wolfSPDM source directory)
 cd wolfTPM
-./configure --enable-spdm --enable-swtpm --with-wolfspdm=path/to/wolfspdm
+./autogen.sh
+./configure --enable-spdm --enable-swtpm --with-wolfspdm=../wolfSPDM
 make
 
 # Run emulator tests (starts/stops emulator automatically)
-cd wolfTPM
 ./examples/spdm/spdm_test.sh --emu
 ```
 
@@ -116,14 +138,24 @@ unsigned measurements, challenge authentication, heartbeat, and key update.
 ## Testing with Nuvoton NPCT75x
 
 ```bash
-# Build wolfSPDM
+# Build wolfSSL
+cd wolfssl
+./autogen.sh
+./configure --enable-wolftpm --enable-ecc --enable-sha384 --enable-aesgcm --enable-hkdf --enable-sp
+make
+sudo make install
+sudo ldconfig
+
+# Build wolfSPDM with Nuvoton support
 cd wolfSPDM
+./autogen.sh
 ./configure --enable-nuvoton
 make
 
-# Build wolfTPM
+# Build wolfTPM (point --with-wolfspdm to wolfSPDM source directory)
 cd wolfTPM
-./configure --enable-spdm --enable-nuvoton --with-wolfspdm=path/to/wolfspdm
+./autogen.sh
+./configure --enable-spdm --enable-nuvoton --with-wolfspdm=../wolfSPDM
 make
 
 # Run Nuvoton test suite
