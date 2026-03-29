@@ -1,7 +1,7 @@
 # wolfSPDM
 
 
-**NOTE: wolfSPDM is being moved directly into wolfTPM https://github.com/wolfSSL/wolfTPM/pull/458**
+**NOTE: wolfSPDM is being moved directly into wolfTPM https://github.com/wolfSSL/wolfTPM/pull/458 to allow better support for TPM products like the NSING NS350 and Nuvoton NPCT75x. At this point wolfSPDM wont be maintained directly or recognized as a wolfSSL product but it serves as a good refrence to how our wolfTPM code works since users can directly try it out without hardware using TCG commands plus spdm-emu** 
 
 
 Lightweight SPDM 1.2+ requester-only stack implementation using wolfSSL/wolfCrypt with no dynamic memory allocations
