@@ -1,5 +1,9 @@
 # wolfSPDM
 
+
+**NOTE: wolfSPDM is being moved directly into wolfTPM https://github.com/wolfSSL/wolfTPM/pull/458**
+
+
 Lightweight SPDM 1.2+ requester-only stack implementation using wolfSSL/wolfCrypt with no dynamic memory allocations
 
 ## Overview
