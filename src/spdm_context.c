@@ -20,8 +20,6 @@
  */
 
 #include "spdm_internal.h"
-#include <stdlib.h>
-#include <string.h>
 #include <stdarg.h>
 #include <stdio.h>
 
@@ -35,7 +33,7 @@ int wolfSPDM_Init(WOLFSPDM_CTX* ctx)
         return WOLFSPDM_E_INVALID_ARG;
     }
 
-    /* Clean slate — do NOT read any fields before this (could be garbage) */
+    /* Clean slate - do NOT read any fields before this (could be garbage) */
     XMEMSET(ctx, 0, sizeof(WOLFSPDM_CTX));
     ctx->state = WOLFSPDM_STATE_INIT;
 
@@ -44,7 +42,7 @@ int wolfSPDM_Init(WOLFSPDM_CTX* ctx)
     if (rc != 0) {
         return WOLFSPDM_E_CRYPTO_FAIL;
     }
-    ctx->rngInitialized = 1;
+    ctx->flags.rngInitialized = 1;
 
     /* Set default requester capabilities */
     ctx->reqCaps = WOLFSPDM_DEFAULT_REQ_CAPS;
@@ -52,8 +50,8 @@ int wolfSPDM_Init(WOLFSPDM_CTX* ctx)
     /* Set default session ID (0x0001 is valid; 0x0000/0xFFFF are reserved) */
     ctx->reqSessionId = 0x0001;
 
-    ctx->initialized = 1;
-    /* isDynamic remains 0 — only wolfSPDM_New sets it */
+    ctx->flags.initialized = 1;
+    /* isDynamic remains 0 - only wolfSPDM_New sets it */
 
     return WOLFSPDM_SUCCESS;
 }
@@ -73,7 +71,7 @@ WOLFSPDM_CTX* wolfSPDM_New(void)
         XFREE(ctx, NULL, DYNAMIC_TYPE_TMP_BUFFER);
         return NULL;
     }
-    ctx->isDynamic = 1;  /* Tag AFTER Init so it isn't wiped */
+    ctx->flags.isDynamic = 1;  /* Tag AFTER Init so it isn't wiped */
 
     return ctx;
 }
@@ -87,29 +85,29 @@ void wolfSPDM_Free(WOLFSPDM_CTX* ctx)
 
 #ifdef WOLFSPDM_DYNAMIC_MEMORY
     {
-        int wasDynamic = ctx->isDynamic;
+        int wasDynamic = ctx->flags.isDynamic;
 #endif
 
     /* Free RNG */
-    if (ctx->rngInitialized) {
+    if (ctx->flags.rngInitialized) {
         wc_FreeRng(&ctx->rng);
     }
 
     /* Free ephemeral key */
-    if (ctx->ephemeralKeyInitialized) {
+    if (ctx->flags.ephemeralKeyInit) {
         wc_ecc_free(&ctx->ephemeralKey);
     }
 
     /* Free responder public key (used for measurement/challenge verification) */
-    if (ctx->hasResponderPubKey) {
+    if (ctx->flags.hasResponderPubKey) {
         wc_ecc_free(&ctx->responderPubKey);
     }
 
 #ifndef NO_WOLFSPDM_CHALLENGE
     /* Free M1/M2 challenge hash if still initialized */
-    if (ctx->m1m2HashInit) {
+    if (ctx->flags.m1m2HashInit) {
         wc_Sha384Free(&ctx->m1m2Hash);
-        ctx->m1m2HashInit = 0;
+        ctx->flags.m1m2HashInit = 0;
     }
 #endif
 
@@ -128,6 +126,18 @@ int wolfSPDM_GetCtxSize(void)
 {
     return (int)sizeof(WOLFSPDM_CTX);
 }
+
+/* Catch struct growth past the public WOLFSPDM_CTX_STATIC_SIZE at compile
+ * time rather than at wolfSPDM_InitStatic runtime. Negative array size if
+ * the static buffer is no longer sufficient. */
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+_Static_assert(sizeof(struct WOLFSPDM_CTX) <= WOLFSPDM_CTX_STATIC_SIZE,
+    "WOLFSPDM_CTX_STATIC_SIZE must be >= sizeof(struct WOLFSPDM_CTX); "
+    "bump the public macro in wolfspdm/spdm.h");
+#else
+typedef char wolfSPDM_ctx_static_size_check
+    [(sizeof(struct WOLFSPDM_CTX) <= WOLFSPDM_CTX_STATIC_SIZE) ? 1 : -1];
+#endif
 
 int wolfSPDM_InitStatic(WOLFSPDM_CTX* ctx, int size)
 {
@@ -156,62 +166,6 @@ int wolfSPDM_SetIO(WOLFSPDM_CTX* ctx, WOLFSPDM_IO_CB ioCb, void* userCtx)
     return WOLFSPDM_SUCCESS;
 }
 
-int wolfSPDM_SetResponderPubKey(WOLFSPDM_CTX* ctx,
-    const byte* pubKey, word32 pubKeySz)
-{
-    if (ctx == NULL || pubKey == NULL) {
-        return WOLFSPDM_E_INVALID_ARG;
-    }
-
-    if (pubKeySz != WOLFSPDM_ECC_POINT_SIZE) {
-        return WOLFSPDM_E_INVALID_ARG;
-    }
-
-    XMEMCPY(ctx->rspPubKey, pubKey, pubKeySz);
-    ctx->rspPubKeyLen = pubKeySz;
-    ctx->hasRspPubKey = 1;
-
-    return WOLFSPDM_SUCCESS;
-}
-
-int wolfSPDM_SetRequesterKeyPair(WOLFSPDM_CTX* ctx,
-    const byte* privKey, word32 privKeySz,
-    const byte* pubKey, word32 pubKeySz)
-{
-    if (ctx == NULL || privKey == NULL || pubKey == NULL) {
-        return WOLFSPDM_E_INVALID_ARG;
-    }
-
-    if (privKeySz != WOLFSPDM_ECC_KEY_SIZE ||
-        pubKeySz != WOLFSPDM_ECC_POINT_SIZE) {
-        return WOLFSPDM_E_INVALID_ARG;
-    }
-
-    XMEMCPY(ctx->reqPrivKey, privKey, privKeySz);
-    ctx->reqPrivKeyLen = privKeySz;
-    XMEMCPY(ctx->reqPubKey, pubKey, pubKeySz);
-    ctx->reqPubKeyLen = pubKeySz;
-    ctx->hasReqKeyPair = 1;
-
-    return WOLFSPDM_SUCCESS;
-}
-
-#ifdef WOLFSPDM_NUVOTON
-int wolfSPDM_SetRequesterKeyTPMT(WOLFSPDM_CTX* ctx,
-    const byte* tpmtPub, word32 tpmtPubSz)
-{
-    if (ctx == NULL || tpmtPub == NULL) {
-        return WOLFSPDM_E_INVALID_ARG;
-    }
-    if (tpmtPubSz > sizeof(ctx->reqPubKeyTPMT)) {
-        return WOLFSPDM_E_INVALID_ARG;
-    }
-    XMEMCPY(ctx->reqPubKeyTPMT, tpmtPub, tpmtPubSz);
-    ctx->reqPubKeyTPMTLen = tpmtPubSz;
-    return WOLFSPDM_SUCCESS;
-}
-#endif /* WOLFSPDM_NUVOTON */
-
 int wolfSPDM_SetTrustedCAs(WOLFSPDM_CTX* ctx, const byte* derCerts,
     word32 derCertsSz)
 {
@@ -225,7 +179,7 @@ int wolfSPDM_SetTrustedCAs(WOLFSPDM_CTX* ctx, const byte* derCerts,
 
     XMEMCPY(ctx->trustedCAs, derCerts, derCertsSz);
     ctx->trustedCAsSz = derCertsSz;
-    ctx->hasTrustedCAs = 1;
+    ctx->flags.hasTrustedCAs = 1;
 
     return WOLFSPDM_SUCCESS;
 }
@@ -233,38 +187,44 @@ int wolfSPDM_SetTrustedCAs(WOLFSPDM_CTX* ctx, const byte* derCerts,
 void wolfSPDM_SetDebug(WOLFSPDM_CTX* ctx, int enable)
 {
     if (ctx != NULL) {
-        ctx->debug = enable;
+        ctx->flags.debug = enable ? 1 : 0;
     }
 }
 
-int wolfSPDM_SetMode(WOLFSPDM_CTX* ctx, WOLFSPDM_MODE mode)
+byte wolfSPDM_GetLastPeerError(WOLFSPDM_CTX* ctx)
+{
+    return (ctx != NULL) ? ctx->lastPeerErrorCode : 0;
+}
+
+/* Backwards-compat: the old function name from before the rename to
+ * wolfSPDM_GetNegotiatedVersion. Kept so binaries already linked against
+ * the old symbol still resolve. */
+byte wolfSPDM_GetVersion_Negotiated(WOLFSPDM_CTX* ctx)
+{
+    return wolfSPDM_GetNegotiatedVersion(ctx);
+}
+
+int wolfSPDM_SetMaxVersion(WOLFSPDM_CTX* ctx, byte maxVersion)
 {
     if (ctx == NULL) {
         return WOLFSPDM_E_INVALID_ARG;
     }
 
-    if (mode == WOLFSPDM_MODE_NUVOTON) {
-#ifdef WOLFSPDM_NUVOTON
-        ctx->mode = WOLFSPDM_MODE_NUVOTON;
-        /* Initialize Nuvoton-specific fields */
-        ctx->connectionHandle = WOLFSPDM_NUVOTON_CONN_HANDLE_DEFAULT;
-        ctx->fipsIndicator = WOLFSPDM_NUVOTON_FIPS_DEFAULT;
+    /* 0 means reset to compile-time default */
+    if (maxVersion == 0) {
+        ctx->maxVersion = 0;
         return WOLFSPDM_SUCCESS;
-#else
-        return WOLFSPDM_E_INVALID_ARG;  /* Nuvoton support not compiled in */
-#endif
     }
 
-    ctx->mode = WOLFSPDM_MODE_STANDARD;
+    /* Validate range. WOLFSPDM_MAX_SPDM_VERSION is the build-time ceiling
+     * and is authoritative: the runtime setter cannot raise it. */
+    if (maxVersion < WOLFSPDM_MIN_SPDM_VERSION ||
+        maxVersion > WOLFSPDM_MAX_SPDM_VERSION) {
+        return WOLFSPDM_E_INVALID_ARG;
+    }
+
+    ctx->maxVersion = maxVersion;
     return WOLFSPDM_SUCCESS;
-}
-
-WOLFSPDM_MODE wolfSPDM_GetMode(WOLFSPDM_CTX* ctx)
-{
-    if (ctx == NULL) {
-        return WOLFSPDM_MODE_STANDARD;
-    }
-    return ctx->mode;
 }
 
 /* --- Session Status --- */
@@ -279,37 +239,26 @@ int wolfSPDM_IsConnected(WOLFSPDM_CTX* ctx)
 
 word32 wolfSPDM_GetSessionId(WOLFSPDM_CTX* ctx)
 {
-    if (ctx == NULL || ctx->state != WOLFSPDM_STATE_CONNECTED) {
+    /* Return the negotiated session ID once KEY_EXCHANGE_RSP has set it
+     * (I/O callbacks need it between KEY_EXCHANGE and FINISH to tag the
+     * encrypted FINISH record). Restrict the exposure window to states
+     * where the value is actually meaningful: from KEY_EX through CONNECTED
+     * / MEASURED. Pre-KEY_EX or in the error state, return 0 so callers
+     * that test "GetSessionId() != 0" don't see a stale or transitional id. */
+    if (ctx == NULL || ctx->state < WOLFSPDM_STATE_KEY_EX ||
+        ctx->state == WOLFSPDM_STATE_ERROR) {
         return 0;
     }
     return ctx->sessionId;
 }
 
-byte wolfSPDM_GetVersion_Negotiated(WOLFSPDM_CTX* ctx)
+byte wolfSPDM_GetNegotiatedVersion(WOLFSPDM_CTX* ctx)
 {
     if (ctx == NULL || ctx->state < WOLFSPDM_STATE_VERSION) {
         return 0;
     }
     return ctx->spdmVersion;
 }
-
-#ifdef WOLFSPDM_NUVOTON
-word32 wolfSPDM_GetConnectionHandle(WOLFSPDM_CTX* ctx)
-{
-    if (ctx == NULL) {
-        return 0;
-    }
-    return ctx->connectionHandle;
-}
-
-word16 wolfSPDM_GetFipsIndicator(WOLFSPDM_CTX* ctx)
-{
-    if (ctx == NULL) {
-        return 0;
-    }
-    return ctx->fipsIndicator;
-}
-#endif
 
 /* --- Session Establishment - Connect (Full Handshake) --- */
 
@@ -318,8 +267,32 @@ static int wolfSPDM_ConnectStandard(WOLFSPDM_CTX* ctx)
 {
     int rc;
 
-    /* Reset state for new connection */
+    /* Reset state for new connection. Drop any cached responder public
+     * key from a prior attempt - GetCertificate's guard otherwise skips
+     * re-extraction, and KEY_EXCHANGE_RSP signature verification would
+     * then run against the stale key from the previous responder. Also
+     * clear sessionId / seqNums so a partial prior attempt can't leak
+     * state into the new handshake. */
+    if (ctx->flags.hasResponderPubKey) {
+        wc_ecc_free(&ctx->responderPubKey);
+        ctx->flags.hasResponderPubKey = 0;
+    }
     ctx->state = WOLFSPDM_STATE_INIT;
+    ctx->sessionId = 0;
+    /* Re-pick a non-reserved reqSessionId; DSP0277 reserves 0x0000 and
+     * 0xFFFF, so use the same default Init picked. */
+    ctx->reqSessionId = 0x0001;
+    ctx->rspSessionId = 0;
+    ctx->reqSeqNum = 0;
+    ctx->rspSeqNum = 0;
+    ctx->lastPeerErrorCode = 0;
+#ifndef NO_WOLFSPDM_MEAS
+    /* Drop stale measurement state from a prior connect so reconnect-
+     * without-disconnect doesn't surface old blocks. */
+    ctx->measBlockCount = 0;
+    ctx->measSignatureSize = 0;
+    ctx->flags.hasMeasurements = 0;
+#endif
     wolfSPDM_TranscriptReset(ctx);
 
     SPDM_CONNECT_STEP(ctx, "Step 1: GET_VERSION\n",
@@ -333,13 +306,16 @@ static int wolfSPDM_ConnectStandard(WOLFSPDM_CTX* ctx)
     SPDM_CONNECT_STEP(ctx, "Step 5: GET_CERTIFICATE\n",
         wolfSPDM_GetCertificate(ctx, 0));
 
-    /* Validate certificate chain if trusted CAs are loaded */
-    if (ctx->hasTrustedCAs) {
-        SPDM_CONNECT_STEP(ctx, "", wolfSPDM_ValidateCertChain(ctx));
+    /* Validate certificate chain if trusted CAs are loaded. GetCertificate
+     * already guarantees flags.hasResponderPubKey is set on success (returns
+     * an error otherwise), so we only need to gate on the CA-bundle. */
+    if (ctx->flags.hasTrustedCAs) {
+        SPDM_CONNECT_STEP(ctx, "Validating certificate chain\n",
+            wolfSPDM_ValidateCertChain(ctx));
     }
-    else if (!ctx->hasResponderPubKey) {
+    else {
         wolfSPDM_DebugPrint(ctx,
-            "Warning: No trusted CAs loaded — chain not validated\n");
+            "Warning: No trusted CAs loaded - chain not validated\n");
     }
 
     SPDM_CONNECT_STEP(ctx, "Step 6: KEY_EXCHANGE\n",
@@ -360,20 +336,13 @@ int wolfSPDM_Connect(WOLFSPDM_CTX* ctx)
         return WOLFSPDM_E_INVALID_ARG;
     }
 
-    if (!ctx->initialized) {
+    if (!ctx->flags.initialized) {
         return WOLFSPDM_E_BAD_STATE;
     }
 
     if (ctx->ioCb == NULL) {
         return WOLFSPDM_E_IO_FAIL;
     }
-
-    /* Dispatch based on mode */
-#ifdef WOLFSPDM_NUVOTON
-    if (ctx->mode == WOLFSPDM_MODE_NUVOTON) {
-        return wolfSPDM_ConnectNuvoton(ctx);
-    }
-#endif
 
     return wolfSPDM_ConnectStandard(ctx);
 }
@@ -404,11 +373,26 @@ int wolfSPDM_Disconnect(WOLFSPDM_CTX* ctx)
     rxSz = sizeof(rxBuf);
     rc = wolfSPDM_SecuredExchange(ctx, txBuf, txSz, rxBuf, &rxSz);
 
-    /* Reset state regardless of result */
+    /* Reset state regardless of result. Free the cached responder public
+     * key so the next Connect re-extracts it from the (potentially new)
+     * responder's certificate chain - otherwise KEY_EXCHANGE_RSP signature
+     * verification on the reconnect would run against the old key. */
+    if (ctx->flags.hasResponderPubKey) {
+        wc_ecc_free(&ctx->responderPubKey);
+        ctx->flags.hasResponderPubKey = 0;
+    }
     ctx->state = WOLFSPDM_STATE_INIT;
     ctx->sessionId = 0;
     ctx->reqSeqNum = 0;
     ctx->rspSeqNum = 0;
+    ctx->lastPeerErrorCode = 0;
+#ifndef NO_WOLFSPDM_MEAS
+    /* Drop stale measurement state so callers can't accidentally read
+     * blocks from the previous session after a reconnect. */
+    ctx->measBlockCount = 0;
+    ctx->measSignatureSize = 0;
+    ctx->flags.hasMeasurements = 0;
+#endif
 
     return (rc == WOLFSPDM_SUCCESS) ? WOLFSPDM_SUCCESS : rc;
 }
@@ -439,7 +423,7 @@ void wolfSPDM_DebugPrint(WOLFSPDM_CTX* ctx, const char* fmt, ...)
 {
     va_list args;
 
-    if (ctx == NULL || !ctx->debug) {
+    if (ctx == NULL || !ctx->flags.debug) {
         return;
     }
 
@@ -455,7 +439,7 @@ void wolfSPDM_DebugHex(WOLFSPDM_CTX* ctx, const char* label,
 {
     word32 i;
 
-    if (ctx == NULL || !ctx->debug || data == NULL) {
+    if (ctx == NULL || !ctx->flags.debug || data == NULL) {
         return;
     }
 
@@ -476,7 +460,7 @@ void wolfSPDM_DebugHex(WOLFSPDM_CTX* ctx, const char* label,
 
 int wolfSPDM_GetMeasurementCount(WOLFSPDM_CTX* ctx)
 {
-    if (ctx == NULL || !ctx->hasMeasurements) {
+    if (ctx == NULL || !ctx->flags.hasMeasurements) {
         return 0;
     }
     return (int)ctx->measBlockCount;
@@ -487,7 +471,7 @@ int wolfSPDM_GetMeasurementBlock(WOLFSPDM_CTX* ctx, int blockIdx,
 {
     const WOLFSPDM_MEAS_BLOCK* blk;
 
-    if (ctx == NULL || !ctx->hasMeasurements) {
+    if (ctx == NULL || !ctx->flags.hasMeasurements) {
         return WOLFSPDM_E_INVALID_ARG;
     }
     if (blockIdx < 0 || blockIdx >= (int)ctx->measBlockCount) {

@@ -86,7 +86,7 @@ jobs:
     - name: Configure
       run: |
         ./autogen.sh
-        ./configure --with-wolfssl=$HOME/wolfssl-install --enable-nuvoton
+        ./configure --with-wolfssl=$HOME/wolfssl-install
 
     - name: Run scan-build
       run: scan-build --status-bugs -o scan-results make -j$(nproc)

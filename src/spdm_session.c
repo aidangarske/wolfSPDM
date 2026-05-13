@@ -20,79 +20,85 @@
  */
 
 #include "spdm_internal.h"
-#include <string.h>
+
+/* Callback types for build/parse functions */
+typedef int (*wolfSPDM_BuildFn)(WOLFSPDM_CTX*, byte*, word32*);
+typedef int (*wolfSPDM_ParseFn)(WOLFSPDM_CTX*, const byte*, word32);
+
+/* Exchange helper: build -> transcript(tx) -> sendrecv -> transcript(rx) -> parse.
+ * Snapshot transcriptLen on entry and roll back if anything after the
+ * first TranscriptAdd fails - otherwise a transient failure would leave a
+ * partial TX/RX pair committed and corrupt TH1/TH2 on retry. */
+static int wolfSPDM_ExchangeMsg(WOLFSPDM_CTX* ctx,
+    wolfSPDM_BuildFn buildFn, wolfSPDM_ParseFn parseFn,
+    byte* txBuf, word32 txBufSz, byte* rxBuf, word32 rxBufSz)
+{
+    word32 txSz = txBufSz;
+    word32 rxSz = rxBufSz;
+    word32 transcriptSnapshot;
+    int rc;
+
+    rc = buildFn(ctx, txBuf, &txSz);
+    if (rc != WOLFSPDM_SUCCESS) return rc;
+
+    transcriptSnapshot = ctx->transcriptLen;
+
+    rc = wolfSPDM_TranscriptAdd(ctx, txBuf, txSz);
+    if (rc != WOLFSPDM_SUCCESS) goto rollback;
+
+    rc = wolfSPDM_SendReceive(ctx, txBuf, txSz, rxBuf, &rxSz);
+    if (rc != WOLFSPDM_SUCCESS) goto rollback;
+
+    rc = wolfSPDM_TranscriptAdd(ctx, rxBuf, rxSz);
+    if (rc != WOLFSPDM_SUCCESS) goto rollback;
+
+    rc = parseFn(ctx, rxBuf, rxSz);
+    if (rc != WOLFSPDM_SUCCESS) goto rollback;
+
+    return WOLFSPDM_SUCCESS;
+
+rollback:
+    ctx->transcriptLen = transcriptSnapshot;
+    return rc;
+}
+
+/* Adapter: BuildGetVersion doesn't take ctx */
+static int wolfSPDM_BuildGetVersionAdapter(WOLFSPDM_CTX* ctx, byte* buf,
+    word32* bufSz)
+{
+    (void)ctx;
+    return wolfSPDM_BuildGetVersion(buf, bufSz);
+}
 
 int wolfSPDM_GetVersion(WOLFSPDM_CTX* ctx)
 {
     byte txBuf[8];
-    byte rxBuf[32];  /* VERSION: 4 hdr + 2 count + up to 8 entries * 2 = 22 */
-    word32 txSz = sizeof(txBuf);
-    word32 rxSz = sizeof(rxBuf);
-    int rc;
+    byte rxBuf[64];  /* VERSION: 4 hdr + 2 count + up to ~29 entries * 2 */
 
-    rc = wolfSPDM_BuildGetVersion(txBuf, &txSz);
-    if (rc != WOLFSPDM_SUCCESS) {
-        return rc;
-    }
-
-    wolfSPDM_TranscriptAdd(ctx, txBuf, txSz);
-
-    rc = wolfSPDM_SendReceive(ctx, txBuf, txSz, rxBuf, &rxSz);
-    if (rc != WOLFSPDM_SUCCESS) {
-        return rc;
-    }
-
-    wolfSPDM_TranscriptAdd(ctx, rxBuf, rxSz);
-
-    return wolfSPDM_ParseVersion(ctx, rxBuf, rxSz);
+    return wolfSPDM_ExchangeMsg(ctx, wolfSPDM_BuildGetVersionAdapter,
+        wolfSPDM_ParseVersion, txBuf, sizeof(txBuf), rxBuf, sizeof(rxBuf));
 }
 
 int wolfSPDM_GetCapabilities(WOLFSPDM_CTX* ctx)
 {
     byte txBuf[24];   /* GET_CAPABILITIES: 20 bytes */
     byte rxBuf[40];   /* CAPABILITIES: 20-36 bytes */
-    word32 txSz = sizeof(txBuf);
-    word32 rxSz = sizeof(rxBuf);
-    int rc;
 
-    rc = wolfSPDM_BuildGetCapabilities(ctx, txBuf, &txSz);
-    if (rc != WOLFSPDM_SUCCESS) {
-        return rc;
-    }
-
-    wolfSPDM_TranscriptAdd(ctx, txBuf, txSz);
-
-    rc = wolfSPDM_SendReceive(ctx, txBuf, txSz, rxBuf, &rxSz);
-    if (rc != WOLFSPDM_SUCCESS) {
-        return rc;
-    }
-
-    wolfSPDM_TranscriptAdd(ctx, rxBuf, rxSz);
-
-    return wolfSPDM_ParseCapabilities(ctx, rxBuf, rxSz);
+    return wolfSPDM_ExchangeMsg(ctx, wolfSPDM_BuildGetCapabilities,
+        wolfSPDM_ParseCapabilities, txBuf, sizeof(txBuf), rxBuf, sizeof(rxBuf));
 }
 
 int wolfSPDM_NegotiateAlgorithms(WOLFSPDM_CTX* ctx)
 {
     byte txBuf[52];   /* NEGOTIATE_ALGORITHMS: 48 bytes */
     byte rxBuf[80];   /* ALGORITHMS: ~56 bytes with struct tables */
-    word32 txSz = sizeof(txBuf);
-    word32 rxSz = sizeof(rxBuf);
     int rc;
 
-    rc = wolfSPDM_BuildNegotiateAlgorithms(ctx, txBuf, &txSz);
+    rc = wolfSPDM_ExchangeMsg(ctx, wolfSPDM_BuildNegotiateAlgorithms,
+        wolfSPDM_ParseAlgorithms, txBuf, sizeof(txBuf), rxBuf, sizeof(rxBuf));
     if (rc != WOLFSPDM_SUCCESS) {
         return rc;
     }
-
-    wolfSPDM_TranscriptAdd(ctx, txBuf, txSz);
-
-    rc = wolfSPDM_SendReceive(ctx, txBuf, txSz, rxBuf, &rxSz);
-    if (rc != WOLFSPDM_SUCCESS) {
-        return rc;
-    }
-
-    wolfSPDM_TranscriptAdd(ctx, rxBuf, rxSz);
 
     /* Save VCA transcript length (GET_VERSION through ALGORITHMS).
      * Used by measurement signature verification per DSP0274. */
@@ -102,12 +108,19 @@ int wolfSPDM_NegotiateAlgorithms(WOLFSPDM_CTX* ctx)
     /* Initialize M1/M2 running hash for potential CHALLENGE auth.
      * Start with VCA (A portion of the M1/M2 transcript per DSP0274). */
     {
-        int hashRc = wc_InitSha384(&ctx->m1m2Hash);
+        int hashRc;
+        /* Free a stale hash from a prior call so wc_InitSha384 doesn't
+         * leak whatever wolfCrypt allocated previously. */
+        if (ctx->flags.m1m2HashInit) {
+            wc_Sha384Free(&ctx->m1m2Hash);
+            ctx->flags.m1m2HashInit = 0;
+        }
+        hashRc = wc_InitSha384(&ctx->m1m2Hash);
         if (hashRc == 0) {
             hashRc = wc_Sha384Update(&ctx->m1m2Hash, ctx->transcript,
                 ctx->vcaLen);
             if (hashRc == 0) {
-                ctx->m1m2HashInit = 1;
+                ctx->flags.m1m2HashInit = 1;
             }
             else {
                 wc_Sha384Free(&ctx->m1m2Hash);
@@ -117,7 +130,7 @@ int wolfSPDM_NegotiateAlgorithms(WOLFSPDM_CTX* ctx)
     }
 #endif
 
-    return wolfSPDM_ParseAlgorithms(ctx, rxBuf, rxSz);
+    return WOLFSPDM_SUCCESS;
 }
 
 int wolfSPDM_GetDigests(WOLFSPDM_CTX* ctx)
@@ -142,7 +155,7 @@ int wolfSPDM_GetDigests(WOLFSPDM_CTX* ctx)
 
 #ifndef NO_WOLFSPDM_CHALLENGE
     /* Feed GET_DIGESTS request + DIGESTS response to M1/M2 challenge hash */
-    if (ctx->m1m2HashInit) {
+    if (ctx->flags.m1m2HashInit) {
         wc_Sha384Update(&ctx->m1m2Hash, txBuf, txSz);
         wc_Sha384Update(&ctx->m1m2Hash, rxBuf, rxSz);
     }
@@ -177,7 +190,7 @@ int wolfSPDM_GetCertificate(WOLFSPDM_CTX* ctx, int slotId)
 
 #ifndef NO_WOLFSPDM_CHALLENGE
         /* Feed each GET_CERTIFICATE/CERTIFICATE chunk to M1/M2 challenge hash */
-        if (ctx->m1m2HashInit) {
+        if (ctx->flags.m1m2HashInit) {
             wc_Sha384Update(&ctx->m1m2Hash, txBuf, txSz);
             wc_Sha384Update(&ctx->m1m2Hash, rxBuf, rxSz);
         }
@@ -204,14 +217,16 @@ int wolfSPDM_GetCertificate(WOLFSPDM_CTX* ctx, int slotId)
         return rc;
     }
 
-    /* Auto-extract responder public key from leaf cert.
-     * Needed by both measurement signature verification and challenge auth.
-     * Non-fatal: caller can still proceed, but signature ops will fail. */
-    if (!ctx->hasResponderPubKey) {
+    /* Auto-extract responder public key from leaf cert. Required by every
+     * downstream signature check (KEY_EXCHANGE_RSP, MEASUREMENTS, CHALLENGE).
+     * Fail hard: a chain we couldn't bind to a public key gives us no
+     * identity assurance, so refusing the session is the safe default. */
+    if (!ctx->flags.hasResponderPubKey) {
         int keyRc = wolfSPDM_ExtractResponderPubKey(ctx);
         if (keyRc != WOLFSPDM_SUCCESS) {
             wolfSPDM_DebugPrint(ctx,
-                "Warning: Could not extract responder public key (%d)\n", keyRc);
+                "Could not extract responder public key (%d)\n", keyRc);
+            return WOLFSPDM_E_CERT_PARSE;
         }
     }
 
@@ -225,6 +240,20 @@ int wolfSPDM_KeyExchange(WOLFSPDM_CTX* ctx)
     word32 txSz = sizeof(txBuf);
     word32 rxSz = sizeof(rxBuf);
     int rc;
+
+    if (ctx == NULL) {
+        return WOLFSPDM_E_INVALID_ARG;
+    }
+
+    /* Refuse KEY_EXCHANGE without an extracted responder public key:
+     * the responder's ECDSA signature would silently skip otherwise,
+     * leaving only the HMAC ResponderVerifyData (which proves the peer
+     * derived the same DHE secret but not its long-term identity). */
+    if (!ctx->flags.hasResponderPubKey) {
+        wolfSPDM_DebugPrint(ctx,
+            "KEY_EXCHANGE refused: GET_CERTIFICATE must run first\n");
+        return WOLFSPDM_E_BAD_STATE;
+    }
 
     rc = wolfSPDM_BuildKeyExchange(ctx, txBuf, &txSz);
     if (rc != WOLFSPDM_SUCCESS) {
@@ -247,10 +276,14 @@ int wolfSPDM_KeyExchange(WOLFSPDM_CTX* ctx)
 
 int wolfSPDM_Finish(WOLFSPDM_CTX* ctx)
 {
-    byte finishBuf[152];  /* 148 bytes max for mutual auth FINISH */
+    /* Cap stack pressure for embedded callers: 1.4 FINISH_RSP carries a
+     * u16 OpaqueLength in theory, but spec-aligned responders keep it
+     * small. ParseFinishRsp enforces FINISH_RSP_MAX_OPAQUE so we know the
+     * decrypted size up front. */
+    byte finishBuf[64];   /* FINISH: 4 hdr + 2 OpaqueLen (1.4) + 48 HMAC = 54 */
     byte encBuf[256];     /* Encrypted: hdr(14) + padded(160) + tag(16) = 190 max */
-    byte rxBuf[128];      /* Encrypted FINISH_RSP: ~94 bytes max */
-    byte decBuf[64];      /* Decrypted FINISH_RSP: 4 hdr + 48 verify = 52 */
+    byte rxBuf[768];      /* Encrypted FINISH_RSP: hdr + ciphertext + tag */
+    byte decBuf[512];     /* Decrypted: 4 hdr + 2 OpaqueLen + up to ~500B OpaqueData */
     word32 finishSz = sizeof(finishBuf);
     word32 encSz = sizeof(encBuf);
     word32 rxSz = sizeof(rxBuf);
@@ -275,12 +308,15 @@ int wolfSPDM_Finish(WOLFSPDM_CTX* ctx)
         return rc;
     }
 
-    /* Check if response is unencrypted SPDM message
-     * SPDM messages start with version byte (0x10-0x1F).
-     * Encrypted records start with session ID. */
-    if (rxSz >= 2 && rxBuf[0] >= 0x10 && rxBuf[0] <= 0x1F) {
-        /* Unencrypted SPDM message - check for ERROR */
-        if (rxBuf[1] == 0x7F) {  /* SPDM_ERROR */
+    /* Classify the response: an encrypted record's first 4 bytes are the
+     * session ID we just negotiated. Anything else is an unencrypted SPDM
+     * message (typically an SPDM_ERROR from the peer). Compare against the
+     * session id explicitly rather than relying on the version-byte range
+     * heuristic, which can collide if reqSessionId's low byte falls in
+     * 0x10-0x1F. */
+    if (rxSz >= 4 && SPDM_Get32LE(rxBuf) != ctx->sessionId) {
+        if (rxBuf[1] == SPDM_ERROR) {
+            ctx->lastPeerErrorCode = rxBuf[2];
             wolfSPDM_DebugPrint(ctx, "FINISH: peer returned SPDM ERROR 0x%02x\n",
                 rxBuf[2]);
             return WOLFSPDM_E_PEER_ERROR;
@@ -347,8 +383,10 @@ int wolfSPDM_GetMeasurements(WOLFSPDM_CTX* ctx, byte measOperation,
     }
 #endif
 
-    /* Send/receive: use secured exchange if session established, else cleartext */
-    if (ctx->state == WOLFSPDM_STATE_CONNECTED) {
+    /* Send/receive: use secured exchange once FINISH has installed session
+     * keys (STATE_FINISH and beyond - includes both end-of-Connect and
+     * step-by-step callers), else cleartext. */
+    if (ctx->state >= WOLFSPDM_STATE_FINISH) {
         rc = wolfSPDM_SecuredExchange(ctx, txBuf, txSz, rxBuf, &rxSz);
     }
     else {
@@ -357,6 +395,22 @@ int wolfSPDM_GetMeasurements(WOLFSPDM_CTX* ctx, byte measOperation,
     if (rc != WOLFSPDM_SUCCESS) {
         wolfSPDM_DebugPrint(ctx, "GET_MEASUREMENTS exchange failed: %d\n", rc);
         return rc;
+    }
+
+    /* Check for SPDM_ERROR before parsing - SPDM error responses are only
+     * 4 bytes, which would be rejected by ParseMeasurements's minimum-size
+     * check (8 bytes) as WOLFSPDM_E_INVALID_ARG. Catch it here so the
+     * caller sees the more accurate PEER_ERROR. Stash the responder's
+     * error code so callers can retrieve it via wolfSPDM_GetLastPeerError
+     * (e.g. back off on BUSY, abort on UNSUPPORTED_REQUEST). */
+    {
+        int errCode = 0;
+        if (wolfSPDM_CheckError(rxBuf, rxSz, &errCode)) {
+            ctx->lastPeerErrorCode = (byte)errCode;
+            wolfSPDM_DebugPrint(ctx,
+                "GET_MEASUREMENTS: responder error 0x%02x\n", errCode);
+            return WOLFSPDM_E_PEER_ERROR;
+        }
     }
 
     /* Parse the response */
@@ -368,16 +422,17 @@ int wolfSPDM_GetMeasurements(WOLFSPDM_CTX* ctx, byte measOperation,
 #ifndef NO_WOLFSPDM_MEAS_VERIFY
     /* Verify signature if requested and signature was captured */
     if (requestSignature && ctx->measSignatureSize > 0) {
-        if (!ctx->hasResponderPubKey) {
+        if (!ctx->flags.hasResponderPubKey) {
             wolfSPDM_DebugPrint(ctx,
-                "No responder public key — cannot verify signature\n");
+                "No responder public key - cannot verify signature\n");
             return WOLFSPDM_E_MEAS_NOT_VERIFIED;
         }
 
         rc = wolfSPDM_VerifyMeasurementSig(ctx, rxBuf, rxSz,
             ctx->measReqMsg, ctx->measReqMsgSz);
         if (rc != WOLFSPDM_SUCCESS) {
-            return WOLFSPDM_E_MEAS_SIG_FAIL;
+            /* Pass through CRYPTO_FAIL vs MEAS_SIG_FAIL distinction. */
+            return rc;
         }
 
         ctx->state = WOLFSPDM_STATE_MEASURED;
@@ -400,7 +455,7 @@ int wolfSPDM_GetMeasurements(WOLFSPDM_CTX* ctx, byte measOperation,
 
 int wolfSPDM_Challenge(WOLFSPDM_CTX* ctx, int slotId, byte measHashType)
 {
-    byte txBuf[48];   /* CHALLENGE: 36 bytes */
+    byte txBuf[48];   /* CHALLENGE: 36 bytes (1.2) or 44 bytes (1.3+) */
     byte rxBuf[512];  /* CHALLENGE_AUTH: variable, up to ~300+ bytes */
     word32 txSz = sizeof(txBuf);
     word32 rxSz = sizeof(rxBuf);
@@ -416,10 +471,22 @@ int wolfSPDM_Challenge(WOLFSPDM_CTX* ctx, int slotId, byte measHashType)
         return WOLFSPDM_E_BAD_STATE;
     }
 
-    if (!ctx->hasResponderPubKey) {
+    if (!ctx->flags.hasResponderPubKey) {
         wolfSPDM_DebugPrint(ctx,
             "CHALLENGE: No responder public key for verification\n");
         return WOLFSPDM_E_CHALLENGE;
+    }
+
+    /* If trusted CAs are loaded, anchor the responder's leaf cert against
+     * the trust store before CHALLENGE issues. Otherwise the caller is
+     * trusting whatever leaf cert the responder shipped. */
+    if (ctx->flags.hasTrustedCAs) {
+        rc = wolfSPDM_ValidateCertChain(ctx);
+        if (rc != WOLFSPDM_SUCCESS) {
+            wolfSPDM_DebugPrint(ctx,
+                "CHALLENGE: cert chain validation failed (%d)\n", rc);
+            return rc;
+        }
     }
 
     /* Build CHALLENGE request */
@@ -556,8 +623,14 @@ int wolfSPDM_KeyUpdate(WOLFSPDM_CTX* ctx, int updateAll)
             wolfSPDM_DebugPrint(ctx, "KEY_UPDATE: DeriveUpdatedKeys failed: %d\n", rc);
             return rc;
         }
+        /* Per DSP0277 Sec 11: reset only the seqNum for directions whose
+         * keys actually rotated. updateAll=0 (UpdateKey) only rotates the
+         * requester's send-direction; the responder keeps incrementing its
+         * old rspSeqNum until UpdateAll happens. */
         ctx->reqSeqNum = 0;
-        ctx->rspSeqNum = 0;
+        if (updateAll) {
+            ctx->rspSeqNum = 0;
+        }
 
         /* Decrypt ACK with new rsp key */
         rxSz = sizeof(rxBuf);

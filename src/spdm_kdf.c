@@ -20,7 +20,6 @@
  */
 
 #include "spdm_internal.h"
-#include <string.h>
 
 /*
  * SPDM Key Derivation (DSP0277)
@@ -61,9 +60,7 @@ int wolfSPDM_HkdfExpandLabel(byte spdmVersion, const byte* secret, word32 secret
         prefix = SPDM_BIN_CONCAT_PREFIX_12;  /* "spdm1.2 " */
     }
 
-    /* BinConcat format: Length (2 LE) || "spdmX.Y " || Label || Context
-     * Note: SPDM spec references TLS 1.3 (BE), but Nuvoton uses LE.
-     * The ResponderVerifyData match proves LE is correct for this TPM. */
+    /* BinConcat format: Length (2 LE) || "spdmX.Y " || Label || Context */
     info[infoLen++] = (byte)(outSz & 0xFF);
     info[infoLen++] = (byte)((outSz >> 8) & 0xFF);
 
@@ -93,19 +90,43 @@ int wolfSPDM_ComputeVerifyData(const byte* finishedKey, const byte* thHash,
         return WOLFSPDM_E_INVALID_ARG;
     }
 
+    rc = wc_HmacInit(&hmac, NULL, INVALID_DEVID);
+    if (rc != 0) {
+        return WOLFSPDM_E_CRYPTO_FAIL;
+    }
+
     rc = wc_HmacSetKey(&hmac, WC_SHA384, finishedKey, WOLFSPDM_HASH_SIZE);
     if (rc != 0) {
+        wc_HmacFree(&hmac);
         return WOLFSPDM_E_CRYPTO_FAIL;
     }
 
     rc = wc_HmacUpdate(&hmac, thHash, WOLFSPDM_HASH_SIZE);
     if (rc != 0) {
+        wc_HmacFree(&hmac);
         return WOLFSPDM_E_CRYPTO_FAIL;
     }
 
     rc = wc_HmacFinal(&hmac, verifyData);
+    wc_HmacFree(&hmac);
 
     return (rc == 0) ? WOLFSPDM_SUCCESS : WOLFSPDM_E_CRYPTO_FAIL;
+}
+
+/* Derive both data key (AES-256) and IV from a secret using HKDF-Expand */
+static int wolfSPDM_DeriveKeyIvPair(byte spdmVersion, const byte* secret,
+    byte* key, byte* iv)
+{
+    int rc;
+    rc = wolfSPDM_HkdfExpandLabel(spdmVersion, secret,
+        WOLFSPDM_HASH_SIZE, SPDM_LABEL_KEY, NULL, 0,
+        key, WOLFSPDM_AEAD_KEY_SIZE);
+    if (rc != WOLFSPDM_SUCCESS) {
+        return rc;
+    }
+    return wolfSPDM_HkdfExpandLabel(spdmVersion, secret,
+        WOLFSPDM_HASH_SIZE, SPDM_LABEL_IV, NULL, 0,
+        iv, WOLFSPDM_AEAD_IV_SIZE);
 }
 
 int wolfSPDM_DeriveHandshakeKeys(WOLFSPDM_CTX* ctx, const byte* th1Hash)
@@ -157,37 +178,15 @@ int wolfSPDM_DeriveHandshakeKeys(WOLFSPDM_CTX* ctx, const byte* th1Hash)
         return rc;
     }
 
-    /* Data encryption keys (AES-256-GCM) */
-    rc = wolfSPDM_HkdfExpandLabel(ctx->spdmVersion, ctx->reqHsSecret,
-        WOLFSPDM_HASH_SIZE, SPDM_LABEL_KEY, NULL, 0,
-        ctx->reqDataKey, WOLFSPDM_AEAD_KEY_SIZE);
+    /* Data encryption keys + IVs (AES-256-GCM) */
+    rc = wolfSPDM_DeriveKeyIvPair(ctx->spdmVersion, ctx->reqHsSecret,
+        ctx->reqDataKey, ctx->reqDataIv);
     if (rc != WOLFSPDM_SUCCESS) {
         return rc;
     }
 
-    rc = wolfSPDM_HkdfExpandLabel(ctx->spdmVersion, ctx->rspHsSecret,
-        WOLFSPDM_HASH_SIZE, SPDM_LABEL_KEY, NULL, 0,
-        ctx->rspDataKey, WOLFSPDM_AEAD_KEY_SIZE);
-    if (rc != WOLFSPDM_SUCCESS) {
-        return rc;
-    }
-
-    /* IVs */
-    rc = wolfSPDM_HkdfExpandLabel(ctx->spdmVersion, ctx->reqHsSecret,
-        WOLFSPDM_HASH_SIZE, SPDM_LABEL_IV, NULL, 0,
-        ctx->reqDataIv, WOLFSPDM_AEAD_IV_SIZE);
-    if (rc != WOLFSPDM_SUCCESS) {
-        return rc;
-    }
-
-    rc = wolfSPDM_HkdfExpandLabel(ctx->spdmVersion, ctx->rspHsSecret,
-        WOLFSPDM_HASH_SIZE, SPDM_LABEL_IV, NULL, 0,
-        ctx->rspDataIv, WOLFSPDM_AEAD_IV_SIZE);
-    if (rc != WOLFSPDM_SUCCESS) {
-        return rc;
-    }
-
-    return WOLFSPDM_SUCCESS;
+    return wolfSPDM_DeriveKeyIvPair(ctx->spdmVersion, ctx->rspHsSecret,
+        ctx->rspDataKey, ctx->rspDataIv);
 }
 
 int wolfSPDM_DeriveAppDataKeys(WOLFSPDM_CTX* ctx)
@@ -206,74 +205,46 @@ int wolfSPDM_DeriveAppDataKeys(WOLFSPDM_CTX* ctx)
 
     /* Compute TH2_final = Hash(full transcript including FINISH + FINISH_RSP) */
     rc = wolfSPDM_TranscriptHash(ctx, th2Hash);
-    if (rc != WOLFSPDM_SUCCESS) {
-        return rc;
-    }
+    if (rc != WOLFSPDM_SUCCESS) goto exit;
+
     /* salt = HKDF-Expand(HandshakeSecret, BinConcat("derived"), 48)
      * Per DSP0277: "derived" label has NO context (unlike TLS 1.3 which uses Hash(""))
      * libspdm confirms: bin_concat("derived", context=NULL) */
     rc = wolfSPDM_HkdfExpandLabel(ctx->spdmVersion, ctx->handshakeSecret,
         WOLFSPDM_HASH_SIZE, "derived", NULL, 0,
         salt, WOLFSPDM_HASH_SIZE);
-    if (rc != WOLFSPDM_SUCCESS) {
-        return rc;
-    }
+    if (rc != WOLFSPDM_SUCCESS) goto exit;
 
     /* MasterSecret = HKDF-Extract(salt, 0^hashSize) */
     XMEMSET(zeroIkm, 0, sizeof(zeroIkm));
     rc = wc_HKDF_Extract(WC_SHA384, salt, WOLFSPDM_HASH_SIZE,
         zeroIkm, WOLFSPDM_HASH_SIZE, masterSecret);
-    if (rc != 0) {
-        return WOLFSPDM_E_CRYPTO_FAIL;
-    }
+    if (rc != 0) { rc = WOLFSPDM_E_CRYPTO_FAIL; goto exit; }
+
     /* reqAppSecret = HKDF-Expand(MasterSecret, "req app data" || TH2, 48) */
     rc = wolfSPDM_HkdfExpandLabel(ctx->spdmVersion, masterSecret,
         WOLFSPDM_HASH_SIZE, SPDM_LABEL_REQ_DATA, th2Hash, WOLFSPDM_HASH_SIZE,
         reqAppSecret, WOLFSPDM_HASH_SIZE);
-    if (rc != WOLFSPDM_SUCCESS) {
-        return rc;
-    }
+    if (rc != WOLFSPDM_SUCCESS) goto exit;
 
     /* rspAppSecret = HKDF-Expand(MasterSecret, "rsp app data" || TH2, 48) */
     rc = wolfSPDM_HkdfExpandLabel(ctx->spdmVersion, masterSecret,
         WOLFSPDM_HASH_SIZE, SPDM_LABEL_RSP_DATA, th2Hash, WOLFSPDM_HASH_SIZE,
         rspAppSecret, WOLFSPDM_HASH_SIZE);
-    if (rc != WOLFSPDM_SUCCESS) {
-        return rc;
-    }
+    if (rc != WOLFSPDM_SUCCESS) goto exit;
 
     /* Save app secrets for KEY_UPDATE re-derivation */
     XMEMCPY(ctx->reqAppSecret, reqAppSecret, WOLFSPDM_HASH_SIZE);
     XMEMCPY(ctx->rspAppSecret, rspAppSecret, WOLFSPDM_HASH_SIZE);
 
-    /* Derive new encryption keys from app data secrets */
-    rc = wolfSPDM_HkdfExpandLabel(ctx->spdmVersion, reqAppSecret,
-        WOLFSPDM_HASH_SIZE, SPDM_LABEL_KEY, NULL, 0,
-        ctx->reqDataKey, WOLFSPDM_AEAD_KEY_SIZE);
-    if (rc != WOLFSPDM_SUCCESS) {
-        return rc;
-    }
+    /* Derive new encryption keys + IVs from app data secrets */
+    rc = wolfSPDM_DeriveKeyIvPair(ctx->spdmVersion, reqAppSecret,
+        ctx->reqDataKey, ctx->reqDataIv);
+    if (rc != WOLFSPDM_SUCCESS) goto exit;
 
-    rc = wolfSPDM_HkdfExpandLabel(ctx->spdmVersion, rspAppSecret,
-        WOLFSPDM_HASH_SIZE, SPDM_LABEL_KEY, NULL, 0,
-        ctx->rspDataKey, WOLFSPDM_AEAD_KEY_SIZE);
-    if (rc != WOLFSPDM_SUCCESS) {
-        return rc;
-    }
-
-    rc = wolfSPDM_HkdfExpandLabel(ctx->spdmVersion, reqAppSecret,
-        WOLFSPDM_HASH_SIZE, SPDM_LABEL_IV, NULL, 0,
-        ctx->reqDataIv, WOLFSPDM_AEAD_IV_SIZE);
-    if (rc != WOLFSPDM_SUCCESS) {
-        return rc;
-    }
-
-    rc = wolfSPDM_HkdfExpandLabel(ctx->spdmVersion, rspAppSecret,
-        WOLFSPDM_HASH_SIZE, SPDM_LABEL_IV, NULL, 0,
-        ctx->rspDataIv, WOLFSPDM_AEAD_IV_SIZE);
-    if (rc != WOLFSPDM_SUCCESS) {
-        return rc;
-    }
+    rc = wolfSPDM_DeriveKeyIvPair(ctx->spdmVersion, rspAppSecret,
+        ctx->rspDataKey, ctx->rspDataIv);
+    if (rc != WOLFSPDM_SUCCESS) goto exit;
 
     /* Reset sequence numbers for application phase */
     ctx->reqSeqNum = 0;
@@ -281,7 +252,14 @@ int wolfSPDM_DeriveAppDataKeys(WOLFSPDM_CTX* ctx)
 
     wolfSPDM_DebugPrint(ctx, "App data keys derived, seq nums reset to 0\n");
 
-    return WOLFSPDM_SUCCESS;
+exit:
+    /* Wipe transient secret material from the stack. ctx-resident copies
+     * are still live and will be zeroed when wolfSPDM_Free runs. */
+    wc_ForceZero(salt, sizeof(salt));
+    wc_ForceZero(masterSecret, sizeof(masterSecret));
+    wc_ForceZero(reqAppSecret, sizeof(reqAppSecret));
+    wc_ForceZero(rspAppSecret, sizeof(rspAppSecret));
+    return rc;
 }
 
 /* --- Key Update Re-derivation (DSP0277) --- */
@@ -289,6 +267,7 @@ int wolfSPDM_DeriveAppDataKeys(WOLFSPDM_CTX* ctx)
 int wolfSPDM_DeriveUpdatedKeys(WOLFSPDM_CTX* ctx, int updateAll)
 {
     byte newReqAppSecret[WOLFSPDM_HASH_SIZE];
+    byte newRspAppSecret[WOLFSPDM_HASH_SIZE];
     int rc;
 
     if (ctx == NULL) {
@@ -302,55 +281,33 @@ int wolfSPDM_DeriveUpdatedKeys(WOLFSPDM_CTX* ctx, int updateAll)
     rc = wolfSPDM_HkdfExpandLabel(ctx->spdmVersion, ctx->reqAppSecret,
         WOLFSPDM_HASH_SIZE, SPDM_LABEL_UPDATE, NULL, 0,
         newReqAppSecret, WOLFSPDM_HASH_SIZE);
-    if (rc != WOLFSPDM_SUCCESS) {
-        return rc;
-    }
+    if (rc != WOLFSPDM_SUCCESS) goto exit;
 
-    rc = wolfSPDM_HkdfExpandLabel(ctx->spdmVersion, newReqAppSecret,
-        WOLFSPDM_HASH_SIZE, SPDM_LABEL_KEY, NULL, 0,
-        ctx->reqDataKey, WOLFSPDM_AEAD_KEY_SIZE);
-    if (rc != WOLFSPDM_SUCCESS) {
-        return rc;
-    }
-
-    rc = wolfSPDM_HkdfExpandLabel(ctx->spdmVersion, newReqAppSecret,
-        WOLFSPDM_HASH_SIZE, SPDM_LABEL_IV, NULL, 0,
-        ctx->reqDataIv, WOLFSPDM_AEAD_IV_SIZE);
-    if (rc != WOLFSPDM_SUCCESS) {
-        return rc;
-    }
+    rc = wolfSPDM_DeriveKeyIvPair(ctx->spdmVersion, newReqAppSecret,
+        ctx->reqDataKey, ctx->reqDataIv);
+    if (rc != WOLFSPDM_SUCCESS) goto exit;
 
     /* Save new requester secret for future updates */
     XMEMCPY(ctx->reqAppSecret, newReqAppSecret, WOLFSPDM_HASH_SIZE);
 
     /* Optionally update responder key */
     if (updateAll) {
-        byte newRspAppSecret[WOLFSPDM_HASH_SIZE];
-
         rc = wolfSPDM_HkdfExpandLabel(ctx->spdmVersion, ctx->rspAppSecret,
             WOLFSPDM_HASH_SIZE, SPDM_LABEL_UPDATE, NULL, 0,
             newRspAppSecret, WOLFSPDM_HASH_SIZE);
-        if (rc != WOLFSPDM_SUCCESS) {
-            return rc;
-        }
+        if (rc != WOLFSPDM_SUCCESS) goto exit;
 
-        rc = wolfSPDM_HkdfExpandLabel(ctx->spdmVersion, newRspAppSecret,
-            WOLFSPDM_HASH_SIZE, SPDM_LABEL_KEY, NULL, 0,
-            ctx->rspDataKey, WOLFSPDM_AEAD_KEY_SIZE);
-        if (rc != WOLFSPDM_SUCCESS) {
-            return rc;
-        }
-
-        rc = wolfSPDM_HkdfExpandLabel(ctx->spdmVersion, newRspAppSecret,
-            WOLFSPDM_HASH_SIZE, SPDM_LABEL_IV, NULL, 0,
-            ctx->rspDataIv, WOLFSPDM_AEAD_IV_SIZE);
-        if (rc != WOLFSPDM_SUCCESS) {
-            return rc;
-        }
+        rc = wolfSPDM_DeriveKeyIvPair(ctx->spdmVersion, newRspAppSecret,
+            ctx->rspDataKey, ctx->rspDataIv);
+        if (rc != WOLFSPDM_SUCCESS) goto exit;
 
         /* Save new responder secret for future updates */
         XMEMCPY(ctx->rspAppSecret, newRspAppSecret, WOLFSPDM_HASH_SIZE);
     }
 
-    return WOLFSPDM_SUCCESS;
+exit:
+    /* Wipe transient secret material from the stack. */
+    wc_ForceZero(newReqAppSecret, sizeof(newReqAppSecret));
+    wc_ForceZero(newRspAppSecret, sizeof(newRspAppSecret));
+    return rc;
 }

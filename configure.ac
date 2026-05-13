@@ -54,17 +54,6 @@ else
     CFLAGS="$CFLAGS -O2"
 fi
 
-# Nuvoton TPM support (TCG binding + vendor commands)
-AC_ARG_ENABLE([nuvoton],
-    [AS_HELP_STRING([--enable-nuvoton], [Enable Nuvoton TPM support (TCG binding headers, vendor commands)])],
-    [enable_nuvoton=$enableval],
-    [enable_nuvoton=no])
-
-if test "x$enable_nuvoton" = "xyes"; then
-    AC_DEFINE([WOLFSPDM_NUVOTON], [1], [Enable Nuvoton TPM support])
-fi
-AM_CONDITIONAL([BUILD_NUVOTON], [test "x$enable_nuvoton" = "xyes"])
-
 # Dynamic memory allocation (enables wolfSPDM_New/XMALLOC)
 AC_ARG_ENABLE([dynamic-mem],
     [AS_HELP_STRING([--enable-dynamic-mem], [Enable dynamic memory allocation (wolfSPDM_New)])],
@@ -83,7 +72,6 @@ echo ""
 echo "wolfSPDM configuration summary:"
 echo "  Version:     $PACKAGE_VERSION"
 echo "  Debug:       $enable_debug"
-echo "  Nuvoton:     $enable_nuvoton"
 echo "  Dynamic mem: $enable_dynamic_mem"
 echo "  wolfSSL:     ${WOLFSSL_DIR:-system}"
 echo ""

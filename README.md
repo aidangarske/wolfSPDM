@@ -1,56 +1,54 @@
 # wolfSPDM
 
+wolfSPDM is a lightweight C library implementing [SPDM 1.2 / 1.3 / 1.4](https://www.dmtf.org/sites/default/files/standards/documents/DSP0274_1.4.0.pdf) and [Secured Messages over MCTP (DSP0277)](https://www.dmtf.org/sites/default/files/standards/documents/DSP0277_1.2.0.pdf) using [wolfSSL](https://www.wolfssl.com/) as the crypto backend. It is a standalone, requester-only stack designed for embedded use, tested end-to-end against the DMTF [spdm-emu](https://github.com/DMTF/spdm-emu) emulator.
 
-**NOTE: wolfSPDM is being moved directly into wolfTPM https://github.com/wolfSSL/wolfTPM/pull/458 to allow better support for TPM products like the NSING NS350 and Nuvoton NPCT75x. At this point wolfSPDM won't be maintained directly or recognized as a wolfSSL product but it serves as a good reference to how our wolfTPM code works since users can directly try it out without hardware using TCG commands plus spdm-emu** 
+## Main Features
 
+- **Standard SPDM 1.2 / 1.3 / 1.4 requester** per DMTF DSP0274 and DSP0277
+- **Algorithm Set B fixed:** ECDSA P-384, ECDHE P-384, SHA-384, AES-256-GCM, HKDF-SHA384
+- **Zero-malloc by default:** static memory, ~32 KB context, ideal for constrained/embedded environments
+- **Optional `--enable-dynamic-mem`** for heap-allocated contexts on small-stack platforms
+- **Full session lifecycle:** key exchange, finish, encrypted messaging, heartbeat keep-alive, key update
+- **Device attestation:** signed / unsigned `GET_MEASUREMENTS`, sessionless `CHALLENGE_AUTH`, certificate-chain validation against trusted root CAs
+- **Compatible with DMTF spdm-emu** for interoperability testing (18-test matrix across 1.2 / 1.3 / 1.4)
+- **Path to FIPS 140-3** via wolfCrypt FIPS Certificate #4718 (sole crypto dependency)
 
-Lightweight SPDM 1.2+ requester-only stack implementation using wolfSSL/wolfCrypt with no dynamic memory allocations
+## Supported Operations (RFC / DSP0274)
 
-## Overview
+| Operation | DSP0274 | wolfSPDM API |
+|---|---|---|
+| Session establishment | Sec. 10.7 | `wolfSPDM_Connect`, `wolfSPDM_KeyExchange`, `wolfSPDM_Finish` |
+| Encrypted application data | DSP0277 | `wolfSPDM_SecuredExchange`, `wolfSPDM_SendData`, `wolfSPDM_ReceiveData` |
+| Measurements (signed/unsigned) | Sec. 10.11 | `wolfSPDM_GetMeasurements`, `wolfSPDM_GetMeasurementBlock` |
+| Challenge authentication (sessionless) | Sec. 10.8 | `wolfSPDM_Challenge` |
+| Session keep-alive | Sec. 10.10 | `wolfSPDM_Heartbeat` |
+| Session key rotation | Sec. 10.9 | `wolfSPDM_KeyUpdate` |
+| Trust anchor | Sec. 10.6 | `wolfSPDM_SetTrustedCAs` |
 
-- SPDM 1.2 requester implementation
-- Algorithm Set B (FIPS 140-3 Level 3): ECDSA/ECDHE P-384, SHA-384, AES-256-GCM, HKDF-SHA384
-- **Zero-malloc by default** — fully static memory (~32 KB context), ideal for constrained/embedded environments
-- Optional `--enable-dynamic-mem` for heap-allocated contexts (useful for small-stack platforms)
-- Session establishment with full key exchange and encrypted messaging
-- Device attestation via signed/unsigned measurements (GET_MEASUREMENTS)
-- Sessionless attestation via CHALLENGE/CHALLENGE_AUTH with signature verification
-- Certificate chain validation against trusted root CAs
-- Session keep-alive via HEARTBEAT/HEARTBEAT_ACK
-- Session key rotation via KEY_UPDATE/KEY_UPDATE_ACK (DSP0277)
-- Hardware SPDM via wolfTPM + Nuvoton TPM
-- Full transcript tracking for TH1/TH2 computation
-- Compatible with DMTF spdm-emu for interoperability testing
-- **FIPS 140-3** (Certificate #4718) via wolfCrypt FIPS
-- **DO-178C DAL A** via wolfCrypt DO-178 with wolfTPM
+## Prerequisites (wolfSSL)
 
-wolfSPDM supports hardware-backed SPDM through wolfTPM with Nuvoton TPM
-integration, and requires no external dependencies beyond wolfSSL/wolfCrypt.
-
-## Prerequisites
-
-wolfSSL with the required crypto algorithms:
+wolfSPDM requires [wolfSSL](https://www.wolfssl.com/) configured with ECC P-384, SHA-384, AES-GCM, and HKDF:
 
 ```bash
 git clone https://github.com/wolfSSL/wolfssl.git
 cd wolfssl
 ./autogen.sh
-./configure --enable-wolftpm --enable-ecc --enable-sha384 --enable-aesgcm --enable-hkdf --enable-sp
+./configure --enable-wolftpm --enable-ecc --enable-sha384 \
+            --enable-aesgcm --enable-hkdf --enable-sp
 make
 sudo make install
 sudo ldconfig
 ```
 
-The `--enable-sp` flag enables Single Precision math with optimized ECC P-384
-support, which is required for SPDM Algorithm Set B on platforms like ARM64.
-For a broader feature set, `--enable-all` can be used instead.
+`--enable-sp` enables Single Precision math with optimized ECC P-384, required for SPDM Algorithm Set B on ARM64 and other constrained targets. `--enable-all` works as a superset.
 
-## Building
+## Build
 
 ```bash
 ./autogen.sh
 ./configure
 make
+make check
 ```
 
 ### Configure Options
@@ -58,16 +56,12 @@ make
 | Option | Description |
 |---|---|
 | `--enable-debug` | Debug output with `-g -O0` (default: `-O2`) |
-| `--enable-nuvoton` | Enable Nuvoton TPM support |
-| `--enable-dynamic-mem` | Use heap allocation for WOLFSPDM_CTX (default: static) |
+| `--enable-dynamic-mem` | Use heap allocation for `WOLFSPDM_CTX` (default: static) |
 | `--with-wolfssl=PATH` | wolfSSL installation path |
 
 ### Memory Modes
 
-**Static (default):** Zero heap allocation. The caller provides a buffer
-(`WOLFSPDM_CTX_STATIC_SIZE` bytes, ~32 KB) and wolfSPDM operates entirely
-within it. This is ideal for embedded and constrained environments where
-malloc is unavailable or undesirable.
+**Static (default):** zero heap allocation. The caller provides a buffer (`WOLFSPDM_CTX_STATIC_SIZE` bytes, ~32 KB) and wolfSPDM operates entirely within it. Ideal for embedded and constrained environments where malloc is unavailable or undesirable.
 
 ```c
 #include <wolfspdm/spdm.h>
@@ -79,9 +73,7 @@ wolfSPDM_InitStatic(ctx, sizeof(spdmBuf));
 wolfSPDM_Free(ctx);
 ```
 
-**Dynamic (`--enable-dynamic-mem`):** Context is heap-allocated via
-`wolfSPDM_New()`. Useful on platforms with small stacks where a ~32 KB
-local variable is impractical.
+**Dynamic (`--enable-dynamic-mem`):** context is heap-allocated via `wolfSPDM_New()`. Useful on platforms with small stacks where a ~32 KB local variable is impractical.
 
 ```c
 #include <wolfspdm/spdm.h>
@@ -91,80 +83,23 @@ WOLFSPDM_CTX* ctx = wolfSPDM_New();
 wolfSPDM_Free(ctx);  /* frees heap memory */
 ```
 
-## Build Order
+## Quick Start
 
-wolfSPDM depends on wolfSSL, and wolfTPM depends on both. When changing
-wolfSSL configuration, **all three must be rebuilt in order** because
-wolfSPDM's static context size (`WOLFSPDM_CTX_STATIC_SIZE`) depends on
-wolfSSL internal struct sizes (`ecc_key`, `wc_Sha384`, `WC_RNG`, etc.):
-
-```
-wolfSSL (sudo make install) → wolfSPDM (make) → wolfTPM (make)
-```
-
-## Testing with spdm-emu Emulator
+`examples/spdm_demo` is a CLI driver that exercises each SPDM operation against `spdm-emu` over TCP/MCTP:
 
 ```bash
-# Build emulator
-git clone https://github.com/DMTF/spdm-emu.git
+# Build the DMTF spdm-emu emulator
+git clone --recursive https://github.com/DMTF/spdm-emu.git
 cd spdm-emu && mkdir build && cd build
 cmake -DARCH=x64 -DTOOLCHAIN=GCC -DTARGET=Release -DCRYPTO=mbedtls ..
 make copy_sample_key && make
 
-# Build wolfSSL
-cd wolfssl
-./autogen.sh
-./configure --enable-wolftpm --enable-ecc --enable-sha384 --enable-aesgcm --enable-hkdf --enable-sp
-make
-sudo make install
-sudo ldconfig
-
-# Build wolfSPDM
-cd wolfSPDM
-./autogen.sh
-./configure
-make
-
-# Build wolfTPM (point --with-wolfspdm to wolfSPDM source directory)
-cd wolfTPM
-./autogen.sh
-./configure --enable-spdm --enable-swtpm --with-wolfspdm=../wolfSPDM
-make
-
-# Run emulator tests (starts/stops emulator automatically)
-./examples/spdm/spdm_test.sh --emu
+# Run the 18-test integration matrix from this repo
+export SPDM_EMU_PATH=../spdm-emu/build/bin
+./examples/spdm_test.sh
 ```
 
-The test script automatically finds `spdm_responder_emu` in `../spdm-emu/build/bin/`,
-starts it for each test, and runs session establishment, signed measurements,
-unsigned measurements, challenge authentication, heartbeat, and key update.
-
-## Testing with Nuvoton NPCT75x
-
-```bash
-# Build wolfSSL
-cd wolfssl
-./autogen.sh
-./configure --enable-wolftpm --enable-ecc --enable-sha384 --enable-aesgcm --enable-hkdf --enable-sp
-make
-sudo make install
-sudo ldconfig
-
-# Build wolfSPDM with Nuvoton support
-cd wolfSPDM
-./autogen.sh
-./configure --enable-nuvoton
-make
-
-# Build wolfTPM (point --with-wolfspdm to wolfSPDM source directory)
-cd wolfTPM
-./autogen.sh
-./configure --enable-spdm --enable-nuvoton --with-wolfspdm=../wolfSPDM
-make
-
-# Run Nuvoton test suite
-./examples/spdm/spdm_test.sh --nuvoton
-```
+The driver starts/stops `spdm_responder_emu` per test and runs six scenarios — Session, Signed Measurements, Unsigned Measurements, Challenge, Heartbeat, Key Update — across SPDM 1.2, 1.3, and 1.4 (18 tests total).
 
 ## API Reference
 
@@ -177,22 +112,56 @@ make
 | `wolfSPDM_GetCtxSize()` | Return `sizeof(WOLFSPDM_CTX)` at runtime |
 | `wolfSPDM_SetIO()` | Set transport I/O callback |
 | `wolfSPDM_SetDebug()` | Enable/disable debug output |
-| `wolfSPDM_Connect()` | Full SPDM handshake |
+| `wolfSPDM_SetMaxVersion()` | Runtime cap on the highest SPDM version to negotiate |
+| `wolfSPDM_Connect()` | Full SPDM handshake (`GET_VERSION` -> `FINISH`) |
 | `wolfSPDM_IsConnected()` | Check session status |
 | `wolfSPDM_Disconnect()` | End session |
-| `wolfSPDM_EncryptMessage()` | Encrypt outgoing message |
-| `wolfSPDM_DecryptMessage()` | Decrypt incoming message |
-| `wolfSPDM_SecuredExchange()` | Combined send/receive |
-| `wolfSPDM_SetTrustedCAs()` | Load trusted root CA certificates for chain validation |
+| `wolfSPDM_SecuredExchange()` | Combined encrypted send/receive |
+| `wolfSPDM_SendData()` / `wolfSPDM_ReceiveData()` | Application data over an established session |
+| `wolfSPDM_SetTrustedCAs()` | Load the trusted root CA certificate for chain validation |
 | `wolfSPDM_GetMeasurements()` | Retrieve device measurements with optional signature verification |
-| `wolfSPDM_GetMeasurementCount()` | Get number of measurement blocks retrieved |
-| `wolfSPDM_GetMeasurementBlock()` | Access individual measurement block data |
-| `wolfSPDM_Challenge()` | Sessionless device attestation via CHALLENGE/CHALLENGE_AUTH |
-| `wolfSPDM_Heartbeat()` | Session keep-alive (HEARTBEAT/HEARTBEAT_ACK) |
-| `wolfSPDM_KeyUpdate()` | Rotate session encryption keys (KEY_UPDATE/KEY_UPDATE_ACK) |
-| `wolfSPDM_SendData()` | Send application data over established session |
-| `wolfSPDM_ReceiveData()` | Receive application data over established session |
+| `wolfSPDM_GetMeasurementCount()` / `wolfSPDM_GetMeasurementBlock()` | Access individual measurement block data |
+| `wolfSPDM_Challenge()` | Sessionless device attestation via `CHALLENGE` / `CHALLENGE_AUTH` |
+| `wolfSPDM_Heartbeat()` | Session keep-alive (`HEARTBEAT` / `HEARTBEAT_ACK`) |
+| `wolfSPDM_KeyUpdate()` | Rotate session encryption keys (`KEY_UPDATE` / `KEY_UPDATE_ACK`) |
+| `wolfSPDM_GetSessionId()` | Combined req/rsp session ID; available from `KEY_EXCHANGE_RSP` onward so I/O callbacks can distinguish the encrypted `FINISH` record from plaintext handshake messages |
+| `wolfSPDM_GetNegotiatedVersion()` | Negotiated SPDM version (e.g. 0x12, 0x13, 0x14). The old spelling `wolfSPDM_GetVersion_Negotiated` is kept as an exported ABI-compat alias |
+| `wolfSPDM_GetLastPeerError()` | Last `SPDM_ERROR` code received from the responder, for retry/backoff logic |
+
+## CI / Testing
+
+Runs on every push and PR:
+
+- **Build + Test**: Ubuntu 22.04 / 24.04, debug and release, static-mem and `--enable-dynamic-mem`
+- **Multi-compiler**: GCC 11-13 and Clang 14-17 with `-Wall -Wextra -Werror`
+- **Compiler Warnings**: strict `-Wpedantic -Werror -Wconversion -Wshadow`
+- **Static Analysis**: cppcheck and Clang Static Analyzer (`scan-build`)
+- **CodeQL Security**: weekly + per-PR analysis
+- **Memory Check**: Valgrind `--leak-check=full` (static and dynamic mem)
+- **SPDM Emulator Integration**: 18-test matrix (6 scenarios x SPDM 1.2 / 1.3 / 1.4) across ubuntu-22.04 x64, ubuntu-24.04 x64, and ubuntu-24.04-arm aarch64
+- **Skoll review**: wolfSSL deep-review pipeline, pre-merge security and code review
+
+## Relationship to wolfTPM's SPDM
+
+wolfTPM ships its own SPDM implementation in `src/spdm/` for hardware-backed responders (Nuvoton NPCT75x, NSING NS350) with PSK / TCG-binding extensions. **wolfSPDM is a separate implementation** focused on the standard DSP0274 / DSP0277 requester for embedded use with `spdm-emu` and any standards-compliant peer. The two share heritage but solve different problems:
+
+| | wolfSPDM | wolfTPM `src/spdm/` |
+|---|---|---|
+| Role | Requester only | Requester + responder |
+| Scope | Pure standard SPDM 1.2 / 1.3 / 1.4 | Same, plus PSK / TCG / Nuvoton / Nations vendor bindings |
+| Target | Embedded / spdm-emu / generic SPDM peer | TPM hardware (Nuvoton, NS350) |
+| Footprint | ~32 KB context, zero-malloc | Larger; includes TPM stack |
+
+Either library can be used standalone; they aren't link-time compatible.
 
 ## License
 
-GPLv3 — see LICENSE file. Copyright (C) 2006-2025 wolfSSL Inc.
+wolfSPDM is free software licensed under the [GPLv3](https://www.gnu.org/licenses/gpl-3.0.html).
+
+Copyright (C) 2006-2026 wolfSSL Inc.
+
+## Support
+
+> **Note:** wolfSPDM is currently maintained by wolfSSL developers but is not yet classified as an officially supported product. It was designed from the ground up to meet the same quality standards as the rest of the wolfSSL suite with future adoption in mind. We are eager to transition this to a fully supported product as demand grows; if your organization requires official support, has specific feature requirements, or just has general questions or guidance with the product, please reach out.
+
+For commercial licensing, professional support contracts, or to discuss moving wolfSPDM into your production environment, contact [wolfSSL](https://www.wolfssl.com/contact/).

@@ -57,8 +57,7 @@ jobs:
     - name: Build wolfSPDM with ${{ matrix.cc }}
       run: |
         ./autogen.sh
-        CC=${{ matrix.cc }} ./configure --with-wolfssl=$HOME/wolfssl-install \
-                                        --enable-nuvoton
+        CC=${{ matrix.cc }} ./configure --with-wolfssl=$HOME/wolfssl-install
         make -j$(nproc) CFLAGS="-Wall -Wextra -Werror"
 
     - name: Run unit tests

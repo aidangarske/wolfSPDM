@@ -28,6 +28,16 @@
 #endif
 #include <wolfssl/wolfcrypt/settings.h>
 
+/* Visibility: when built as part of wolfTPM, use WOLFTPM_API for export */
+#ifdef BUILDING_WOLFTPM
+    #include <wolftpm/visibility.h>
+    #define WOLFSPDM_API WOLFTPM_API
+#else
+    #ifndef WOLFSPDM_API
+    #define WOLFSPDM_API
+    #endif
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -44,6 +54,7 @@ extern "C" {
 #define SPDM_VERSION_11             0x11    /* SPDM 1.1 */
 #define SPDM_VERSION_12             0x12    /* SPDM 1.2 */
 #define SPDM_VERSION_13             0x13    /* SPDM 1.3 */
+#define SPDM_VERSION_14             0x14    /* SPDM 1.4 */
 
 /* SPDM Message Header Size */
 #define SPDM_HEADER_SIZE            4       /* Version + Code + Param1 + Param2 */
@@ -128,8 +139,8 @@ extern "C" {
 /* Algorithm Set B Fixed Parameters */
 #define WOLFSPDM_HASH_SIZE          48  /* SHA-384 output size */
 #define WOLFSPDM_ECC_KEY_SIZE       48  /* P-384 coordinate size */
-#define WOLFSPDM_ECC_POINT_SIZE     96  /* P-384 X||Y uncompressed */
-#define WOLFSPDM_ECC_SIG_SIZE       96  /* ECDSA P-384 r||s */
+#define WOLFSPDM_ECC_POINT_SIZE     (2 * WOLFSPDM_ECC_KEY_SIZE)  /* P-384 X||Y */
+#define WOLFSPDM_ECC_SIG_SIZE       (2 * WOLFSPDM_ECC_KEY_SIZE)  /* ECDSA r||s */
 #define WOLFSPDM_AEAD_KEY_SIZE      32  /* AES-256 key size */
 #define WOLFSPDM_AEAD_IV_SIZE       12  /* AES-GCM IV size */
 #define WOLFSPDM_AEAD_TAG_SIZE      16  /* AES-GCM tag size */

@@ -8,14 +8,13 @@ on:
 
 jobs:
   build:
-    name: ${{ matrix.os }} / debug=${{ matrix.debug }} / nuvoton=${{ matrix.nuvoton }} / dynamic-mem=${{ matrix.dynamic-mem }}
+    name: ${{ matrix.os }} / debug=${{ matrix.debug }} / dynamic-mem=${{ matrix.dynamic-mem }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, ubuntu-22.04]
         debug: [yes, no]
-        nuvoton: [yes, no]
         dynamic-mem: [yes, no]
 
     steps:
@@ -53,7 +52,6 @@ jobs:
       run: |
         ./configure --with-wolfssl=$HOME/wolfssl-install \
                     ${{ matrix.debug == 'yes' && '--enable-debug' || '' }} \
-                    ${{ matrix.nuvoton == 'yes' && '--enable-nuvoton' || '' }} \
                     ${{ matrix.dynamic-mem == 'yes' && '--enable-dynamic-mem' || '' }}
 
     - name: Build
@@ -68,7 +66,7 @@ jobs:
       if: failure()
       uses: actions/upload-artifact@v4
       with:
-        name: test-logs-${{ matrix.os }}-debug-${{ matrix.debug }}-nuvoton-${{ matrix.nuvoton }}-dynmem-${{ matrix.dynamic-mem }}
+        name: test-logs-${{ matrix.os }}-debug-${{ matrix.debug }}-dynmem-${{ matrix.dynamic-mem }}
         path: |
           test/*.log
           config.log

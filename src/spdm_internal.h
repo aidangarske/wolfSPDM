@@ -47,6 +47,19 @@
 #include <wolfssl/wolfcrypt/memory.h>
 #include <wolfssl/wolfcrypt/asn_public.h>
 
+/* Constant-time byte comparison: returns 0 iff a==b for the full length.
+ * Used for MAC/HMAC equality so we don't leak match position via timing. */
+static WC_INLINE int wolfSPDM_ConstCompare(const byte* a, const byte* b,
+    word32 len)
+{
+    byte diff = 0;
+    word32 i;
+    for (i = 0; i < len; i++) {
+        diff |= (byte)(a[i] ^ b[i]);
+    }
+    return diff;
+}
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -67,6 +80,15 @@ extern "C" {
 #define WOLFSPDM_STATE_MEASURED     10  /* Measurements retrieved */
 #endif
 
+/* SPDM version bounds. Override with -DWOLFSPDM_MIN/MAX_SPDM_VERSION at
+ * compile time. The runtime wolfSPDM_SetMaxVersion clamps against these. */
+#ifndef WOLFSPDM_MAX_SPDM_VERSION
+#define WOLFSPDM_MAX_SPDM_VERSION  SPDM_VERSION_14
+#endif
+#ifndef WOLFSPDM_MIN_SPDM_VERSION
+#define WOLFSPDM_MIN_SPDM_VERSION  SPDM_VERSION_12
+#endif
+
 /* --- Measurement Block Structure --- */
 
 #ifndef NO_WOLFSPDM_MEAS
@@ -85,42 +107,39 @@ struct WOLFSPDM_CTX {
     /* State machine */
     int state;
 
-    /* Configuration flags */
-    int debug;
-    int initialized;
-    int isDynamic;          /* Set by wolfSPDM_New(), checked by wolfSPDM_Free() */
-
-    /* Protocol mode (standard SPDM or Nuvoton) */
-    WOLFSPDM_MODE mode;
+    /* Boolean flags - packed into a small bit-field struct (one 4-byte
+     * unsigned int holding 9 booleans, vs. 9 separate ints = 36 bytes).
+     * Use unsigned int (not byte) since C11 Sec. 6.7.2.1 only guarantees
+     * bit-field support for _Bool, signed int, and unsigned int - this
+     * keeps the struct portable under -Wpedantic -Werror. */
+    struct {
+        unsigned int debug              : 1;
+        unsigned int initialized        : 1;
+        unsigned int isDynamic          : 1;  /* Set by wolfSPDM_New(), checked by Free */
+        unsigned int rngInitialized     : 1;
+        unsigned int ephemeralKeyInit   : 1;
+        unsigned int hasMeasurements    : 1;
+        unsigned int hasResponderPubKey : 1;
+        unsigned int hasTrustedCAs      : 1;
+        unsigned int m1m2HashInit       : 1;
+    } flags;
 
     /* I/O callback */
     WOLFSPDM_IO_CB ioCb;
     void* ioUserCtx;
 
-#ifdef WOLFSPDM_NUVOTON
-    /* Nuvoton-specific: TCG binding fields */
-    word32 connectionHandle;    /* Connection handle (usually 0) */
-    word16 fipsIndicator;       /* FIPS service indicator */
-
-    /* Nuvoton-specific: Host's public key in TPMT_PUBLIC format */
-    byte reqPubKeyTPMT[128];    /* TPMT_PUBLIC serialized (~120 bytes) */
-    word32 reqPubKeyTPMTLen;
-#endif
-
     /* Random number generator */
     WC_RNG rng;
-    int rngInitialized;
 
     /* Negotiated parameters */
+    byte maxVersion;            /* Runtime max version cap (0 = use compile-time default) */
     byte spdmVersion;           /* Negotiated SPDM version */
+    byte lastPeerErrorCode;     /* Last SPDM_ERROR Param1 from responder (0 = none) */
     word32 rspCaps;             /* Responder capabilities */
     word32 reqCaps;             /* Our (requester) capabilities */
-    byte mutAuthRequested;      /* MutAuthRequested from KEY_EXCHANGE_RSP (offset 6) */
-    byte reqSlotId;             /* ReqSlotIDParam from KEY_EXCHANGE_RSP (offset 7) */
 
     /* Ephemeral ECDHE key (generated for KEY_EXCHANGE) */
     ecc_key ephemeralKey;
-    int ephemeralKeyInitialized;
 
     /* ECDH shared secret (P-384 X-coordinate = 48 bytes) */
     byte sharedSecret[WOLFSPDM_ECC_KEY_SIZE];
@@ -162,22 +181,6 @@ struct WOLFSPDM_CTX {
     word16 rspSessionId;        /* Responder's session ID */
     word32 sessionId;           /* Combined: reqSessionId | (rspSessionId << 16) */
 
-    /* Responder's identity public key (for cert-less mode like Nuvoton) */
-    byte rspPubKey[128];  /* TPMT_PUBLIC (120 bytes for P-384) or raw X||Y (96) */
-    word32 rspPubKeyLen;
-    int hasRspPubKey;
-
-    /* Requester's identity key pair (for mutual auth) */
-    byte reqPrivKey[WOLFSPDM_ECC_KEY_SIZE];
-    word32 reqPrivKeyLen;
-    byte reqPubKey[WOLFSPDM_ECC_POINT_SIZE];
-    word32 reqPubKeyLen;
-    int hasReqKeyPair;
-
-    /* Message buffers */
-    byte sendBuf[WOLFSPDM_MAX_MSG_SIZE + WOLFSPDM_AEAD_TAG_SIZE];
-    byte recvBuf[WOLFSPDM_MAX_MSG_SIZE + WOLFSPDM_AEAD_TAG_SIZE];
-
 #ifndef NO_WOLFSPDM_MEAS
     /* Measurement data */
     WOLFSPDM_MEAS_BLOCK measBlocks[WOLFSPDM_MAX_MEAS_BLOCKS];
@@ -186,7 +189,6 @@ struct WOLFSPDM_CTX {
     byte   measSummaryHash[WOLFSPDM_HASH_SIZE];     /* Summary hash from response */
     byte   measSignature[WOLFSPDM_ECC_SIG_SIZE];    /* Captured signature (96 bytes P-384) */
     word32 measSignatureSize;                       /* 0 if unsigned, 96 if signed */
-    int    hasMeasurements;
 
 #ifndef NO_WOLFSPDM_MEAS_VERIFY
     /* Saved GET_MEASUREMENTS request for L1/L2 transcript */
@@ -197,16 +199,15 @@ struct WOLFSPDM_CTX {
 
     /* Responder identity for signature verification (measurements + challenge) */
     ecc_key         responderPubKey;                /* Extracted from cert chain leaf */
-    int             hasResponderPubKey;             /* 1 if key extracted successfully */
 
     /* Certificate chain validation */
     byte   trustedCAs[WOLFSPDM_MAX_CERT_CHAIN];    /* DER-encoded root CAs */
     word32 trustedCAsSz;
-    int    hasTrustedCAs;                           /* 1 if CAs loaded */
 
 #ifndef NO_WOLFSPDM_CHALLENGE
     /* Challenge authentication */
     byte   challengeNonce[32];                      /* Saved nonce from CHALLENGE request */
+    byte   challengeReqCtx[8];                      /* RequesterContext sent (1.3+) */
     byte   challengeMeasHashType;                   /* MeasurementSummaryHashType from req */
 
     /* Running M1/M2 hash for CHALLENGE_AUTH signature verification.
@@ -217,10 +218,9 @@ struct WOLFSPDM_CTX {
      * This hash accumulates A+B during NegAlgo/GetDigests/GetCertificate,
      * then C is added in VerifyChallengeAuthSig. */
     wc_Sha384 m1m2Hash;
-    int       m1m2HashInit;                         /* 1 if m1m2Hash is initialized */
 #endif
 
-    /* Key update state — app secrets for re-derivation */
+    /* Key update state - app secrets for re-derivation */
     byte   reqAppSecret[WOLFSPDM_HASH_SIZE];        /* 48 bytes */
     byte   rspAppSecret[WOLFSPDM_HASH_SIZE];        /* 48 bytes */
 };
@@ -270,22 +270,11 @@ static WC_INLINE word64 SPDM_Get64LE(const byte* buf) {
 
 /* Build IV: BaseIV XOR zero-extended sequence number (DSP0277) */
 static WC_INLINE void wolfSPDM_BuildIV(byte* iv, const byte* baseIv,
-    word64 seqNum, int nuvotonMode)
+    word64 seqNum)
 {
     XMEMCPY(iv, baseIv, WOLFSPDM_AEAD_IV_SIZE);
-#ifdef WOLFSPDM_NUVOTON
-    if (nuvotonMode) {
-        byte seq[8]; int i;
-        SPDM_Set64LE(seq, seqNum);
-        for (i = 0; i < 8; i++) iv[i] ^= seq[i];
-    }
-    else
-#endif
-    {
-        (void)nuvotonMode;
-        iv[0] ^= (byte)(seqNum & 0xFF);
-        iv[1] ^= (byte)((seqNum >> 8) & 0xFF);
-    }
+    iv[0] ^= (byte)(seqNum & 0xFF);
+    iv[1] ^= (byte)((seqNum >> 8) & 0xFF);
 }
 
 /* --- Connect Step Macro --- */
@@ -299,12 +288,26 @@ static WC_INLINE void wolfSPDM_BuildIV(byte* iv, const byte* baseIv,
 /* --- Argument Validation Macros --- */
 
 #define SPDM_CHECK_BUILD_ARGS(ctx, buf, bufSz, minSz) \
-    if ((ctx) == NULL || (buf) == NULL || (bufSz) == NULL || *(bufSz) < (minSz)) \
-        return WOLFSPDM_E_BUFFER_SMALL
+    do { \
+        if ((ctx) == NULL || (buf) == NULL || (bufSz) == NULL) \
+            return WOLFSPDM_E_INVALID_ARG; \
+        if (*(bufSz) < (minSz)) \
+            return WOLFSPDM_E_BUFFER_SMALL; \
+    } while (0)
 
-#define SPDM_CHECK_PARSE_ARGS(ctx, buf, bufSz, minSz) \
-    if ((ctx) == NULL || (buf) == NULL || (bufSz) < (minSz)) \
-        return WOLFSPDM_E_INVALID_ARG
+/* Validate parser inputs. The 4-byte SPDM header (version + code + Param1 +
+ * Param2) must always be present. A response shorter than minSz that turns
+ * out to be SPDM_ERROR is *not* rejected here so the matching
+ * SPDM_CHECK_RESPONSE call can surface it as WOLFSPDM_E_PEER_ERROR. */
+#define SPDM_CHECK_PARSE_OR_ERROR_ARGS(ctx, buf, bufSz, minSz) \
+    do { \
+        if ((ctx) == NULL || (buf) == NULL) \
+            return WOLFSPDM_E_INVALID_ARG; \
+        if ((bufSz) < 4) \
+            return WOLFSPDM_E_INVALID_ARG; \
+        if ((bufSz) < (minSz) && (buf)[1] != SPDM_ERROR) \
+            return WOLFSPDM_E_INVALID_ARG; \
+    } while (0)
 
 /* --- Response Code Check Macro --- */
 
@@ -313,6 +316,7 @@ static WC_INLINE void wolfSPDM_BuildIV(byte* iv, const byte* baseIv,
         if ((buf)[1] != (expected)) { \
             int _ec; \
             if (wolfSPDM_CheckError((buf), (bufSz), &_ec)) { \
+                (ctx)->lastPeerErrorCode = (byte)_ec; \
                 wolfSPDM_DebugPrint((ctx), "SPDM error: 0x%02x\n", _ec); \
                 return WOLFSPDM_E_PEER_ERROR; \
             } \
@@ -359,10 +363,6 @@ int wolfSPDM_ComputeSharedSecret(WOLFSPDM_CTX* ctx,
 
 /* Generate random bytes */
 int wolfSPDM_GetRandom(WOLFSPDM_CTX* ctx, byte* out, word32 outSz);
-
-/* Sign hash with requester's private key (for mutual auth FINISH) */
-int wolfSPDM_SignHash(WOLFSPDM_CTX* ctx, const byte* hash, word32 hashSz,
-    byte* sig, word32* sigSz);
 
 /* --- Internal Function Declarations - Key Derivation --- */
 
@@ -455,7 +455,11 @@ int wolfSPDM_SendReceive(WOLFSPDM_CTX* ctx,
     byte* rxBuf, word32* rxSz);
 
 /* Debug print (if enabled) */
-void wolfSPDM_DebugPrint(WOLFSPDM_CTX* ctx, const char* fmt, ...);
+void wolfSPDM_DebugPrint(WOLFSPDM_CTX* ctx, const char* fmt, ...)
+#ifdef __GNUC__
+    __attribute__((format(printf, 2, 3)))
+#endif
+    ;
 
 /* Hex dump for debugging */
 void wolfSPDM_DebugHex(WOLFSPDM_CTX* ctx, const char* label,

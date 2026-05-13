@@ -22,6 +22,9 @@
 #ifndef WOLFSPDM_ERROR_H
 #define WOLFSPDM_ERROR_H
 
+/* Pull in WOLFSPDM_API visibility macro so this header is self-contained. */
+#include <wolfspdm/spdm_types.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -58,7 +61,7 @@ enum WOLFSPDM_ERROR {
 };
 
 /* Get human-readable error string */
-const char* wolfSPDM_GetErrorString(int error);
+WOLFSPDM_API const char* wolfSPDM_GetErrorString(int error);
 
 #ifdef __cplusplus
 }

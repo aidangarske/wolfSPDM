@@ -54,7 +54,7 @@ jobs:
     - name: Build
       run: |
         ./autogen.sh
-        ./configure --with-wolfssl=$HOME/wolfssl-install --enable-nuvoton
+        ./configure --with-wolfssl=$HOME/wolfssl-install
         make -j$(nproc)
 
     - name: Perform CodeQL Analysis

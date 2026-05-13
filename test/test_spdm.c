@@ -139,7 +139,7 @@ static void tcp_disconnect(void)
     }
 }
 
-/* Static context buffer — sized via wolfSPDM_GetCtxSize() at runtime,
+/* Static context buffer - sized via wolfSPDM_GetCtxSize() at runtime,
  * but we need a compile-time upper bound. 16KB is generous. */
 #define CTX_BUF_SIZE 16384
 static byte g_ctxBuf[CTX_BUF_SIZE];
