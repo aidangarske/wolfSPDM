@@ -203,6 +203,31 @@ WOLFSPDM_API int wolfSPDM_SetIO(WOLFSPDM_CTX* ctx, WOLFSPDM_IO_CB ioCb, void* us
  */
 WOLFSPDM_API int wolfSPDM_SetMaxVersion(WOLFSPDM_CTX* ctx, byte maxVersion);
 
+/**
+ * Pin the requester session ID used during KEY_EXCHANGE.
+ * Default behavior is to draw a random non-reserved value during Connect().
+ * Use this only for deterministic test setups; the reserved values 0x0000
+ * and 0xFFFF are rejected.
+ *
+ * @param ctx           The wolfSPDM context.
+ * @param reqSessionId  Caller-chosen ReqSessionID (1..0xFFFE).
+ * @return WOLFSPDM_SUCCESS or negative error code.
+ */
+WOLFSPDM_API int wolfSPDM_SetRequesterSessionId(WOLFSPDM_CTX* ctx,
+    word16 reqSessionId);
+
+/**
+ * Opt in to operating without a configured trust anchor.
+ * Without this call (and without wolfSPDM_SetTrustedCAs), wolfSPDM_Connect
+ * refuses to complete the handshake against an unauthenticated responder
+ * certificate chain. Intended for emulator / development use only.
+ *
+ * @param ctx   The wolfSPDM context.
+ * @param allow Non-zero to permit handshakes without a trust anchor.
+ * @return WOLFSPDM_SUCCESS or negative error code.
+ */
+WOLFSPDM_API int wolfSPDM_AllowUntrustedCerts(WOLFSPDM_CTX* ctx, int allow);
+
 /* --- Session Establishment --- */
 
 /**

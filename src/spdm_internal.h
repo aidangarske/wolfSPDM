@@ -122,6 +122,7 @@ struct WOLFSPDM_CTX {
         unsigned int hasResponderPubKey : 1;
         unsigned int hasTrustedCAs      : 1;
         unsigned int m1m2HashInit       : 1;
+        unsigned int allowUntrustedCert : 1;  /* Explicit opt-in for missing trust anchor */
     } flags;
 
     /* I/O callback */
@@ -137,6 +138,11 @@ struct WOLFSPDM_CTX {
     byte lastPeerErrorCode;     /* Last SPDM_ERROR Param1 from responder (0 = none) */
     word32 rspCaps;             /* Responder capabilities */
     word32 reqCaps;             /* Our (requester) capabilities */
+    byte   ctExponent;          /* DSP0274 Table 12: CT = 2^CTExponent us */
+    word32 dataTransferSize;    /* SPDM 1.2+ max per-fragment payload */
+    word32 maxSpdmMsgSize;      /* SPDM 1.2+ max full SPDM message size */
+    byte   slotMask;            /* DIGESTS Param1: bit i = slot i populated */
+    byte   currentSlotId;       /* Slot the most recent GET_CERTIFICATE used */
 
     /* Ephemeral ECDHE key (generated for KEY_EXCHANGE) */
     ecc_key ephemeralKey;
@@ -157,7 +163,6 @@ struct WOLFSPDM_CTX {
     /* Computed hashes */
     byte certChainHash[WOLFSPDM_HASH_SIZE]; /* Ct = Hash(cert_chain) */
     byte th1[WOLFSPDM_HASH_SIZE];           /* TH1 after KEY_EXCHANGE_RSP */
-    byte th2[WOLFSPDM_HASH_SIZE];           /* TH2 after FINISH */
 
     /* Derived keys */
     byte handshakeSecret[WOLFSPDM_HASH_SIZE];

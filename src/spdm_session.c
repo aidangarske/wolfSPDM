@@ -173,11 +173,33 @@ int wolfSPDM_GetCertificate(WOLFSPDM_CTX* ctx, int slotId)
     word16 offset = 0;
     word16 portionLen;
     word16 remainderLen = 1;
+    word16 chunkLen;
+    word32 iterations = 0;
+    /* (WOLFSPDM_MAX_CERT_CHAIN / 1) + slack: every progressing chunk delivers
+     * at least 1 byte, so the chain itself bounds the loop. The extra slack
+     * absorbs any responder that returns smaller-than-requested chunks. */
+    const word32 maxIterations = WOLFSPDM_MAX_CERT_CHAIN + 16;
     int rc;
 
+    /* DSP0274 Sec. 10.3: per-fragment Length must not exceed the responder's
+     * negotiated DataTransferSize. Our chunk buffer also caps at 1024. */
+    chunkLen = 1024;
+    if (ctx->dataTransferSize != 0 && ctx->dataTransferSize < chunkLen) {
+        chunkLen = (word16)ctx->dataTransferSize;
+    }
+
+    ctx->currentSlotId = (byte)(slotId & 0x0F);
+
     while (remainderLen > 0) {
+        if (++iterations > maxIterations) {
+            wolfSPDM_DebugPrint(ctx,
+                "GET_CERTIFICATE: iteration cap reached; aborting\n");
+            return WOLFSPDM_E_CERT_FAIL;
+        }
+
         txSz = sizeof(txBuf);
-        rc = wolfSPDM_BuildGetCertificate(ctx, txBuf, &txSz, slotId, offset, 1024);
+        rc = wolfSPDM_BuildGetCertificate(ctx, txBuf, &txSz, slotId, offset,
+            chunkLen);
         if (rc != WOLFSPDM_SUCCESS) {
             return rc;
         }
@@ -199,6 +221,16 @@ int wolfSPDM_GetCertificate(WOLFSPDM_CTX* ctx, int slotId)
         rc = wolfSPDM_ParseCertificate(ctx, rxBuf, rxSz, &portionLen, &remainderLen);
         if (rc != WOLFSPDM_SUCCESS) {
             return rc;
+        }
+
+        /* Forward-progress guard: a responder reporting portionLen=0 with
+         * remainderLen>0 is non-compliant and would spin this loop. Per
+         * DSP0274 each non-final chunk shall deliver some data. */
+        if (portionLen == 0 && remainderLen > 0) {
+            wolfSPDM_DebugPrint(ctx,
+                "GET_CERTIFICATE: responder returned portionLen=0 with "
+                "remainder=%u\n", remainderLen);
+            return WOLFSPDM_E_CERT_FAIL;
         }
 
         offset += portionLen;
@@ -255,12 +287,22 @@ int wolfSPDM_KeyExchange(WOLFSPDM_CTX* ctx)
         return WOLFSPDM_E_BAD_STATE;
     }
 
+    /* DSP0274 Sec. 10.13.5: HANDSHAKE_IN_THE_CLEAR is only entered when
+     * the requester also opts in (KEY_EXCHANGE Param1 bit set). wolfSPDM
+     * never opts in, so the encrypted FINISH_RSP path always applies and
+     * a responder merely advertising HANDSHAKE_IN_THE_CLEAR is fine. The
+     * separate ResponderVerifyData-in-the-clear parsing path is therefore
+     * intentionally unimplemented. */
+
     rc = wolfSPDM_BuildKeyExchange(ctx, txBuf, &txSz);
     if (rc != WOLFSPDM_SUCCESS) {
         return rc;
     }
 
-    wolfSPDM_TranscriptAdd(ctx, txBuf, txSz);
+    rc = wolfSPDM_TranscriptAdd(ctx, txBuf, txSz);
+    if (rc != WOLFSPDM_SUCCESS) {
+        return rc;
+    }
 
     rc = wolfSPDM_SendReceive(ctx, txBuf, txSz, rxBuf, &rxSz);
     if (rc != WOLFSPDM_SUCCESS) {
@@ -292,20 +334,20 @@ int wolfSPDM_Finish(WOLFSPDM_CTX* ctx)
 
     rc = wolfSPDM_BuildFinish(ctx, finishBuf, &finishSz);
     if (rc != WOLFSPDM_SUCCESS) {
-        return rc;
+        goto cleanup;
     }
 
     /* FINISH must be sent encrypted (HANDSHAKE_IN_THE_CLEAR not negotiated) */
     rc = wolfSPDM_EncryptInternal(ctx, finishBuf, finishSz, encBuf, &encSz);
     if (rc != WOLFSPDM_SUCCESS) {
         wolfSPDM_DebugPrint(ctx, "FINISH encrypt failed: %d\n", rc);
-        return rc;
+        goto cleanup;
     }
 
     rc = wolfSPDM_SendReceive(ctx, encBuf, encSz, rxBuf, &rxSz);
     if (rc != WOLFSPDM_SUCCESS) {
         wolfSPDM_DebugPrint(ctx, "FINISH SendReceive failed: %d\n", rc);
-        return rc;
+        goto cleanup;
     }
 
     /* Classify the response: an encrypted record's first 4 bytes are the
@@ -319,31 +361,41 @@ int wolfSPDM_Finish(WOLFSPDM_CTX* ctx)
             ctx->lastPeerErrorCode = rxBuf[2];
             wolfSPDM_DebugPrint(ctx, "FINISH: peer returned SPDM ERROR 0x%02x\n",
                 rxBuf[2]);
-            return WOLFSPDM_E_PEER_ERROR;
+            rc = WOLFSPDM_E_PEER_ERROR;
+            goto cleanup;
         }
         wolfSPDM_DebugPrint(ctx, "FINISH: unexpected response code 0x%02x\n",
             rxBuf[1]);
-        return WOLFSPDM_E_PEER_ERROR;
+        rc = WOLFSPDM_E_PEER_ERROR;
+        goto cleanup;
     }
 
     rc = wolfSPDM_DecryptInternal(ctx, rxBuf, rxSz, decBuf, &decSz);
     if (rc != WOLFSPDM_SUCCESS) {
         wolfSPDM_DebugPrint(ctx, "FINISH decrypt failed: %d\n", rc);
-        return rc;
+        goto cleanup;
     }
 
     rc = wolfSPDM_ParseFinishRsp(ctx, decBuf, decSz);
     if (rc != WOLFSPDM_SUCCESS) {
-        return rc;
+        goto cleanup;
     }
 
     /* Derive application data keys (transition from handshake to app phase) */
     rc = wolfSPDM_DeriveAppDataKeys(ctx);
     if (rc != WOLFSPDM_SUCCESS) {
         wolfSPDM_DebugPrint(ctx, "App data key derivation failed: %d\n", rc);
-        return rc;
+        goto cleanup;
     }
-    return WOLFSPDM_SUCCESS;
+    rc = WOLFSPDM_SUCCESS;
+
+cleanup:
+    /* finishBuf holds the requester VerifyData MAC; decBuf holds decrypted
+     * FINISH_RSP including the responder VerifyData MAC. Wipe both so the
+     * FINISH-stage authentication material does not linger on the stack. */
+    wc_ForceZero(finishBuf, sizeof(finishBuf));
+    wc_ForceZero(decBuf, sizeof(decBuf));
+    return rc;
 }
 
 /* --- Measurements (Device Attestation) --- */
@@ -363,9 +415,15 @@ int wolfSPDM_GetMeasurements(WOLFSPDM_CTX* ctx, byte measOperation,
         return WOLFSPDM_E_INVALID_ARG;
     }
 
-    /* Must be at least past algorithm negotiation */
-    if (ctx->state < WOLFSPDM_STATE_ALGO) {
-        return WOLFSPDM_E_BAD_STATE;
+    /* Refuse to fetch measurements over an unencrypted channel: device
+     * attestation content is sensitive, and the public API is intended for
+     * post-session use. Allow STATE_FINISH (intermediate, but session keys
+     * have been derived), CONNECTED, and MEASURED. */
+    if (ctx->state < WOLFSPDM_STATE_FINISH) {
+        wolfSPDM_DebugPrint(ctx,
+            "GET_MEASUREMENTS: refusing in state %d (need >= FINISH)\n",
+            ctx->state);
+        return WOLFSPDM_E_NOT_CONNECTED;
     }
 
     /* Build GET_MEASUREMENTS request */
@@ -383,15 +441,9 @@ int wolfSPDM_GetMeasurements(WOLFSPDM_CTX* ctx, byte measOperation,
     }
 #endif
 
-    /* Send/receive: use secured exchange once FINISH has installed session
-     * keys (STATE_FINISH and beyond - includes both end-of-Connect and
-     * step-by-step callers), else cleartext. */
-    if (ctx->state >= WOLFSPDM_STATE_FINISH) {
-        rc = wolfSPDM_SecuredExchange(ctx, txBuf, txSz, rxBuf, &rxSz);
-    }
-    else {
-        rc = wolfSPDM_SendReceive(ctx, txBuf, txSz, rxBuf, &rxSz);
-    }
+    /* Send over the secured channel; the state guard above already ensures
+     * session keys are installed. */
+    rc = wolfSPDM_SecuredExchange(ctx, txBuf, txSz, rxBuf, &rxSz);
     if (rc != WOLFSPDM_SUCCESS) {
         wolfSPDM_DebugPrint(ctx, "GET_MEASUREMENTS exchange failed: %d\n", rc);
         return rc;
@@ -442,9 +494,15 @@ int wolfSPDM_GetMeasurements(WOLFSPDM_CTX* ctx, byte measOperation,
     (void)requestSignature;
 #endif /* !NO_WOLFSPDM_MEAS_VERIFY */
 
-    /* No signature requested or verification not compiled in */
+    /* DSP0274: when the caller did not request a signature, treat the
+     * retrieval as success. Reserve WOLFSPDM_E_MEAS_NOT_VERIFIED for the
+     * case where verification was requested but cannot be performed (no
+     * responder public key, or build compiled without verify support). */
     ctx->state = WOLFSPDM_STATE_MEASURED;
-    return WOLFSPDM_E_MEAS_NOT_VERIFIED;
+    if (requestSignature) {
+        return WOLFSPDM_E_MEAS_NOT_VERIFIED;
+    }
+    return WOLFSPDM_SUCCESS;
 }
 
 #endif /* !NO_WOLFSPDM_MEAS */
@@ -601,18 +659,38 @@ int wolfSPDM_KeyUpdate(WOLFSPDM_CTX* ctx, int updateAll)
         byte rawRxBuf[64];
         word32 encSz = sizeof(encBuf);
         word32 rawRxSz = sizeof(rawRxBuf);
+        /* Snapshot the request-side keying material so a failed ACK decrypt
+         * can roll the session back to the pre-update state instead of
+         * leaving requester and responder permanently desynchronised. The
+         * responder side is only mutated when updateAll is set, so the rsp
+         * snapshot is only relevant in that branch. */
+        byte savedReqDataKey[WOLFSPDM_AEAD_KEY_SIZE];
+        byte savedReqDataIv[WOLFSPDM_AEAD_IV_SIZE];
+        byte savedReqAppSecret[WOLFSPDM_HASH_SIZE];
+        byte savedRspDataKey[WOLFSPDM_AEAD_KEY_SIZE];
+        byte savedRspDataIv[WOLFSPDM_AEAD_IV_SIZE];
+        byte savedRspAppSecret[WOLFSPDM_HASH_SIZE];
+        word64 savedReqSeqNum = ctx->reqSeqNum;
+        word64 savedRspSeqNum = ctx->rspSeqNum;
+
+        XMEMCPY(savedReqDataKey, ctx->reqDataKey, sizeof(savedReqDataKey));
+        XMEMCPY(savedReqDataIv, ctx->reqDataIv, sizeof(savedReqDataIv));
+        XMEMCPY(savedReqAppSecret, ctx->reqAppSecret, sizeof(savedReqAppSecret));
+        XMEMCPY(savedRspDataKey, ctx->rspDataKey, sizeof(savedRspDataKey));
+        XMEMCPY(savedRspDataIv, ctx->rspDataIv, sizeof(savedRspDataIv));
+        XMEMCPY(savedRspAppSecret, ctx->rspAppSecret, sizeof(savedRspAppSecret));
 
         /* Encrypt with current req key */
         rc = wolfSPDM_EncryptInternal(ctx, txBuf, txSz, encBuf, &encSz);
         if (rc != WOLFSPDM_SUCCESS) {
-            return rc;
+            goto kupd_cleanup;
         }
 
         /* Send and receive raw (don't decrypt yet) */
         rc = wolfSPDM_SendReceive(ctx, encBuf, encSz, rawRxBuf, &rawRxSz);
         if (rc != WOLFSPDM_SUCCESS) {
             wolfSPDM_DebugPrint(ctx, "KEY_UPDATE: SendReceive failed: %d\n", rc);
-            return rc;
+            goto kupd_cleanup;
         }
 
         /* Step 2: Derive new keys BEFORE decrypting ACK.
@@ -621,7 +699,7 @@ int wolfSPDM_KeyUpdate(WOLFSPDM_CTX* ctx, int updateAll)
         rc = wolfSPDM_DeriveUpdatedKeys(ctx, updateAll);
         if (rc != WOLFSPDM_SUCCESS) {
             wolfSPDM_DebugPrint(ctx, "KEY_UPDATE: DeriveUpdatedKeys failed: %d\n", rc);
-            return rc;
+            goto kupd_cleanup;
         }
         /* Per DSP0277 Sec 11: reset only the seqNum for directions whose
          * keys actually rotated. updateAll=0 (UpdateKey) only rotates the
@@ -632,11 +710,37 @@ int wolfSPDM_KeyUpdate(WOLFSPDM_CTX* ctx, int updateAll)
             ctx->rspSeqNum = 0;
         }
 
-        /* Decrypt ACK with new rsp key */
+        /* Decrypt ACK with new rsp key. If this fails, roll the session
+         * back to the pre-update keys / seqNums - otherwise a single failed
+         * ACK leaves the requester and responder permanently desynchronised
+         * (DoS). */
         rxSz = sizeof(rxBuf);
         rc = wolfSPDM_DecryptInternal(ctx, rawRxBuf, rawRxSz, rxBuf, &rxSz);
         if (rc != WOLFSPDM_SUCCESS) {
-            wolfSPDM_DebugPrint(ctx, "KEY_UPDATE: ACK decrypt failed: %d\n", rc);
+            wolfSPDM_DebugPrint(ctx,
+                "KEY_UPDATE: ACK decrypt failed (%d); rolling keys back\n", rc);
+            XMEMCPY(ctx->reqDataKey, savedReqDataKey, sizeof(savedReqDataKey));
+            XMEMCPY(ctx->reqDataIv, savedReqDataIv, sizeof(savedReqDataIv));
+            XMEMCPY(ctx->reqAppSecret, savedReqAppSecret,
+                sizeof(savedReqAppSecret));
+            if (updateAll) {
+                XMEMCPY(ctx->rspDataKey, savedRspDataKey, sizeof(savedRspDataKey));
+                XMEMCPY(ctx->rspDataIv, savedRspDataIv, sizeof(savedRspDataIv));
+                XMEMCPY(ctx->rspAppSecret, savedRspAppSecret,
+                    sizeof(savedRspAppSecret));
+            }
+            ctx->reqSeqNum = savedReqSeqNum;
+            ctx->rspSeqNum = savedRspSeqNum;
+        }
+
+    kupd_cleanup:
+        wc_ForceZero(savedReqDataKey, sizeof(savedReqDataKey));
+        wc_ForceZero(savedReqDataIv, sizeof(savedReqDataIv));
+        wc_ForceZero(savedReqAppSecret, sizeof(savedReqAppSecret));
+        wc_ForceZero(savedRspDataKey, sizeof(savedRspDataKey));
+        wc_ForceZero(savedRspDataIv, sizeof(savedRspDataIv));
+        wc_ForceZero(savedRspAppSecret, sizeof(savedRspAppSecret));
+        if (rc != WOLFSPDM_SUCCESS) {
             return rc;
         }
     }

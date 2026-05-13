@@ -45,10 +45,21 @@ int wolfSPDM_HkdfExpandLabel(byte spdmVersion, const byte* secret, word32 secret
     byte info[128];
     word32 infoLen = 0;
     const char* prefix;
+    word32 labelLen;
     int rc;
 
     if (secret == NULL || label == NULL || out == NULL) {
         return WOLFSPDM_E_INVALID_ARG;
+    }
+
+    /* Defense-in-depth bound check: 2 (outLen) + 8 (version prefix) +
+     * strlen(label) + contextSz must fit into info[128]. Reject before any
+     * XMEMCPY rather than relying on every caller to stay within bounds. */
+    labelLen = (word32)XSTRLEN(label);
+    if (labelLen > sizeof(info) ||
+        contextSz > sizeof(info) ||
+        2 + SPDM_BIN_CONCAT_PREFIX_LEN + labelLen + contextSz > sizeof(info)) {
+        return WOLFSPDM_E_BUFFER_SMALL;
     }
 
     /* Select version-specific prefix */
@@ -67,8 +78,8 @@ int wolfSPDM_HkdfExpandLabel(byte spdmVersion, const byte* secret, word32 secret
     XMEMCPY(info + infoLen, prefix, SPDM_BIN_CONCAT_PREFIX_LEN);
     infoLen += SPDM_BIN_CONCAT_PREFIX_LEN;
 
-    XMEMCPY(info + infoLen, label, XSTRLEN(label));
-    infoLen += (word32)XSTRLEN(label);
+    XMEMCPY(info + infoLen, label, labelLen);
+    infoLen += labelLen;
 
     if (context != NULL && contextSz > 0) {
         XMEMCPY(info + infoLen, context, contextSz);
@@ -76,6 +87,11 @@ int wolfSPDM_HkdfExpandLabel(byte spdmVersion, const byte* secret, word32 secret
     }
 
     rc = wc_HKDF_Expand(WC_SHA384, secret, secretSz, info, infoLen, out, outSz);
+
+    /* info embeds the context bytes (TH1/TH2 transcript hash for handshake
+     * derivations). Wipe before returning so the assembled label does not
+     * linger on the stack. */
+    wc_ForceZero(info, sizeof(info));
 
     return (rc == 0) ? WOLFSPDM_SUCCESS : WOLFSPDM_E_CRYPTO_FAIL;
 }
@@ -259,6 +275,8 @@ exit:
     wc_ForceZero(masterSecret, sizeof(masterSecret));
     wc_ForceZero(reqAppSecret, sizeof(reqAppSecret));
     wc_ForceZero(rspAppSecret, sizeof(rspAppSecret));
+    wc_ForceZero(th2Hash, sizeof(th2Hash));
+    wc_ForceZero(zeroIkm, sizeof(zeroIkm));
     return rc;
 }
 

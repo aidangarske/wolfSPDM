@@ -273,10 +273,12 @@ static int sanitize_emu_path(const char* emuPath, char* outReal, size_t outSz)
         unsigned char c = (unsigned char)emuPath[i];
         if (c < 0x20 || c == 0x7F) return -1;  /* no control chars */
     }
-    if (strstr(emuPath, "..") != NULL) return -1;  /* no traversal */
 
     /* POSIX realpath(path, resolved): resolved must point to a buffer of
-     * PATH_MAX bytes. (Avoid the GNU realpath(path, NULL) extension.) */
+     * PATH_MAX bytes. (Avoid the GNU realpath(path, NULL) extension.)
+     * realpath() canonicalizes any ../ segments so the resolved path is
+     * the actual filesystem location used by fopen(), which is what
+     * CodeQL's "uncontrolled data in path expression" rule asks for. */
     if (realpath(emuPath, resolved) == NULL) return -1;
     len = strlen(resolved);
     if (len >= outSz) return -1;
@@ -497,6 +499,12 @@ int main(int argc, char* argv[])
     }
 
     wolfSPDM_SetIO(ctx, tcp_io_callback, &g_tcpCtx);
+
+    /* Demo runs against the DMTF spdm-emu, which uses self-signed test
+     * certs. Explicitly opt in to operating without a trust anchor so the
+     * default fail-closed behavior doesn't refuse the handshake. Real
+     * deployments should call wolfSPDM_SetTrustedCAs instead. */
+    wolfSPDM_AllowUntrustedCerts(ctx, 1);
 
     if (maxVer != 0) {
         rc = wolfSPDM_SetMaxVersion(ctx, maxVer);

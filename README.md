@@ -101,33 +101,6 @@ export SPDM_EMU_PATH=../spdm-emu/build/bin
 
 The driver starts/stops `spdm_responder_emu` per test and runs six scenarios — Session, Signed Measurements, Unsigned Measurements, Challenge, Heartbeat, Key Update — across SPDM 1.2, 1.3, and 1.4 (18 tests total).
 
-## API Reference
-
-| Function | Description |
-|---|---|
-| `wolfSPDM_InitStatic()` | Initialize context in caller-provided buffer (static mode) |
-| `wolfSPDM_New()` | Allocate and initialize context on heap (dynamic mode) |
-| `wolfSPDM_Init()` | Initialize a pre-allocated context |
-| `wolfSPDM_Free()` | Free context (releases resources; frees heap only if dynamic) |
-| `wolfSPDM_GetCtxSize()` | Return `sizeof(WOLFSPDM_CTX)` at runtime |
-| `wolfSPDM_SetIO()` | Set transport I/O callback |
-| `wolfSPDM_SetDebug()` | Enable/disable debug output |
-| `wolfSPDM_SetMaxVersion()` | Runtime cap on the highest SPDM version to negotiate |
-| `wolfSPDM_Connect()` | Full SPDM handshake (`GET_VERSION` -> `FINISH`) |
-| `wolfSPDM_IsConnected()` | Check session status |
-| `wolfSPDM_Disconnect()` | End session |
-| `wolfSPDM_SecuredExchange()` | Combined encrypted send/receive |
-| `wolfSPDM_SendData()` / `wolfSPDM_ReceiveData()` | Application data over an established session |
-| `wolfSPDM_SetTrustedCAs()` | Load the trusted root CA certificate for chain validation |
-| `wolfSPDM_GetMeasurements()` | Retrieve device measurements with optional signature verification |
-| `wolfSPDM_GetMeasurementCount()` / `wolfSPDM_GetMeasurementBlock()` | Access individual measurement block data |
-| `wolfSPDM_Challenge()` | Sessionless device attestation via `CHALLENGE` / `CHALLENGE_AUTH` |
-| `wolfSPDM_Heartbeat()` | Session keep-alive (`HEARTBEAT` / `HEARTBEAT_ACK`) |
-| `wolfSPDM_KeyUpdate()` | Rotate session encryption keys (`KEY_UPDATE` / `KEY_UPDATE_ACK`) |
-| `wolfSPDM_GetSessionId()` | Combined req/rsp session ID; available from `KEY_EXCHANGE_RSP` onward so I/O callbacks can distinguish the encrypted `FINISH` record from plaintext handshake messages |
-| `wolfSPDM_GetNegotiatedVersion()` | Negotiated SPDM version (e.g. 0x12, 0x13, 0x14). The old spelling `wolfSPDM_GetVersion_Negotiated` is kept as an exported ABI-compat alias |
-| `wolfSPDM_GetLastPeerError()` | Last `SPDM_ERROR` code received from the responder, for retry/backoff logic |
-
 ## CI / Testing
 
 Runs on every push and PR:

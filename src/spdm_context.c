@@ -25,15 +25,41 @@
 
 /* --- Context Management --- */
 
+/* Wipe every long-lived session-key field. Used by Disconnect, ConnectStandard
+ * reset, and anywhere derived material from a prior session must not leak
+ * into the next. */
+static void wolfSPDM_WipeSessionKeys(WOLFSPDM_CTX* ctx)
+{
+    wc_ForceZero(ctx->sharedSecret, sizeof(ctx->sharedSecret));
+    wc_ForceZero(ctx->handshakeSecret, sizeof(ctx->handshakeSecret));
+    wc_ForceZero(ctx->reqHsSecret, sizeof(ctx->reqHsSecret));
+    wc_ForceZero(ctx->rspHsSecret, sizeof(ctx->rspHsSecret));
+    wc_ForceZero(ctx->reqFinishedKey, sizeof(ctx->reqFinishedKey));
+    wc_ForceZero(ctx->rspFinishedKey, sizeof(ctx->rspFinishedKey));
+    wc_ForceZero(ctx->reqDataKey, sizeof(ctx->reqDataKey));
+    wc_ForceZero(ctx->rspDataKey, sizeof(ctx->rspDataKey));
+    wc_ForceZero(ctx->reqDataIv, sizeof(ctx->reqDataIv));
+    wc_ForceZero(ctx->rspDataIv, sizeof(ctx->rspDataIv));
+    wc_ForceZero(ctx->reqAppSecret, sizeof(ctx->reqAppSecret));
+    wc_ForceZero(ctx->rspAppSecret, sizeof(ctx->rspAppSecret));
+    wc_ForceZero(ctx->th1, sizeof(ctx->th1));
+    ctx->sharedSecretSz = 0;
+}
+
 int wolfSPDM_Init(WOLFSPDM_CTX* ctx)
 {
     int rc;
+    word16 sid;
 
     if (ctx == NULL) {
         return WOLFSPDM_E_INVALID_ARG;
     }
 
-    /* Clean slate - do NOT read any fields before this (could be garbage) */
+    /* Clean slate - do NOT read any fields before this (could be garbage).
+     * Callers must wolfSPDM_Free before re-initializing an existing ctx;
+     * skipping that step leaks the wolfCrypt RNG/ECC/SHA states opened by
+     * the prior Init. We cannot reliably detect that from inside Init
+     * (the flag byte is itself part of the garbage we are about to wipe). */
     XMEMSET(ctx, 0, sizeof(WOLFSPDM_CTX));
     ctx->state = WOLFSPDM_STATE_INIT;
 
@@ -47,8 +73,16 @@ int wolfSPDM_Init(WOLFSPDM_CTX* ctx)
     /* Set default requester capabilities */
     ctx->reqCaps = WOLFSPDM_DEFAULT_REQ_CAPS;
 
-    /* Set default session ID (0x0001 is valid; 0x0000/0xFFFF are reserved) */
-    ctx->reqSessionId = 0x0001;
+    /* Pick a random, non-reserved ReqSessionID (DSP0277 reserves 0x0000 and
+     * 0xFFFF). Callers needing determinism can override via
+     * wolfSPDM_SetRequesterSessionId. */
+    do {
+        if (wc_RNG_GenerateBlock(&ctx->rng, (byte*)&sid, sizeof(sid)) != 0) {
+            sid = 0x0001;  /* RNG failed; fall back to legacy default */
+            break;
+        }
+    } while (sid == 0x0000 || sid == 0xFFFF);
+    ctx->reqSessionId = sid;
 
     ctx->flags.initialized = 1;
     /* isDynamic remains 0 - only wolfSPDM_New sets it */
@@ -204,6 +238,28 @@ byte wolfSPDM_GetVersion_Negotiated(WOLFSPDM_CTX* ctx)
     return wolfSPDM_GetNegotiatedVersion(ctx);
 }
 
+int wolfSPDM_SetRequesterSessionId(WOLFSPDM_CTX* ctx, word16 reqSessionId)
+{
+    if (ctx == NULL) {
+        return WOLFSPDM_E_INVALID_ARG;
+    }
+    /* DSP0277: 0x0000 and 0xFFFF are reserved and shall not appear on wire. */
+    if (reqSessionId == 0x0000 || reqSessionId == 0xFFFF) {
+        return WOLFSPDM_E_INVALID_ARG;
+    }
+    ctx->reqSessionId = reqSessionId;
+    return WOLFSPDM_SUCCESS;
+}
+
+int wolfSPDM_AllowUntrustedCerts(WOLFSPDM_CTX* ctx, int allow)
+{
+    if (ctx == NULL) {
+        return WOLFSPDM_E_INVALID_ARG;
+    }
+    ctx->flags.allowUntrustedCert = allow ? 1 : 0;
+    return WOLFSPDM_SUCCESS;
+}
+
 int wolfSPDM_SetMaxVersion(WOLFSPDM_CTX* ctx, byte maxVersion)
 {
     if (ctx == NULL) {
@@ -277,15 +333,20 @@ static int wolfSPDM_ConnectStandard(WOLFSPDM_CTX* ctx)
         wc_ecc_free(&ctx->responderPubKey);
         ctx->flags.hasResponderPubKey = 0;
     }
+    /* Wipe derived key material from any prior session before starting a
+     * fresh handshake. If this new handshake fails before
+     * wolfSPDM_DeriveHandshakeKeys overwrites the fields, the prior
+     * session's secrets must not linger in the context. */
+    wolfSPDM_WipeSessionKeys(ctx);
     ctx->state = WOLFSPDM_STATE_INIT;
     ctx->sessionId = 0;
-    /* Re-pick a non-reserved reqSessionId; DSP0277 reserves 0x0000 and
-     * 0xFFFF, so use the same default Init picked. */
-    ctx->reqSessionId = 0x0001;
+    /* Preserve caller-set reqSessionId from Init / SetRequesterSessionId. */
     ctx->rspSessionId = 0;
     ctx->reqSeqNum = 0;
     ctx->rspSeqNum = 0;
     ctx->lastPeerErrorCode = 0;
+    ctx->slotMask = 0;
+    ctx->currentSlotId = 0;
 #ifndef NO_WOLFSPDM_MEAS
     /* Drop stale measurement state from a prior connect so reconnect-
      * without-disconnect doesn't surface old blocks. */
@@ -303,15 +364,41 @@ static int wolfSPDM_ConnectStandard(WOLFSPDM_CTX* ctx)
         wolfSPDM_NegotiateAlgorithms(ctx));
     SPDM_CONNECT_STEP(ctx, "Step 4: GET_DIGESTS\n",
         wolfSPDM_GetDigests(ctx));
-    SPDM_CONNECT_STEP(ctx, "Step 5: GET_CERTIFICATE\n",
-        wolfSPDM_GetCertificate(ctx, 0));
+
+    /* DSP0274 Sec. 10.5: pick the lowest-numbered slot the responder said
+     * is populated (DIGESTS Param1 SlotMask). Fall back to slot 0 if the
+     * responder did not report a mask, matching the prior behavior. */
+    {
+        int slot = 0;
+        if (ctx->slotMask != 0) {
+            int i;
+            for (i = 0; i < 8; i++) {
+                if (ctx->slotMask & (1 << i)) {
+                    slot = i;
+                    break;
+                }
+            }
+        }
+        SPDM_CONNECT_STEP(ctx, "Step 5: GET_CERTIFICATE\n",
+            wolfSPDM_GetCertificate(ctx, slot));
+    }
 
     /* Validate certificate chain if trusted CAs are loaded. GetCertificate
      * already guarantees flags.hasResponderPubKey is set on success (returns
-     * an error otherwise), so we only need to gate on the CA-bundle. */
+     * an error otherwise), so we only need to gate on the CA-bundle. Fail
+     * closed by default: refuse to derive session keys against an
+     * unauthenticated responder unless the caller has explicitly opted
+     * into untrusted operation via wolfSPDM_AllowUntrustedCerts. */
     if (ctx->flags.hasTrustedCAs) {
         SPDM_CONNECT_STEP(ctx, "Validating certificate chain\n",
             wolfSPDM_ValidateCertChain(ctx));
+    }
+    else if (!ctx->flags.allowUntrustedCert) {
+        wolfSPDM_DebugPrint(ctx,
+            "Refusing handshake: no trust anchor configured; call "
+            "wolfSPDM_SetTrustedCAs or wolfSPDM_AllowUntrustedCerts\n");
+        ctx->state = WOLFSPDM_STATE_ERROR;
+        return WOLFSPDM_E_CERT_FAIL;
     }
     else {
         wolfSPDM_DebugPrint(ctx,
@@ -349,29 +436,29 @@ int wolfSPDM_Connect(WOLFSPDM_CTX* ctx)
 
 int wolfSPDM_Disconnect(WOLFSPDM_CTX* ctx)
 {
-    int rc;
+    int rc = WOLFSPDM_SUCCESS;
     byte txBuf[8];
     byte rxBuf[16];   /* END_SESSION_ACK: 4 bytes */
     word32 txSz, rxSz;
+    int sendEndSession;
 
     if (ctx == NULL) {
         return WOLFSPDM_E_INVALID_ARG;
     }
 
-    if (ctx->state != WOLFSPDM_STATE_CONNECTED) {
-        return WOLFSPDM_E_NOT_CONNECTED;
-    }
+    /* Only send END_SESSION when we actually have a connected secured
+     * channel. For partial-handshake failures (state below CONNECTED) we
+     * still want to wipe locally derived material on the way out. */
+    sendEndSession = (ctx->state == WOLFSPDM_STATE_CONNECTED);
 
-    /* Build END_SESSION */
-    txSz = sizeof(txBuf);
-    rc = wolfSPDM_BuildEndSession(ctx, txBuf, &txSz);
-    if (rc != WOLFSPDM_SUCCESS) {
-        return rc;
+    if (sendEndSession) {
+        txSz = sizeof(txBuf);
+        rc = wolfSPDM_BuildEndSession(ctx, txBuf, &txSz);
+        if (rc == WOLFSPDM_SUCCESS) {
+            rxSz = sizeof(rxBuf);
+            rc = wolfSPDM_SecuredExchange(ctx, txBuf, txSz, rxBuf, &rxSz);
+        }
     }
-
-    /* Send as secured message */
-    rxSz = sizeof(rxBuf);
-    rc = wolfSPDM_SecuredExchange(ctx, txBuf, txSz, rxBuf, &rxSz);
 
     /* Reset state regardless of result. Free the cached responder public
      * key so the next Connect re-extracts it from the (potentially new)
@@ -381,11 +468,18 @@ int wolfSPDM_Disconnect(WOLFSPDM_CTX* ctx)
         wc_ecc_free(&ctx->responderPubKey);
         ctx->flags.hasResponderPubKey = 0;
     }
+    /* Wipe every long-lived session secret so disconnected contexts cannot
+     * be recovered for the duration before wolfSPDM_Free or a fresh
+     * Connect overwrites them. */
+    wolfSPDM_WipeSessionKeys(ctx);
     ctx->state = WOLFSPDM_STATE_INIT;
     ctx->sessionId = 0;
+    ctx->rspSessionId = 0;
     ctx->reqSeqNum = 0;
     ctx->rspSeqNum = 0;
     ctx->lastPeerErrorCode = 0;
+    ctx->slotMask = 0;
+    ctx->currentSlotId = 0;
 #ifndef NO_WOLFSPDM_MEAS
     /* Drop stale measurement state so callers can't accidentally read
      * blocks from the previous session after a reconnect. */
@@ -394,7 +488,13 @@ int wolfSPDM_Disconnect(WOLFSPDM_CTX* ctx)
     ctx->flags.hasMeasurements = 0;
 #endif
 
-    return (rc == WOLFSPDM_SUCCESS) ? WOLFSPDM_SUCCESS : rc;
+    /* If we never had a session, the caller did not request a real
+     * Disconnect; surface that distinction without masking it as a
+     * successful teardown. */
+    if (!sendEndSession) {
+        return WOLFSPDM_E_NOT_CONNECTED;
+    }
+    return rc;
 }
 
 /* --- I/O Helper --- */

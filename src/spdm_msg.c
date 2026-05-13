@@ -252,9 +252,11 @@ static int wolfSPDM_BuildSignedHash(byte spdmVersion,
     /* Hash M */
     rc = wolfSPDM_Sha384Hash(outputDigest, signMsg, signMsgLen,
         NULL, 0, NULL, 0);
-    if (rc != WOLFSPDM_SUCCESS) return rc;
-
-    return WOLFSPDM_SUCCESS;
+    /* signMsg embeds the inputDigest (a transcript-state hash). Wipe it
+     * before returning so the assembled signing input does not linger on
+     * the stack frame. */
+    wc_ForceZero(signMsg, sizeof(signMsg));
+    return rc;
 }
 
 /* Verify an SPDM ECDSA signature (raw r||s format) against a digest
@@ -327,22 +329,20 @@ int wolfSPDM_BuildFinish(WOLFSPDM_CTX* ctx, byte* buf, word32* bufSz)
     /* Add FINISH header (+ OpaqueLength for 1.4) to transcript for TH2 */
     rc = wolfSPDM_TranscriptAdd(ctx, buf, offset);
     if (rc != WOLFSPDM_SUCCESS) {
-        return rc;
+        goto cleanup;
     }
 
     /* TH2 = Hash(transcript with FINISH header) */
     rc = wolfSPDM_TranscriptHash(ctx, th2Hash);
     if (rc != WOLFSPDM_SUCCESS) {
-        return rc;
+        goto cleanup;
     }
-
-    XMEMCPY(ctx->th2, th2Hash, WOLFSPDM_HASH_SIZE);
 
     /* RequesterVerifyData = HMAC(reqFinishedKey, TH2) where TH2 is the
      * transcript hash through the FINISH header. */
     rc = wolfSPDM_ComputeVerifyData(ctx->reqFinishedKey, th2Hash, verifyData);
     if (rc != WOLFSPDM_SUCCESS) {
-        return rc;
+        goto cleanup;
     }
 
     XMEMCPY(&buf[offset], verifyData, WOLFSPDM_HASH_SIZE);
@@ -351,11 +351,19 @@ int wolfSPDM_BuildFinish(WOLFSPDM_CTX* ctx, byte* buf, word32* bufSz)
     /* Add RequesterVerifyData to transcript for TH2_final (app data key derivation) */
     rc = wolfSPDM_TranscriptAdd(ctx, verifyData, WOLFSPDM_HASH_SIZE);
     if (rc != WOLFSPDM_SUCCESS) {
-        return rc;
+        goto cleanup;
     }
 
     *bufSz = offset;
-    return WOLFSPDM_SUCCESS;
+    rc = WOLFSPDM_SUCCESS;
+
+cleanup:
+    /* th2Hash is the FINISH transcript-state digest; verifyData is the
+     * requester FINISH MAC keyed with reqFinishedKey. Both must not linger
+     * on the stack frame after this call returns. */
+    wc_ForceZero(th2Hash, sizeof(th2Hash));
+    wc_ForceZero(verifyData, sizeof(verifyData));
+    return rc;
 }
 
 int wolfSPDM_BuildEndSession(WOLFSPDM_CTX* ctx, byte* buf, word32* bufSz)
@@ -438,7 +446,19 @@ int wolfSPDM_ParseCapabilities(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufSz)
     SPDM_CHECK_PARSE_OR_ERROR_ARGS(ctx, buf, bufSz, 12);
     SPDM_CHECK_RESPONSE(ctx, buf, bufSz, SPDM_CAPABILITIES, WOLFSPDM_E_CAPS_MISMATCH);
 
+    /* DSP0274 Table 12: CAPABILITIES response layout
+     *   buf[4]:    CTExponent
+     *   buf[8-11]: Flags (rspCaps)
+     *   buf[12-15]: DataTransferSize (SPDM 1.2+)
+     *   buf[16-19]: MaxSPDMmsgSize   (SPDM 1.2+)
+     * The 1.2+ fields are populated when the response carries them; pre-1.2
+     * leaves them as 0 and downstream paths fall back to fixed defaults. */
+    ctx->ctExponent = buf[4];
     ctx->rspCaps = SPDM_Get32LE(&buf[8]);
+    if (ctx->spdmVersion >= SPDM_VERSION_12 && bufSz >= 20) {
+        ctx->dataTransferSize = SPDM_Get32LE(&buf[12]);
+        ctx->maxSpdmMsgSize   = SPDM_Get32LE(&buf[16]);
+    }
     ctx->state = WOLFSPDM_STATE_CAPS;
 
     wolfSPDM_DebugPrint(ctx, "Responder caps: 0x%08x\n", ctx->rspCaps);
@@ -449,9 +469,38 @@ int wolfSPDM_ParseAlgorithms(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufSz)
 {
     word32 baseAsymAlgo;
     word32 baseHashAlgo;
+    word16 declaredLen;
 
     SPDM_CHECK_PARSE_OR_ERROR_ARGS(ctx, buf, bufSz, 36);
     SPDM_CHECK_RESPONSE(ctx, buf, bufSz, SPDM_ALGORITHMS, WOLFSPDM_E_ALGO_MISMATCH);
+
+    /* DSP0274 Table 18: Length (offset 4-5, LE) is the entire response size
+     * including header. Reject responses whose declared length does not
+     * match the received buffer. */
+    declaredLen = SPDM_Get16LE(&buf[4]);
+    if (declaredLen != bufSz) {
+        wolfSPDM_DebugPrint(ctx,
+            "ALGORITHMS: declared Length %u != bufSz %u\n",
+            declaredLen, bufSz);
+        return WOLFSPDM_E_ALGO_MISMATCH;
+    }
+
+    /* DSP0274 Table 18 offsets 6-7: MeasurementSpecificationSel and
+     * OtherParamsSel. We advertise DMTF (0x01) and OpaqueDataFormat1 (0x02)
+     * in NEGOTIATE_ALGORITHMS; reject responders that select a different
+     * bit or zero. */
+    if (buf[6] != 0x01) {
+        wolfSPDM_DebugPrint(ctx,
+            "ALGORITHMS: MeasurementSpecificationSel != DMTF (0x%02x)\n",
+            buf[6]);
+        return WOLFSPDM_E_ALGO_MISMATCH;
+    }
+    if (ctx->spdmVersion >= SPDM_VERSION_12 && buf[7] != 0x02) {
+        wolfSPDM_DebugPrint(ctx,
+            "ALGORITHMS: OtherParamsSel != OpaqueDataFormat1 (0x%02x)\n",
+            buf[7]);
+        return WOLFSPDM_E_ALGO_MISMATCH;
+    }
 
     /* Validate negotiated algorithms match Algorithm Set B.
      * ALGORITHMS response layout (DSP0274 Table 18):
@@ -557,6 +606,10 @@ int wolfSPDM_ParseDigests(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufSz)
     SPDM_CHECK_PARSE_OR_ERROR_ARGS(ctx, buf, bufSz, 4);
     SPDM_CHECK_RESPONSE(ctx, buf, bufSz, SPDM_DIGESTS, WOLFSPDM_E_CERT_FAIL);
 
+    /* DSP0274 Sec. 10.5: Param1 = SlotMask, bit i = slot i populated.
+     * Stash it so GetCertificate can pick a populated slot rather than
+     * blindly requesting slot 0. */
+    ctx->slotMask = buf[2];
     ctx->state = WOLFSPDM_STATE_DIGESTS;
     return WOLFSPDM_SUCCESS;
 }
@@ -564,19 +617,42 @@ int wolfSPDM_ParseDigests(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufSz)
 int wolfSPDM_ParseCertificate(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufSz,
     word16* portionLen, word16* remainderLen)
 {
-    if (ctx == NULL || buf == NULL || bufSz < 8 ||
-        portionLen == NULL || remainderLen == NULL) {
+    int rc;
+
+    if (portionLen == NULL || remainderLen == NULL) {
         return WOLFSPDM_E_INVALID_ARG;
     }
 
+    /* Use the shared parse-or-error helper so a 4-byte SPDM_ERROR is allowed
+     * to fall through to SPDM_CHECK_RESPONSE, which surfaces it as
+     * WOLFSPDM_E_PEER_ERROR and stashes the responder error code. */
+    SPDM_CHECK_PARSE_OR_ERROR_ARGS(ctx, buf, bufSz, 8);
     SPDM_CHECK_RESPONSE(ctx, buf, bufSz, SPDM_CERTIFICATE, WOLFSPDM_E_CERT_FAIL);
+
+    /* DSP0274 Sec. 10.6: Param1[3:0] echoes the SlotID the requester asked
+     * for. A responder returning a different slot's chain could trick us
+     * into validating the wrong identity. */
+    if ((buf[2] & 0x0F) != (ctx->currentSlotId & 0x0F)) {
+        wolfSPDM_DebugPrint(ctx,
+            "CERTIFICATE: SlotID echo mismatch (got %u, expected %u)\n",
+            buf[2] & 0x0F, ctx->currentSlotId & 0x0F);
+        return WOLFSPDM_E_CERT_FAIL;
+    }
 
     *portionLen = SPDM_Get16LE(&buf[4]);
     *remainderLen = SPDM_Get16LE(&buf[6]);
 
-    /* Add certificate chain data (starting at offset 8) */
-    if (*portionLen > 0 && bufSz >= (word32)(8 + *portionLen)) {
-        wolfSPDM_CertChainAdd(ctx, buf + 8, *portionLen);
+    /* Reject truncated chunks - returning success here would let GetCertificate
+     * advance offset by a portionLen that was never actually delivered, and
+     * eventually advance state with a partial chain. */
+    if (*portionLen > 0) {
+        if (bufSz < (word32)(8 + *portionLen)) {
+            return WOLFSPDM_E_BUFFER_SMALL;
+        }
+        rc = wolfSPDM_CertChainAdd(ctx, buf + 8, *portionLen);
+        if (rc != WOLFSPDM_SUCCESS) {
+            return rc;
+        }
     }
 
     if (*remainderLen == 0) {
@@ -642,7 +718,7 @@ int wolfSPDM_ParseKeyExchangeRsp(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufS
     /* Add KEY_EXCHANGE_RSP partial (without sig/verify) to transcript */
     rc = wolfSPDM_TranscriptAdd(ctx, buf, keRspPartialLen);
     if (rc != WOLFSPDM_SUCCESS) {
-        return rc;
+        goto cleanup;
     }
 
     /* Verify responder signature per DSP0274 Sec 14: signature is over
@@ -655,73 +731,87 @@ int wolfSPDM_ParseKeyExchangeRsp(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufS
         byte signedDigest[WOLFSPDM_HASH_SIZE];
 
         rc = wolfSPDM_TranscriptHash(ctx, th1Partial);
-        if (rc != WOLFSPDM_SUCCESS) {
-            return rc;
+        if (rc == WOLFSPDM_SUCCESS) {
+            rc = wolfSPDM_BuildSignedHash(ctx->spdmVersion,
+                sigCtx, (word32)(sizeof(sigCtx) - 1),
+                th1Partial, signedDigest);
         }
-        rc = wolfSPDM_BuildSignedHash(ctx->spdmVersion,
-            sigCtx, (word32)(sizeof(sigCtx) - 1),
-            th1Partial, signedDigest);
-        if (rc != WOLFSPDM_SUCCESS) {
-            return rc;
+        if (rc == WOLFSPDM_SUCCESS) {
+            rc = wolfSPDM_VerifyEccSig(ctx, signature, WOLFSPDM_ECC_SIG_SIZE,
+                signedDigest, WOLFSPDM_HASH_SIZE);
+            if (rc != WOLFSPDM_SUCCESS) {
+                wolfSPDM_DebugPrint(ctx,
+                    "KEY_EXCHANGE_RSP signature verification failed (rc=%d)\n",
+                    rc);
+            }
+            else {
+                wolfSPDM_DebugPrint(ctx,
+                    "KEY_EXCHANGE_RSP signature verified\n");
+            }
         }
-        rc = wolfSPDM_VerifyEccSig(ctx, signature, WOLFSPDM_ECC_SIG_SIZE,
-            signedDigest, WOLFSPDM_HASH_SIZE);
+        /* Wipe partial-TH1 and assembled-digest before they go out of scope.
+         * These are intermediate handshake material; do not let them linger
+         * on the stack frame after this call returns. */
+        wc_ForceZero(th1Partial, sizeof(th1Partial));
+        wc_ForceZero(signedDigest, sizeof(signedDigest));
         if (rc != WOLFSPDM_SUCCESS) {
-            wolfSPDM_DebugPrint(ctx,
-                "KEY_EXCHANGE_RSP signature verification failed (rc=%d)\n", rc);
-            /* Preserve the distinction wolfSPDM_VerifyEccSig draws between
-             * BAD_SIGNATURE (peer-level violation) and CRYPTO_FAIL
-             * (transient wolfCrypt issue). */
-            return rc;
+            goto cleanup;
         }
-        wolfSPDM_DebugPrint(ctx, "KEY_EXCHANGE_RSP signature verified\n");
     }
 
     /* Add signature to transcript (TH1 includes signature) */
     rc = wolfSPDM_TranscriptAdd(ctx, signature, WOLFSPDM_ECC_SIG_SIZE);
     if (rc != WOLFSPDM_SUCCESS) {
-        return rc;
+        goto cleanup;
     }
 
     /* Compute ECDH shared secret */
     rc = wolfSPDM_ComputeSharedSecret(ctx, peerPubKeyX, peerPubKeyY);
     if (rc != WOLFSPDM_SUCCESS) {
-        return rc;
+        goto cleanup;
     }
 
     /* Compute TH1 = Hash(transcript including signature) */
     rc = wolfSPDM_TranscriptHash(ctx, ctx->th1);
     if (rc != WOLFSPDM_SUCCESS) {
-        return rc;
+        goto cleanup;
     }
     /* Derive all session keys */
     rc = wolfSPDM_DeriveHandshakeKeys(ctx, ctx->th1);
     if (rc != WOLFSPDM_SUCCESS) {
-        return rc;
+        goto cleanup;
     }
 
     /* Verify ResponderVerifyData = HMAC(rspFinishedKey, TH1) */
     rc = wolfSPDM_ComputeVerifyData(ctx->rspFinishedKey, ctx->th1, expectedHmac);
     if (rc != WOLFSPDM_SUCCESS) {
-        return rc;
+        goto cleanup;
     }
 
     /* Constant-time compare to avoid leaking HMAC bytes via timing. */
     if (wolfSPDM_ConstCompare(expectedHmac, rspVerifyData,
             WOLFSPDM_HASH_SIZE) != 0) {
         wolfSPDM_DebugPrint(ctx, "ResponderVerifyData MISMATCH\n");
-        return WOLFSPDM_E_BAD_HMAC;
+        rc = WOLFSPDM_E_BAD_HMAC;
+        goto cleanup;
     }
     wolfSPDM_DebugPrint(ctx, "ResponderVerifyData VERIFIED OK\n");
 
     /* Add ResponderVerifyData to transcript (per SPDM spec, always included) */
     rc = wolfSPDM_TranscriptAdd(ctx, rspVerifyData, WOLFSPDM_HASH_SIZE);
     if (rc != WOLFSPDM_SUCCESS) {
-        return rc;
+        goto cleanup;
     }
 
     ctx->state = WOLFSPDM_STATE_KEY_EX;
-    return WOLFSPDM_SUCCESS;
+    rc = WOLFSPDM_SUCCESS;
+
+cleanup:
+    /* expectedHmac is derived from rspFinishedKey; wipe regardless of path. */
+    wc_ForceZero(expectedHmac, sizeof(expectedHmac));
+    wc_ForceZero(peerPubKeyX, sizeof(peerPubKeyX));
+    wc_ForceZero(peerPubKeyY, sizeof(peerPubKeyY));
+    return rc;
 }
 
 int wolfSPDM_ParseFinishRsp(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufSz)
@@ -847,6 +937,15 @@ int wolfSPDM_ParseMeasurements(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufSz)
 
     SPDM_CHECK_PARSE_OR_ERROR_ARGS(ctx, buf, bufSz, 8);
     SPDM_CHECK_RESPONSE(ctx, buf, bufSz, SPDM_MEASUREMENTS, WOLFSPDM_E_MEASUREMENT);
+
+    /* DSP0274: Param2[3:0] echoes the SlotID the requester sent. wolfSPDM
+     * always issues GET_MEASUREMENTS with slot 0, so reject any other
+     * slot value. */
+    if ((buf[3] & 0x0F) != 0) {
+        wolfSPDM_DebugPrint(ctx,
+            "MEASUREMENTS: SlotID echo mismatch (%u)\n", buf[3] & 0x0F);
+        return WOLFSPDM_E_MEASUREMENT;
+    }
 
     numBlocks = buf[4];
     /* MeasurementRecordLength: 3 bytes LE at offset 5..7 */
@@ -1057,14 +1156,16 @@ int wolfSPDM_VerifyMeasurementSig(WOLFSPDM_CTX* ctx,
         ctx->transcript, ctx->vcaLen,
         reqMsg, reqMsgSz,
         rspBuf, sigOffset);
-    if (rc != WOLFSPDM_SUCCESS) return rc;
-
-    return wolfSPDM_VerifySignedDigest(ctx,
-        "responder-measurements signing", 30, digest,
-        rspBuf + sigOffset, WOLFSPDM_ECC_SIG_SIZE,
-        "Measurement signature VERIFIED",
-        "Measurement signature INVALID",
-        WOLFSPDM_E_MEAS_SIG_FAIL);
+    if (rc == WOLFSPDM_SUCCESS) {
+        rc = wolfSPDM_VerifySignedDigest(ctx,
+            "responder-measurements signing", 30, digest,
+            rspBuf + sigOffset, WOLFSPDM_ECC_SIG_SIZE,
+            "Measurement signature VERIFIED",
+            "Measurement signature INVALID",
+            WOLFSPDM_E_MEAS_SIG_FAIL);
+    }
+    wc_ForceZero(digest, sizeof(digest));
+    return rc;
 }
 
 #endif /* !NO_WOLFSPDM_MEAS_VERIFY */
@@ -1318,6 +1419,15 @@ int wolfSPDM_ParseChallengeAuth(WOLFSPDM_CTX* ctx, const byte* buf,
 
     SPDM_CHECK_RESPONSE(ctx, buf, bufSz, SPDM_CHALLENGE_AUTH, WOLFSPDM_E_CHALLENGE);
 
+    /* DSP0274 Sec. 10.8: Param1[3:0] echoes the requested SlotID. wolfSPDM
+     * currently always issues CHALLENGE for slot 0; reject a responder that
+     * authenticates a different slot. */
+    if ((buf[2] & 0x0F) != 0) {
+        wolfSPDM_DebugPrint(ctx,
+            "CHALLENGE_AUTH: SlotID echo mismatch (%u)\n", buf[2] & 0x0F);
+        return WOLFSPDM_E_CHALLENGE;
+    }
+
     offset = 4;
 
     /* CertChainHash (H bytes, 48 for SHA-384) */
@@ -1435,14 +1545,19 @@ int wolfSPDM_VerifyChallengeAuthSig(WOLFSPDM_CTX* ctx,
     /* Finalize M1/M2 hash */
     rc = wc_Sha384Final(&ctx->m1m2Hash, digest);
     ctx->flags.m1m2HashInit = 0; /* Hash consumed regardless */
-    if (rc != 0) return WOLFSPDM_E_CRYPTO_FAIL;
+    if (rc != 0) {
+        wc_ForceZero(digest, sizeof(digest));
+        return WOLFSPDM_E_CRYPTO_FAIL;
+    }
 
-    return wolfSPDM_VerifySignedDigest(ctx,
+    rc = wolfSPDM_VerifySignedDigest(ctx,
         "responder-challenge_auth signing", 32, digest,
         rspBuf + sigOffset, WOLFSPDM_ECC_SIG_SIZE,
         "CHALLENGE_AUTH signature VERIFIED",
         "CHALLENGE_AUTH signature INVALID",
         WOLFSPDM_E_CHALLENGE);
+    wc_ForceZero(digest, sizeof(digest));
+    return rc;
 }
 
 #endif /* !NO_WOLFSPDM_CHALLENGE */

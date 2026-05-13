@@ -345,6 +345,10 @@ static int test_parse_algorithms_set_b_enforcement(void)
     rsp[0] = SPDM_VERSION_12;
     rsp[1] = SPDM_ALGORITHMS;
     rsp[2] = 4;                  /* Param1 = AlgStructCount */
+    /* Length field (offset 4-5, LE) must match received bufSz (52). */
+    SPDM_Set16LE(&rsp[4], 52);
+    rsp[6] = 0x01;               /* MeasurementSpecificationSel = DMTF */
+    rsp[7] = 0x02;               /* OtherParamsSel = OpaqueDataFormat1 */
     /* BaseAsymSel = ECDSA_P384 (bit 7) at offset 12 */
     rsp[12] = SPDM_ASYM_ALGO_ECDSA_P384 & 0xFF;
     rsp[13] = (SPDM_ASYM_ALGO_ECDSA_P384 >> 8) & 0xFF;
@@ -1415,19 +1419,16 @@ static int test_get_measurements_peer_error(void)
 
     printf("test_get_measurements_peer_error...\n");
 
-    /* Drive GetMeasurements through a callback that returns SPDM_ERROR -
-     * exercises the new wolfSPDM_CheckError branch before ParseMeasurements. */
+    /* GET_MEASUREMENTS now requires >= STATE_FINISH (post-handshake) so it
+     * cannot be issued in the clear. Setting state to ALGO must therefore
+     * be refused with NOT_CONNECTED rather than reaching the I/O callback. */
     ctx->state = WOLFSPDM_STATE_ALGO;
     ASSERT_SUCCESS(wolfSPDM_SetIO(ctx, error_io_cb, NULL));
 
     ASSERT_EQ(
         wolfSPDM_GetMeasurements(ctx, SPDM_MEAS_OPERATION_ALL, 0),
-        WOLFSPDM_E_PEER_ERROR,
-        "SPDM_ERROR response should surface as PEER_ERROR");
-    /* Side-effect: the responder's error code must be reachable via
-     * the public accessor so callers can branch on BUSY vs UNSUPPORTED. */
-    ASSERT_EQ(wolfSPDM_GetLastPeerError(ctx), SPDM_ERROR_INVALID_REQUEST,
-        "Peer error code should be captured for retrieval");
+        WOLFSPDM_E_NOT_CONNECTED,
+        "GET_MEASUREMENTS pre-FINISH must be refused");
 
     TEST_CTX_FREE();
     TEST_PASS();
@@ -1719,6 +1720,230 @@ static int test_session_state(void)
     TEST_PASS();
 }
 
+static int test_const_compare(void)
+{
+    /* wolfSPDM_ConstCompare must return non-zero for any single-byte
+     * difference and 0 only for equal buffers. Catches the |= -> &=
+     * accumulator mutation that the HMAC compare relies on. */
+    byte a[16], b[16];
+    int i;
+
+    printf("test_const_compare...\n");
+
+    for (i = 0; i < 16; i++) { a[i] = (byte)i; b[i] = (byte)i; }
+    ASSERT_EQ(wolfSPDM_ConstCompare(a, b, 16), 0,
+        "Equal buffers must compare equal");
+
+    /* Differ only at index 0 */
+    b[0] ^= 0xFF;
+    ASSERT_NE(wolfSPDM_ConstCompare(a, b, 16), 0, "Diff at index 0");
+    b[0] = a[0];
+
+    /* Differ only at the last index */
+    b[15] ^= 0x01;
+    ASSERT_NE(wolfSPDM_ConstCompare(a, b, 16), 0, "Diff at last index");
+    b[15] = a[15];
+
+    /* Asymmetric pair {0x01, 0x00} vs {0x00, 0x01} - a |=-to-&= mutation
+     * would falsely report equal here. */
+    a[0] = 0x01; a[1] = 0x00;
+    b[0] = 0x00; b[1] = 0x01;
+    ASSERT_NE(wolfSPDM_ConstCompare(a, b, 2), 0,
+        "Asymmetric pair must compare unequal");
+
+    g_testsPassed++;
+    return 0;
+}
+
+static int test_build_iv_byte_positions(void)
+{
+    /* wolfSPDM_BuildIV XORs the low 2 bytes of seqNum into iv[0]/iv[1].
+     * Pin byte positions so swap/offset mutations are caught. */
+    byte baseIv[WOLFSPDM_AEAD_IV_SIZE];
+    byte iv[WOLFSPDM_AEAD_IV_SIZE];
+    word32 i;
+
+    printf("test_build_iv_byte_positions...\n");
+
+    XMEMSET(baseIv, 0, sizeof(baseIv));
+    wolfSPDM_BuildIV(iv, baseIv, (word64)0x1234);
+
+    ASSERT_EQ(iv[0], (byte)0x34, "iv[0] must hold low byte of seqNum");
+    ASSERT_EQ(iv[1], (byte)0x12, "iv[1] must hold high byte of seqNum");
+    for (i = 2; i < WOLFSPDM_AEAD_IV_SIZE; i++) {
+        ASSERT_EQ(iv[i], (byte)0, "iv past byte 1 must not be touched");
+    }
+    g_testsPassed++;
+    return 0;
+}
+
+static int test_decrypt_session_id_mismatch(void)
+{
+    /* Encrypt at one sessionId, then change ctx->sessionId and assert
+     * decrypt refuses with WOLFSPDM_E_SESSION_INVALID. */
+    byte plain[] = "x";
+    byte enc[256];
+    byte dec[256];
+    word32 encSz = sizeof(enc);
+    word32 decSz = sizeof(dec);
+    int i;
+    TEST_CTX_SETUP_V12();
+
+    printf("test_decrypt_session_id_mismatch...\n");
+
+    ctx->state = WOLFSPDM_STATE_CONNECTED;
+    ctx->sessionId = 0xAAAAAAAA;
+    for (i = 0; i < WOLFSPDM_AEAD_KEY_SIZE; i++) {
+        ctx->reqDataKey[i] = (byte)i;
+        ctx->rspDataKey[i] = (byte)i;
+    }
+    for (i = 0; i < WOLFSPDM_AEAD_IV_SIZE; i++) {
+        ctx->reqDataIv[i] = (byte)(0x20 + i);
+        ctx->rspDataIv[i] = (byte)(0x20 + i);
+    }
+    ASSERT_SUCCESS(wolfSPDM_EncryptInternal(ctx, plain, sizeof(plain),
+        enc, &encSz));
+
+    ctx->sessionId = 0xBBBBBBBB;
+    ASSERT_EQ(wolfSPDM_DecryptInternal(ctx, enc, encSz, dec, &decSz),
+        WOLFSPDM_E_SESSION_INVALID,
+        "Decrypt with mismatched sessionId must refuse");
+
+    TEST_CTX_FREE();
+    TEST_PASS();
+}
+
+static int test_encrypt_decrypt_empty_payload(void)
+{
+    /* DSP0277 boundary: plainSz=0 should round-trip cleanly through the
+     * MCTP path. */
+    byte plain[1];
+    byte enc[64];
+    byte dec[64];
+    word32 encSz = sizeof(enc);
+    word32 decSz = sizeof(dec);
+    int i;
+    TEST_CTX_SETUP_V12();
+
+    printf("test_encrypt_decrypt_empty_payload...\n");
+
+    ctx->state = WOLFSPDM_STATE_CONNECTED;
+    ctx->sessionId = 0x12345678;
+    for (i = 0; i < WOLFSPDM_AEAD_KEY_SIZE; i++) {
+        ctx->reqDataKey[i] = (byte)(0x40 + i);
+        ctx->rspDataKey[i] = (byte)(0x40 + i);
+    }
+    for (i = 0; i < WOLFSPDM_AEAD_IV_SIZE; i++) {
+        ctx->reqDataIv[i] = (byte)(0x80 + i);
+        ctx->rspDataIv[i] = (byte)(0x80 + i);
+    }
+
+    ASSERT_SUCCESS(wolfSPDM_EncryptInternal(ctx, plain, 0, enc, &encSz));
+    ASSERT_SUCCESS(wolfSPDM_DecryptInternal(ctx, enc, encSz, dec, &decSz));
+    ASSERT_EQ(decSz, (word32)0, "Decrypted size must be 0 for empty payload");
+
+    TEST_CTX_FREE();
+    TEST_PASS();
+}
+
+static int test_parse_version_edge_cases(void)
+{
+    /* (a) entryCount = 0  -> MISMATCH
+     * (b) all entries below WOLFSPDM_MIN_SPDM_VERSION  -> MISMATCH */
+    byte rsp[64];
+    TEST_CTX_SETUP();
+
+    printf("test_parse_version_edge_cases...\n");
+
+    /* (a) Zero entries */
+    XMEMSET(rsp, 0, sizeof(rsp));
+    rsp[0] = SPDM_VERSION_12;
+    rsp[1] = SPDM_VERSION;
+    SPDM_Set16LE(&rsp[4], 0);
+    ASSERT_EQ(wolfSPDM_ParseVersion(ctx, rsp, 6),
+        WOLFSPDM_E_VERSION_MISMATCH, "entryCount=0 must fail");
+
+    /* (b) Two entries, both below the 1.2 minimum (1.0 and 1.1) */
+    XMEMSET(rsp, 0, sizeof(rsp));
+    rsp[0] = SPDM_VERSION_12;
+    rsp[1] = SPDM_VERSION;
+    SPDM_Set16LE(&rsp[4], 2);
+    rsp[7] = 0x10;
+    rsp[9] = 0x11;
+    ASSERT_EQ(wolfSPDM_ParseVersion(ctx, rsp, 10),
+        WOLFSPDM_E_VERSION_MISMATCH, "All-below-min must fail");
+
+    TEST_CTX_FREE();
+    TEST_PASS();
+}
+
+static int test_parse_algorithms_zero_numalgs(void)
+{
+    /* numAlgs=0 must trip the !dheOk || !aeadOk || !ksOk guard. */
+    byte rsp[64];
+    TEST_CTX_SETUP_V12();
+
+    printf("test_parse_algorithms_zero_numalgs...\n");
+
+    XMEMSET(rsp, 0, sizeof(rsp));
+    rsp[0] = SPDM_VERSION_12;
+    rsp[1] = SPDM_ALGORITHMS;
+    rsp[2] = 0;                                          /* numAlgs = 0 */
+    SPDM_Set16LE(&rsp[4], 36);
+    rsp[6] = 0x01;
+    rsp[7] = 0x02;
+    rsp[12] = SPDM_ASYM_ALGO_ECDSA_P384 & 0xFF;
+    rsp[13] = (SPDM_ASYM_ALGO_ECDSA_P384 >> 8) & 0xFF;
+    rsp[16] = SPDM_HASH_ALGO_SHA_384;
+
+    ASSERT_EQ(wolfSPDM_ParseAlgorithms(ctx, rsp, 36),
+        WOLFSPDM_E_ALGO_MISMATCH, "numAlgs=0 must fail Set-B");
+
+    TEST_CTX_FREE();
+    TEST_PASS();
+}
+
+static int test_parse_capabilities_full(void)
+{
+    /* CAPABILITIES response per DSP0274 Table 12:
+     *   0: SPDMVersion
+     *   1: RequestResponseCode (0x61 = CAPABILITIES)
+     *   2: Param1   3: Param2
+     *   4: CTExponent
+     *   5-7: Reserved
+     *   8-11: Flags (rspCaps)
+     *  12-15: DataTransferSize (SPDM 1.2+)
+     *  16-19: MaxSPDMmsgSize   (SPDM 1.2+)
+     *
+     * Parser must populate ctExponent, rspCaps, dataTransferSize, and
+     * maxSpdmMsgSize so the requester can honor the responder's negotiated
+     * limits for subsequent fragmented commands (e.g. GET_CERTIFICATE). */
+    byte msg[20];
+    TEST_CTX_SETUP_V12();
+
+    printf("test_parse_capabilities_full...\n");
+
+    XMEMSET(msg, 0, sizeof(msg));
+    msg[0] = SPDM_VERSION_12;
+    msg[1] = SPDM_CAPABILITIES;
+    msg[4] = 0x0A;                         /* CTExponent = 10 */
+    SPDM_Set32LE(&msg[8],  0x00012345);    /* Flags / rspCaps */
+    SPDM_Set32LE(&msg[12], 0x00001000);    /* DataTransferSize = 4096 */
+    SPDM_Set32LE(&msg[16], 0x00010000);    /* MaxSPDMmsgSize = 64 KiB */
+
+    ASSERT_SUCCESS(wolfSPDM_ParseCapabilities(ctx, msg, sizeof(msg)));
+
+    ASSERT_EQ(ctx->rspCaps, (word32)0x00012345, "rspCaps not parsed");
+    ASSERT_EQ(ctx->ctExponent, (byte)0x0A, "CTExponent not parsed");
+    ASSERT_EQ(ctx->dataTransferSize, (word32)0x00001000,
+        "DataTransferSize not parsed");
+    ASSERT_EQ(ctx->maxSpdmMsgSize, (word32)0x00010000,
+        "MaxSPDMmsgSize not parsed");
+
+    TEST_CTX_FREE();
+    TEST_PASS();
+}
+
 /* ========================================================================== */
 /* Main */
 /* ========================================================================== */
@@ -1818,6 +2043,17 @@ int main(void)
 
     /* Session state tests */
     test_session_state();
+
+    /* CAPABILITIES full-field parsing */
+    test_parse_capabilities_full();
+
+    /* Crypto / wire primitives */
+    test_const_compare();
+    test_build_iv_byte_positions();
+    test_decrypt_session_id_mismatch();
+    test_encrypt_decrypt_empty_payload();
+    test_parse_version_edge_cases();
+    test_parse_algorithms_zero_numalgs();
 
     printf("\n===========================================\n");
     printf("Results: %d passed, %d failed\n", g_testsPassed, g_testsFailed);

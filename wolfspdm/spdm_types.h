@@ -173,8 +173,10 @@ extern "C" {
 #define SPDM_CAP_PUB_KEY_ID_CAP     0x00010000  /* Public key ID */
 
 /* Default requester capabilities for Algorithm Set B session */
-#define WOLFSPDM_DEFAULT_REQ_CAPS   (SPDM_CAP_CERT_CAP | SPDM_CAP_CHAL_CAP | \
-                                     SPDM_CAP_ENCRYPT_CAP | SPDM_CAP_MAC_CAP | \
+/* DSP0274 Table 11: CERT_CAP and CHAL_CAP are responder-only bits.
+ * wolfSPDM is a pure requester and never serves certs or challenges, so
+ * those bits are intentionally absent from the default. */
+#define WOLFSPDM_DEFAULT_REQ_CAPS   (SPDM_CAP_ENCRYPT_CAP | SPDM_CAP_MAC_CAP | \
                                      SPDM_CAP_KEY_EX_CAP | SPDM_CAP_HBEAT_CAP | \
                                      SPDM_CAP_KEY_UPD_CAP)
 

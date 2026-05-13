@@ -51,6 +51,14 @@ int wolfSPDM_EncryptInternal(WOLFSPDM_CTX* ctx,
         return WOLFSPDM_E_INVALID_ARG;
     }
 
+    /* Defense-in-depth: the public wolfSPDM_EncryptMessage wrapper exposes
+     * this function with caller-supplied plainSz. plainBuf holds
+     * AppDataLen(2) + MCTPheader(1) + plaintext, so bound plainSz against
+     * the buffer size minus those 3 prefix bytes. */
+    if (plainSz > sizeof(plainBuf) - 3) {
+        return WOLFSPDM_E_BUFFER_SMALL;
+    }
+
     /* DSP0277 Sec. 11.3: the sequence number shall not wrap. The wire field is
      * 16-bit and wolfSPDM_BuildIV mixes only the low 16 bits into the AES-GCM
      * IV, so a wrap would reuse an IV under the same key. Refuse to encrypt
@@ -191,8 +199,23 @@ int wolfSPDM_DecryptInternal(WOLFSPDM_CTX* ctx,
     if (rspLen < WOLFSPDM_AEAD_TAG_SIZE || encSz < (word32)(hdrSz + rspLen)) {
         return WOLFSPDM_E_BUFFER_SMALL;
     }
+    /* DSP0277: the Length field SHALL equal the exact length of the
+     * encrypted payload. Reject over-received records with extra
+     * unauthenticated trailing bytes. */
+    if (encSz != (word32)(hdrSz + rspLen)) {
+        wolfSPDM_DebugPrint(ctx,
+            "Secured msg: encSz %u != hdrSz+rspLen %u\n",
+            encSz, (unsigned)(hdrSz + rspLen));
+        return WOLFSPDM_E_BUFFER_SMALL;
+    }
 
     cipherLen = (word16)(rspLen - WOLFSPDM_AEAD_TAG_SIZE);
+    /* Defense-in-depth: the decrypted[] stack buffer is the upper bound on
+     * what wc_AesGcmDecrypt may write. Reject anything larger before the
+     * AEAD call so a wire-supplied rspLen cannot overflow the buffer. */
+    if (cipherLen > sizeof(decrypted)) {
+        return WOLFSPDM_E_BUFFER_SMALL;
+    }
     ciphertext = enc + hdrSz;
     tag = enc + hdrSz + cipherLen;
 
@@ -269,6 +292,27 @@ exit:
     return rc;
 }
 
+/* Public wrappers must only operate after FINISH has installed the
+ * application-phase AEAD keys. Allow STATE_FINISH (DeriveAppDataKeys has
+ * just run) through STATE_MEASURED, but reject STATE_KEY_EX (handshake
+ * keys still in place) and below. */
+static int wolfSPDM_AppPhaseStateOk(const WOLFSPDM_CTX* ctx)
+{
+    if (ctx == NULL) {
+        return 0;
+    }
+    if (ctx->state == WOLFSPDM_STATE_FINISH ||
+        ctx->state == WOLFSPDM_STATE_CONNECTED) {
+        return 1;
+    }
+#ifndef NO_WOLFSPDM_MEAS
+    if (ctx->state == WOLFSPDM_STATE_MEASURED) {
+        return 1;
+    }
+#endif
+    return 0;
+}
+
 #ifndef WOLFSPDM_LEAN
 int wolfSPDM_EncryptMessage(WOLFSPDM_CTX* ctx,
     const byte* plain, word32 plainSz,
@@ -278,9 +322,7 @@ int wolfSPDM_EncryptMessage(WOLFSPDM_CTX* ctx,
         return WOLFSPDM_E_INVALID_ARG;
     }
 
-    if (ctx->state != WOLFSPDM_STATE_CONNECTED &&
-        ctx->state != WOLFSPDM_STATE_KEY_EX &&
-        ctx->state != WOLFSPDM_STATE_FINISH) {
+    if (!wolfSPDM_AppPhaseStateOk(ctx)) {
         return WOLFSPDM_E_NOT_CONNECTED;
     }
 
@@ -295,9 +337,7 @@ int wolfSPDM_DecryptMessage(WOLFSPDM_CTX* ctx,
         return WOLFSPDM_E_INVALID_ARG;
     }
 
-    if (ctx->state != WOLFSPDM_STATE_CONNECTED &&
-        ctx->state != WOLFSPDM_STATE_KEY_EX &&
-        ctx->state != WOLFSPDM_STATE_FINISH) {
+    if (!wolfSPDM_AppPhaseStateOk(ctx)) {
         return WOLFSPDM_E_NOT_CONNECTED;
     }
 
@@ -317,6 +357,12 @@ int wolfSPDM_SecuredExchange(WOLFSPDM_CTX* ctx,
 
     if (ctx == NULL || cmdPlain == NULL || rspPlain == NULL || rspSz == NULL) {
         return WOLFSPDM_E_INVALID_ARG;
+    }
+
+    /* Match the EncryptMessage/DecryptMessage state guard so callers can't
+     * encrypt application data with handshake or zeroed keys. */
+    if (!wolfSPDM_AppPhaseStateOk(ctx)) {
+        return WOLFSPDM_E_NOT_CONNECTED;
     }
 
     rc = wolfSPDM_EncryptInternal(ctx, cmdPlain, cmdSz, encBuf, &encSz);

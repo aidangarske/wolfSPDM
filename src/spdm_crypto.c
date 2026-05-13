@@ -184,13 +184,29 @@ int wolfSPDM_ComputeSharedSecret(WOLFSPDM_CTX* ctx,
         goto cleanup;
     }
 
-    /* Zero-pad if needed (P-384 should always return 48 bytes, but just in case) */
-    rc = wolfSPDM_LeftPadToSize(ctx->sharedSecret, ctx->sharedSecretSz,
-        WOLFSPDM_ECC_KEY_SIZE);
-    if (rc != WOLFSPDM_SUCCESS) {
-        goto cleanup;
+    /* Zero-pad the X-coordinate to the full curve size in a way that does
+     * not branch on the secret's leading-zero count: always touch every
+     * byte of a scratch buffer so the memory-access pattern is independent
+     * of how many high-order zero bytes wolfCrypt stripped. The underlying
+     * wc_ecc_shared_secret length is itself a function of the secret X
+     * coordinate; this routine just keeps the wolfSPDM-level work uniform. */
+    {
+        byte scratch[WOLFSPDM_ECC_KEY_SIZE];
+        word32 retSz = ctx->sharedSecretSz;
+        word32 pad;
+        word32 i;
+        if (retSz > WOLFSPDM_ECC_KEY_SIZE) {
+            rc = WOLFSPDM_E_CRYPTO_FAIL;
+            goto cleanup;
+        }
+        pad = WOLFSPDM_ECC_KEY_SIZE - retSz;
+        for (i = 0; i < WOLFSPDM_ECC_KEY_SIZE; i++) {
+            scratch[i] = (i < pad) ? (byte)0 : ctx->sharedSecret[i - pad];
+        }
+        XMEMCPY(ctx->sharedSecret, scratch, WOLFSPDM_ECC_KEY_SIZE);
+        wc_ForceZero(scratch, sizeof(scratch));
+        ctx->sharedSecretSz = WOLFSPDM_ECC_KEY_SIZE;
     }
-    ctx->sharedSecretSz = WOLFSPDM_ECC_KEY_SIZE;
 
     wolfSPDM_DebugPrint(ctx, "ECDH shared secret computed (%u bytes)\n",
         ctx->sharedSecretSz);
