@@ -60,6 +60,44 @@ static int is_secured_spdm(WOLFSPDM_CTX* ctx, const byte* buf, word32 sz)
     return b0 == sid;
 }
 
+/* send_all / recv_all: loop until the full count is transferred or a hard
+ * error occurs. TCP send/recv may return short on a busy / interrupted
+ * socket; MSG_WAITALL handles most recv cases but is advisory only, and
+ * send() must always be looped. */
+static int send_all(int fd, const void* buf, size_t len)
+{
+    const byte* p = (const byte*)buf;
+    size_t left = len;
+    while (left > 0) {
+        ssize_t n = send(fd, p, left, 0);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            return -1;
+        }
+        if (n == 0) return -1;
+        p += (size_t)n;
+        left -= (size_t)n;
+    }
+    return 0;
+}
+
+static int recv_all(int fd, void* buf, size_t len)
+{
+    byte* p = (byte*)buf;
+    size_t left = len;
+    while (left > 0) {
+        ssize_t n = recv(fd, p, left, 0);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            return -1;
+        }
+        if (n == 0) return -1;  /* peer closed */
+        p += (size_t)n;
+        left -= (size_t)n;
+    }
+    return 0;
+}
+
 /* MCTP transport I/O callback for spdm-emu (--trans MCTP, the default) */
 static int tcp_io_callback(WOLFSPDM_CTX* ctx,
     const byte* txBuf, word32 txSz,
@@ -69,7 +107,6 @@ static int tcp_io_callback(WOLFSPDM_CTX* ctx,
     TCP_CTX* tcpCtx = (TCP_CTX*)userCtx;
     byte sendBuf[4096];
     byte recvHdr[12];
-    ssize_t sent, recvd;
     word32 payloadSz, respSize;
 
     if (tcpCtx == NULL || tcpCtx->sockFd < 0) {
@@ -97,13 +134,13 @@ static int tcp_io_callback(WOLFSPDM_CTX* ctx,
         memcpy(sendBuf + 13, txBuf, txSz);
     }
 
-    sent = send(tcpCtx->sockFd, sendBuf, 12 + payloadSz, 0);
-    if (sent != (ssize_t)(12 + payloadSz)) {
+    if (send_all(tcpCtx->sockFd, sendBuf, (size_t)(12 + payloadSz)) != 0) {
         return -1;
     }
 
-    recvd = recv(tcpCtx->sockFd, recvHdr, 12, MSG_WAITALL);
-    if (recvd != 12) return -1;
+    if (recv_all(tcpCtx->sockFd, recvHdr, sizeof(recvHdr)) != 0) {
+        return -1;
+    }
 
     respSize = ((word32)recvHdr[8] << 24) | ((word32)recvHdr[9] << 16) |
                ((word32)recvHdr[10] << 8) | (word32)recvHdr[11];
@@ -115,14 +152,12 @@ static int tcp_io_callback(WOLFSPDM_CTX* ctx,
     /* Skip MCTP header byte */
     {
         byte mctpHdr;
-        recvd = recv(tcpCtx->sockFd, &mctpHdr, 1, MSG_WAITALL);
-        if (recvd != 1) return -1;
+        if (recv_all(tcpCtx->sockFd, &mctpHdr, 1) != 0) return -1;
     }
 
     *rxSz = respSize - 1;
     if (*rxSz > 0) {
-        recvd = recv(tcpCtx->sockFd, rxBuf, *rxSz, MSG_WAITALL);
-        if (recvd != (ssize_t)*rxSz) return -1;
+        if (recv_all(tcpCtx->sockFd, rxBuf, (size_t)*rxSz) != 0) return -1;
     }
     return 0;
 }
@@ -229,7 +264,7 @@ static byte parse_version(const char* s)
 static int sanitize_emu_path(const char* emuPath, char* outReal, size_t outSz)
 {
     size_t len, i;
-    char* resolved;
+    char resolved[PATH_MAX];
 
     if (emuPath == NULL) return -1;
     len = strlen(emuPath);
@@ -240,11 +275,12 @@ static int sanitize_emu_path(const char* emuPath, char* outReal, size_t outSz)
     }
     if (strstr(emuPath, "..") != NULL) return -1;  /* no traversal */
 
-    resolved = realpath(emuPath, NULL);
-    if (resolved == NULL) return -1;
-    if (strlen(resolved) >= outSz) { free(resolved); return -1; }
-    memcpy(outReal, resolved, strlen(resolved) + 1);
-    free(resolved);
+    /* POSIX realpath(path, resolved): resolved must point to a buffer of
+     * PATH_MAX bytes. (Avoid the GNU realpath(path, NULL) extension.) */
+    if (realpath(emuPath, resolved) == NULL) return -1;
+    len = strlen(resolved);
+    if (len >= outSz) return -1;
+    memcpy(outReal, resolved, len + 1);
     return 0;
 }
 

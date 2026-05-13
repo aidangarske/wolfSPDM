@@ -509,24 +509,24 @@ int wolfSPDM_ParseAlgorithms(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufSz)
              * (= 2 in current spec). Use the LOW nibble for extLen. */
             word32 extLen = ((word32)(algCount & 0x0F)) * 4;
             switch (algType) {
-                case 2:  /* DHE - selected, single bit */
-                    if (algSel != 0x0010) {  /* SECP_384_R1 = bit 4 */
+                case SPDM_ALG_TYPE_DHE:
+                    if (algSel != SPDM_DHE_ALGO_SECP384R1) {
                         wolfSPDM_DebugPrint(ctx,
                             "ALGORITHMS: DHE not SECP_384_R1 (0x%04x)\n", algSel);
                         return WOLFSPDM_E_ALGO_MISMATCH;
                     }
                     dheOk = 1;
                     break;
-                case 3:  /* AEAD - selected, single bit */
-                    if (algSel != 0x0002) {  /* AES_256_GCM = bit 1 */
+                case SPDM_ALG_TYPE_AEAD:
+                    if (algSel != SPDM_AEAD_ALGO_AES_256_GCM) {
                         wolfSPDM_DebugPrint(ctx,
                             "ALGORITHMS: AEAD not AES_256_GCM (0x%04x)\n", algSel);
                         return WOLFSPDM_E_ALGO_MISMATCH;
                     }
                     aeadOk = 1;
                     break;
-                case 5:  /* KeySchedule - selected, single bit */
-                    if (algSel != 0x0001) {  /* SPDM = bit 0 */
+                case SPDM_ALG_TYPE_KEY_SCHEDULE:
+                    if (algSel != SPDM_KEY_SCHEDULE_SPDM) {
                         wolfSPDM_DebugPrint(ctx,
                             "ALGORITHMS: KeySchedule not SPDM (0x%04x)\n", algSel);
                         return WOLFSPDM_E_ALGO_MISMATCH;

@@ -136,6 +136,12 @@ extern "C" {
 /* Key Schedule (SPDM 1.2) */
 #define SPDM_KEY_SCHEDULE_SPDM      0x0001      /* Standard SPDM key schedule */
 
+/* ALGORITHMS AlgStruct AlgType values (DSP0274 Sec. 10.4 Table 16) */
+#define SPDM_ALG_TYPE_DHE           2
+#define SPDM_ALG_TYPE_AEAD          3
+#define SPDM_ALG_TYPE_REQ_BASE_ASYM 4
+#define SPDM_ALG_TYPE_KEY_SCHEDULE  5
+
 /* Algorithm Set B Fixed Parameters */
 #define WOLFSPDM_HASH_SIZE          48  /* SHA-384 output size */
 #define WOLFSPDM_ECC_KEY_SIZE       48  /* P-384 coordinate size */

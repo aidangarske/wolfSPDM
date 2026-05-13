@@ -26,10 +26,24 @@
 #ifdef HAS_SOCKET
 typedef struct {
     int sockFd;
-    int isSecured;
 } TCP_CTX;
 
-static TCP_CTX g_tcpCtx = { -1, 0 };
+static TCP_CTX g_tcpCtx = { -1 };
+
+/* Tell secured (post-KEY_EXCHANGE_RSP) records from plaintext handshake by
+ * matching the leading 4 bytes against the live session ID, the same way
+ * examples/spdm_demo.c does it. Using a static flag here would miss FINISH
+ * (encrypted, but before WOLFSPDM_STATE_CONNECTED). */
+static int is_secured_spdm(WOLFSPDM_CTX* ctx, const byte* buf, word32 sz)
+{
+    word32 sid, b0;
+    if (sz < 4) return 0;
+    sid = wolfSPDM_GetSessionId(ctx);
+    if (sid == 0) return 0;
+    b0 = (word32)buf[0] | ((word32)buf[1] << 8) |
+         ((word32)buf[2] << 16) | ((word32)buf[3] << 24);
+    return b0 == sid;
+}
 
 /* MCTP transport I/O callback for libspdm emulator */
 static int tcp_io_callback(WOLFSPDM_CTX* ctx,
@@ -42,8 +56,6 @@ static int tcp_io_callback(WOLFSPDM_CTX* ctx,
     byte recvHdr[12];
     ssize_t sent, recvd;
     word32 payloadSz, respSize;
-
-    (void)ctx;
 
     if (tcpCtx == NULL || tcpCtx->sockFd < 0) {
         return -1;
@@ -64,8 +76,9 @@ static int tcp_io_callback(WOLFSPDM_CTX* ctx,
     sendBuf[10] = (byte)(payloadSz >> 8);
     sendBuf[11] = (byte)(payloadSz & 0xFF);
 
-    /* MCTP header */
-    sendBuf[12] = tcpCtx->isSecured ? 0x06 : 0x05;
+    /* MCTP message type: secured (0x06) once the tx buffer starts with the
+     * live session ID, otherwise plaintext SPDM (0x05). */
+    sendBuf[12] = is_secured_spdm(ctx, txBuf, txSz) ? 0x06 : 0x05;
 
     if (txSz > 0) {
         memcpy(sendBuf + 13, txBuf, txSz);

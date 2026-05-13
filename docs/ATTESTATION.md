@@ -2,10 +2,18 @@
 
 ## Overview
 
-wolfSPDM supports SPDM 1.2 device attestation via GET_MEASUREMENTS with
-optional cryptographic signature verification. This enables a requester to
-retrieve firmware/hardware measurement blocks from any SPDM-capable device
-and verify their authenticity.
+wolfSPDM supports SPDM 1.2, 1.3, and 1.4 device attestation via
+GET_MEASUREMENTS with optional cryptographic signature verification. This
+enables a requester to retrieve firmware/hardware measurement blocks from
+any SPDM-capable device and verify their authenticity.
+
+Version-specific notes:
+- **SPDM 1.3 and 1.4** add a 32-byte RequesterContext field in
+  GET_MEASUREMENTS requests, which wolfSPDM populates automatically and
+  echo-verifies in the response.
+- The 18-test integration matrix exercises both signed and unsigned
+  GET_MEASUREMENTS against the DMTF spdm-emu under each negotiated
+  version (1.2 / 1.3 / 1.4).
 
 The same protocol is used by:
 - **GPUs** - NVIDIA uses SPDM over MCTP for GPU attestation

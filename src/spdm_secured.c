@@ -95,8 +95,11 @@ int wolfSPDM_EncryptInternal(WOLFSPDM_CTX* ctx,
 
     rc = wc_AesInit(&aes, NULL, INVALID_DEVID);
     if (rc != 0) {
-        rc = WOLFSPDM_E_CRYPTO_FAIL;
-        goto exit;
+        /* wc_AesInit failed: do NOT touch aes (don't call wc_AesFree on
+         * an uninitialized object). Caller-side cleanup below is guarded
+         * by aesInit. */
+        wc_ForceZero(plainBuf, sizeof(plainBuf));
+        return WOLFSPDM_E_CRYPTO_FAIL;
     }
     rc = wc_AesGcmSetKey(&aes, ctx->reqDataKey, WOLFSPDM_AEAD_KEY_SIZE);
     if (rc != 0) {
@@ -122,10 +125,11 @@ int wolfSPDM_EncryptInternal(WOLFSPDM_CTX* ctx,
 
     rc = WOLFSPDM_SUCCESS;
 exit:
+    /* aes was initialized (we jumped here past the init check); safe to free. */
+    wc_AesFree(&aes);
     /* Wipe the plaintext buffer so the outgoing payload doesn't linger
      * on the stack frame after this call returns. */
     wc_ForceZero(plainBuf, sizeof(plainBuf));
-    wc_AesFree(&aes);
     return rc;
 }
 
@@ -199,8 +203,10 @@ int wolfSPDM_DecryptInternal(WOLFSPDM_CTX* ctx,
 
     rc = wc_AesInit(&aes, NULL, INVALID_DEVID);
     if (rc != 0) {
-        rc = WOLFSPDM_E_CRYPTO_FAIL;
-        goto exit;
+        /* wc_AesInit failed: aes is not safe to wc_AesFree. Wipe stack
+         * decrypted buffer and bail without touching aes. */
+        wc_ForceZero(decrypted, sizeof(decrypted));
+        return WOLFSPDM_E_CRYPTO_FAIL;
     }
     rc = wc_AesGcmSetKey(&aes, ctx->rspDataKey, WOLFSPDM_AEAD_KEY_SIZE);
     if (rc != 0) {
@@ -255,10 +261,11 @@ int wolfSPDM_DecryptInternal(WOLFSPDM_CTX* ctx,
 
     rc = WOLFSPDM_SUCCESS;
 exit:
+    /* aes was initialized (we jumped here past the init check); safe to free. */
+    wc_AesFree(&aes);
     /* Wipe the decrypted plaintext so secured-channel payloads don't
      * linger on the stack frame after this call returns. */
     wc_ForceZero(decrypted, sizeof(decrypted));
-    wc_AesFree(&aes);
     return rc;
 }
 

@@ -110,11 +110,28 @@ start_emu() {
     fi
 
     # If port 2323 is still occupied, it isn't ours - surface that clearly
-    # rather than kicking the unrelated holder off the port.
-    if ss -tlnp 2>/dev/null | grep -q ":2323 "; then
-        echo -e "  ${RED}ERROR: Port 2323 already in use by another process${NC}"
-        ss -tlnp 2>/dev/null | grep ":2323 "
-        return 1
+    # rather than kicking the unrelated holder off the port. Try ss, then
+    # netstat, then lsof - skip the check (with a warning) if none exist.
+    if command -v ss >/dev/null 2>&1; then
+        if ss -tlnp 2>/dev/null | grep -q ":2323 "; then
+            echo -e "  ${RED}ERROR: Port 2323 already in use by another process${NC}"
+            ss -tlnp 2>/dev/null | grep ":2323 "
+            return 1
+        fi
+    elif command -v netstat >/dev/null 2>&1; then
+        if netstat -tlnp 2>/dev/null | grep -q ":2323 "; then
+            echo -e "  ${RED}ERROR: Port 2323 already in use by another process${NC}"
+            netstat -tlnp 2>/dev/null | grep ":2323 "
+            return 1
+        fi
+    elif command -v lsof >/dev/null 2>&1; then
+        if lsof -iTCP:2323 -sTCP:LISTEN >/dev/null 2>&1; then
+            echo -e "  ${RED}ERROR: Port 2323 already in use by another process${NC}"
+            lsof -iTCP:2323 -sTCP:LISTEN
+            return 1
+        fi
+    else
+        echo -e "  ${YELLOW}WARNING: ss/netstat/lsof unavailable - skipping port-in-use check${NC}"
     fi
 
     # Verify cert/key files exist in EMU_DIR (spdm-emu uses lowercase 'ecp384')
