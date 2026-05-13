@@ -1630,7 +1630,7 @@ static int test_sequence_number_wrap(void)
 {
     byte plain[] = "hello-spdm";
     byte enc[256];
-    word32 encSz = sizeof(enc);
+    word32 encSz;
     int i;
     TEST_CTX_SETUP_V12();
 

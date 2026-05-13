@@ -7,6 +7,7 @@
 #include <wolfspdm/spdm.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <string.h>
 
 #ifdef __linux__
@@ -116,7 +117,7 @@ static int tcp_connect(const char* host, int port)
 
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
-    addr.sin_port = htons(port);
+    addr.sin_port = htons((uint16_t)port);
     if (inet_pton(AF_INET, host, &addr.sin_addr) != 1) {
         close(sockFd);
         return -1;
@@ -139,9 +140,9 @@ static void tcp_disconnect(void)
     }
 }
 
-/* Static context buffer - sized via wolfSPDM_GetCtxSize() at runtime,
- * but we need a compile-time upper bound. 16KB is generous. */
-#define CTX_BUF_SIZE 16384
+/* Static context buffer sized by the public header so wolfSSL configs that
+ * grow internal struct sizes (e.g. sp-math/ecc variants in CI) still fit. */
+#define CTX_BUF_SIZE WOLFSPDM_CTX_STATIC_SIZE
 static byte g_ctxBuf[CTX_BUF_SIZE];
 
 int main(int argc, char* argv[])

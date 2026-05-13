@@ -18,6 +18,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
+#include <limits.h>
 #include <getopt.h>
 
 #ifdef __linux__
@@ -138,7 +140,7 @@ static int tcp_connect(const char* host, int port)
 
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
-    addr.sin_port = htons(port);
+    addr.sin_port = htons((uint16_t)port);
     if (inet_pton(AF_INET, host, &addr.sin_addr) != 1) {
         close(sockFd);
         return -1;
@@ -218,20 +220,58 @@ static byte parse_version(const char* s)
     return 0;
 }
 
+/* Sanitize SPDM_EMU_PATH before joining a fixed suffix and handing it to
+ * fopen(): reject NULL, oversized, traversal-bearing, or non-printable
+ * input, then canonicalize with realpath() so the value used by fopen is
+ * a resolved filesystem path, not raw env data. This is a demo, but
+ * CodeQL flags concatenated env-vars in path expressions and the fix is
+ * also defensive against a malicious shell environment. */
+static int sanitize_emu_path(const char* emuPath, char* outReal, size_t outSz)
+{
+    size_t len, i;
+    char* resolved;
+
+    if (emuPath == NULL) return -1;
+    len = strlen(emuPath);
+    if (len == 0 || len > PATH_MAX - 32) return -1;
+    for (i = 0; i < len; i++) {
+        unsigned char c = (unsigned char)emuPath[i];
+        if (c < 0x20 || c == 0x7F) return -1;  /* no control chars */
+    }
+    if (strstr(emuPath, "..") != NULL) return -1;  /* no traversal */
+
+    resolved = realpath(emuPath, NULL);
+    if (resolved == NULL) return -1;
+    if (strlen(resolved) >= outSz) { free(resolved); return -1; }
+    memcpy(outReal, resolved, strlen(resolved) + 1);
+    free(resolved);
+    return 0;
+}
+
 static int load_trusted_ca(WOLFSPDM_CTX* ctx)
 {
     const char* emuPath = getenv("SPDM_EMU_PATH");
-    char path[512];
+    char realEmu[PATH_MAX];
+    char path[PATH_MAX];
     byte* der;
     word32 derSz;
     int rc;
+    int n;
 
     if (emuPath == NULL) {
         fprintf(stderr, "ERROR: SPDM_EMU_PATH not set; cannot locate "
             "ca.cert.der for --challenge\n");
         return -1;
     }
-    snprintf(path, sizeof(path), "%s/ecp384/ca.cert.der", emuPath);
+    if (sanitize_emu_path(emuPath, realEmu, sizeof(realEmu)) != 0) {
+        fprintf(stderr, "ERROR: SPDM_EMU_PATH is not a valid directory path\n");
+        return -1;
+    }
+    n = snprintf(path, sizeof(path), "%s/ecp384/ca.cert.der", realEmu);
+    if (n < 0 || (size_t)n >= sizeof(path)) {
+        fprintf(stderr, "ERROR: certificate path too long\n");
+        return -1;
+    }
 
     der = load_der(path, &derSz);
     if (der == NULL) {

@@ -383,7 +383,6 @@ int wolfSPDM_ParseVersion(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufSz)
 {
     word16 entryCount;
     word16 maxEntries;
-    word32 i;
     byte highestVersion = 0;  /* No version found yet */
 
     SPDM_CHECK_PARSE_OR_ERROR_ARGS(ctx, buf, bufSz, 6);
@@ -408,6 +407,7 @@ int wolfSPDM_ParseVersion(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufSz)
     {
         byte maxVer = (ctx->maxVersion != 0) ? ctx->maxVersion
                                               : WOLFSPDM_MAX_SPDM_VERSION;
+        word32 i;
         for (i = 0; i < entryCount; i++) {
             /* Each entry is 2 bytes; high byte (offset +1) is Major.Minor */
             byte ver = buf[6 + i * 2 + 1];
