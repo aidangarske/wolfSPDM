@@ -617,8 +617,6 @@ int wolfSPDM_ParseDigests(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufSz)
 int wolfSPDM_ParseCertificate(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufSz,
     word16* portionLen, word16* remainderLen)
 {
-    int rc;
-
     if (portionLen == NULL || remainderLen == NULL) {
         return WOLFSPDM_E_INVALID_ARG;
     }
@@ -646,6 +644,7 @@ int wolfSPDM_ParseCertificate(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufSz,
      * advance offset by a portionLen that was never actually delivered, and
      * eventually advance state with a partial chain. */
     if (*portionLen > 0) {
+        int rc;
         if (bufSz < (word32)(8 + *portionLen)) {
             return WOLFSPDM_E_BUFFER_SMALL;
         }

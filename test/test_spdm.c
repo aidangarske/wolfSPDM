@@ -192,6 +192,11 @@ int main(int argc, char* argv[])
     wolfSPDM_SetDebug(ctx, 1);
     wolfSPDM_SetIO(ctx, tcp_io_callback, &g_tcpCtx);
 
+    /* Smoke test runs against spdm-emu with self-signed test certs; the
+     * library now refuses handshakes without a trust anchor unless the
+     * caller explicitly opts out. */
+    wolfSPDM_AllowUntrustedCerts(ctx, 1);
+
     printf("\nEstablishing SPDM session...\n\n");
     rc = wolfSPDM_Connect(ctx);
 
