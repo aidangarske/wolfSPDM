@@ -41,6 +41,22 @@ AC_CHECK_LIB([wolfssl], [wc_InitRng], [],
 AC_CHECK_HEADER([wolfssl/wolfcrypt/ecc.h], [],
     [AC_MSG_ERROR([wolfSSL headers not found. Use --with-wolfssl=PATH])])
 
+# wolfSSL minimum version: v5.8.0-stable. This is the oldest release the CI
+# matrix in .github/workflows/wolfssl-versions.yml exercises end-to-end; older
+# releases are not validated and may be missing API/curve fixes wolfSPDM relies
+# on (ECDHE P-384, HKDF-SHA384, AES-256-GCM record protection).
+AC_MSG_CHECKING([wolfSSL version >= v5.8.0])
+AC_COMPILE_IFELSE([AC_LANG_SOURCE([[
+    #include <wolfssl/version.h>
+    #if !defined(LIBWOLFSSL_VERSION_HEX) || LIBWOLFSSL_VERSION_HEX < 0x05008000
+    #error "wolfSSL < v5.8.0"
+    #endif
+    int main(void) { return 0; }
+]])],
+[AC_MSG_RESULT([yes])],
+[AC_MSG_RESULT([no])
+ AC_MSG_ERROR([wolfSPDM requires wolfSSL >= v5.8.0-stable. Please upgrade wolfSSL.])])
+
 # Debug mode
 AC_ARG_ENABLE([debug],
     [AS_HELP_STRING([--enable-debug], [Enable debug output])],

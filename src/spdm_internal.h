@@ -38,6 +38,7 @@
 #include <wolfspdm/spdm_error.h>
 
 /* wolfCrypt includes */
+#include <wolfssl/version.h>
 #include <wolfssl/wolfcrypt/ecc.h>
 #include <wolfssl/wolfcrypt/random.h>
 #include <wolfssl/wolfcrypt/sha512.h>
@@ -46,6 +47,17 @@
 #include <wolfssl/wolfcrypt/aes.h>
 #include <wolfssl/wolfcrypt/memory.h>
 #include <wolfssl/wolfcrypt/asn_public.h>
+
+#if defined(LIBWOLFSSL_VERSION_HEX) && LIBWOLFSSL_VERSION_HEX < 0x05008004
+/* wc_ForceZero added in wolfSSL v5.8.4; provide a stub for older releases. */
+static WC_INLINE void wc_ForceZero(void* mem, word32 len)
+{
+    volatile byte* z = (volatile byte*)mem;
+    while (len--) {
+        *z++ = 0;
+    }
+}
+#endif
 
 /* Constant-time byte comparison: returns 0 iff a==b for the full length.
  * Used for MAC/HMAC equality so we don't leak match position via timing. */
