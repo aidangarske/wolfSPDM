@@ -38,6 +38,13 @@ static int wolfSPDM_ExchangeMsg(WOLFSPDM_CTX* ctx,
     word32 transcriptSnapshot;
     int rc;
 
+    /* Not every adapter (e.g. BuildGetVersion's) validates ctx, so guard
+     * here to keep wolfSPDM_GetVersion(NULL) and similar paths from
+     * dereferencing a NULL context. */
+    if (ctx == NULL) {
+        return WOLFSPDM_E_INVALID_ARG;
+    }
+
     rc = buildFn(ctx, txBuf, &txSz);
     if (rc != WOLFSPDM_SUCCESS) return rc;
 

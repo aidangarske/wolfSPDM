@@ -214,6 +214,7 @@ struct WOLFSPDM_CTX {
     byte   challengeNonce[32];                      /* Saved nonce from CHALLENGE request */
     byte   challengeReqCtx[8];                      /* RequesterContext sent (1.3+) */
     byte   challengeMeasHashType;                   /* MeasurementSummaryHashType from req */
+    byte   challengeSlotId;                         /* SlotID sent (for echo verification) */
 
     /* Running M1/M2 hash for CHALLENGE_AUTH signature verification.
      * Per DSP0274, M1/M2 = A || B || C where:

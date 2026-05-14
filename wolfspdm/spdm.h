@@ -381,13 +381,14 @@ WOLFSPDM_API int wolfSPDM_SecuredExchange(WOLFSPDM_CTX* ctx,
  *   Returns WOLFSPDM_E_MEAS_SIG_FAIL if the signature is invalid.
  *
  * When requestSignature=0:
- *   Retrieves measurements WITHOUT a signature.
- *   Returns WOLFSPDM_E_MEAS_NOT_VERIFIED. Measurements are informational
- *   only and should not be used for security-critical decisions.
+ *   Retrieves measurements WITHOUT a signature. Returns WOLFSPDM_SUCCESS on
+ *   retrieval; the call is treated as informational only and the blocks
+ *   must not be used for security-critical decisions.
  *
  * If compiled with NO_WOLFSPDM_MEAS_VERIFY, signature verification is
- * disabled and returns WOLFSPDM_E_MEAS_NOT_VERIFIED regardless of
- * requestSignature (signature bytes are still captured in the context).
+ * unavailable. In that build a signed request (requestSignature=1) returns
+ * WOLFSPDM_E_MEAS_NOT_VERIFIED (the signature bytes are still captured in
+ * the context); unsigned requests still return WOLFSPDM_SUCCESS.
  *
  * Contexts are NOT thread-safe; do not call from multiple threads. */
 
@@ -397,8 +398,11 @@ WOLFSPDM_API int wolfSPDM_SecuredExchange(WOLFSPDM_CTX* ctx,
  * @param ctx               The wolfSPDM context.
  * @param measOperation     SPDM_MEAS_OPERATION_ALL (0xFF) or specific index.
  * @param requestSignature  1 to request signed measurements, 0 for unsigned.
- * @return WOLFSPDM_SUCCESS (verified), WOLFSPDM_E_MEAS_NOT_VERIFIED (unsigned),
- *         WOLFSPDM_E_MEAS_SIG_FAIL (sig invalid), or negative error code.
+ * @return WOLFSPDM_SUCCESS on retrieval (unsigned) or successful signature
+ *         verification (signed). WOLFSPDM_E_MEAS_SIG_FAIL when a signed
+ *         response fails verification. WOLFSPDM_E_MEAS_NOT_VERIFIED only
+ *         when a signed request is made in a build without verification
+ *         support. Other negative error codes on protocol/transport errors.
  */
 WOLFSPDM_API int wolfSPDM_GetMeasurements(WOLFSPDM_CTX* ctx, byte measOperation,
     int requestSignature);

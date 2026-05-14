@@ -299,6 +299,21 @@ static int test_build_get_version(void)
     TEST_PASS();
 }
 
+static int test_get_version_null_ctx(void)
+{
+    /* wolfSPDM_GetVersion routes through the shared ExchangeMsg helper,
+     * which dereferences ctx for transcript snapshotting. The
+     * BuildGetVersion adapter ignores ctx, so without an explicit guard
+     * a NULL caller would crash inside the helper. Match the rest of
+     * the public API and return WOLFSPDM_E_INVALID_ARG instead. */
+    printf("test_get_version_null_ctx...\n");
+
+    ASSERT_EQ(wolfSPDM_GetVersion(NULL), WOLFSPDM_E_INVALID_ARG,
+        "GetVersion(NULL) must return INVALID_ARG, not crash");
+
+    TEST_PASS();
+}
+
 static int test_build_get_capabilities(void)
 {
     byte buf[32];
@@ -549,6 +564,28 @@ static int test_build_key_exchange_opaque_data(void)
     TEST_PASS();
 }
 
+static int test_build_key_exchange_slot(void)
+{
+    /* When ConnectStandard selects a non-zero cert slot (DIGESTS SlotMask),
+     * KEY_EXCHANGE must authenticate that slot. Hard-coding 0 would ask
+     * the responder to sign with a different (possibly empty) slot's
+     * key than the chain the requester just fetched. */
+    byte buf[256];
+    word32 bufSz;
+    TEST_CTX_SETUP_V12();
+
+    printf("test_build_key_exchange_slot...\n");
+
+    ctx->currentSlotId = 2;
+    bufSz = sizeof(buf);
+    ASSERT_SUCCESS(wolfSPDM_BuildKeyExchange(ctx, buf, &bufSz));
+    /* Header: ver, code, measSummary, slotIDParam */
+    ASSERT_EQ(buf[3] & 0x0F, 2, "SlotIDParam should echo currentSlotId");
+
+    TEST_CTX_FREE();
+    TEST_PASS();
+}
+
 static int test_key_exchange_requires_cert(void)
 {
     /* wolfSPDM_KeyExchange must refuse to proceed without an extracted
@@ -699,6 +736,31 @@ static int test_build_get_measurements(void)
     bufSz = sizeof(buf);
     ASSERT_SUCCESS(wolfSPDM_BuildGetMeasurements(ctx, buf, &bufSz, SPDM_MEAS_OPERATION_ALL, 1));
     ASSERT_EQ(bufSz, 45, "1.3 signed should be 4 + 32 + 1 + 8 = 45 bytes");
+
+    TEST_CTX_FREE();
+    TEST_PASS();
+}
+
+static int test_build_get_measurements_slot(void)
+{
+    /* DSP0274: signed GET_MEASUREMENTS carries the SlotID whose
+     * certificate authenticates the response. When ConnectStandard picks
+     * a non-zero slot (lowest populated bit in DIGESTS SlotMask), the
+     * build path must echo that selection rather than hard-coding 0. */
+    byte buf[64];
+    word32 bufSz;
+    TEST_CTX_SETUP_V12();
+
+    printf("test_build_get_measurements_slot...\n");
+
+    ctx->currentSlotId = 3;
+    bufSz = sizeof(buf);
+    ASSERT_SUCCESS(wolfSPDM_BuildGetMeasurements(ctx, buf, &bufSz,
+        SPDM_MEAS_OPERATION_ALL, 1));
+    /* Layout (1.2 signed): hdr(4) + nonce(32) + slot(1) = 37 bytes.
+     * SlotIDParam follows the 32-byte nonce, so buf[36]. */
+    ASSERT_EQ(bufSz, 37, "1.2 signed length wrong");
+    ASSERT_EQ(buf[36] & 0x0F, 3, "SlotIDParam should echo currentSlotId");
 
     TEST_CTX_FREE();
     TEST_PASS();
@@ -1065,6 +1127,43 @@ static int test_parse_challenge_auth(void)
     ctx->certChainHash[0] = 0x00;
     ASSERT_EQ(wolfSPDM_ParseChallengeAuth(ctx, rsp, sizeof(rsp), &sigOffset),
         WOLFSPDM_E_CHALLENGE, "Hash mismatch should fail");
+
+    TEST_CTX_FREE();
+    TEST_PASS();
+}
+
+static int test_parse_challenge_auth_slot_echo(void)
+{
+    /* DSP0274 Sec. 10.8: Param1[3:0] echoes the requested SlotID. Public
+     * API accepts slots 0..7, so a CHALLENGE for slot 3 must accept a
+     * matching CHALLENGE_AUTH and reject any other slot value. */
+    byte rsp[182];
+    word32 sigOffset = 0;
+    TEST_CTX_SETUP_V12();
+
+    printf("test_parse_challenge_auth_slot_echo...\n");
+
+    ctx->challengeMeasHashType = SPDM_MEAS_SUMMARY_HASH_NONE;
+    ctx->challengeSlotId = 3;  /* What BuildChallenge(...,3,...) would set */
+
+    XMEMSET(rsp, 0, sizeof(rsp));
+    rsp[0] = SPDM_VERSION_12;
+    rsp[1] = SPDM_CHALLENGE_AUTH;
+    rsp[2] = 0x03;  /* Param1 echoes slot 3 */
+    XMEMSET(&rsp[4], 0xAA, WOLFSPDM_HASH_SIZE);
+    XMEMCPY(ctx->certChainHash, &rsp[4], WOLFSPDM_HASH_SIZE);
+    XMEMSET(&rsp[52], 0xBB, 32);
+    XMEMSET(&rsp[86], 0xCC, WOLFSPDM_ECC_SIG_SIZE);
+
+    /* Matching echo must be accepted. */
+    ASSERT_SUCCESS(
+        wolfSPDM_ParseChallengeAuth(ctx, rsp, sizeof(rsp), &sigOffset));
+
+    /* Wrong echo (slot 0 when slot 3 was requested) must be refused. */
+    rsp[2] = 0x00;
+    ASSERT_EQ(
+        wolfSPDM_ParseChallengeAuth(ctx, rsp, sizeof(rsp), &sigOffset),
+        WOLFSPDM_E_CHALLENGE, "SlotID echo mismatch must be rejected");
 
     TEST_CTX_FREE();
     TEST_PASS();
@@ -1977,12 +2076,14 @@ int main(void)
 
     /* Message builder tests */
     test_build_get_version();
+    test_get_version_null_ctx();
     test_build_get_capabilities();
     test_build_negotiate_algorithms();
     test_parse_algorithms_set_b_enforcement();
     test_build_get_digests();
     test_build_get_certificate();
     test_build_key_exchange_opaque_data();
+    test_build_key_exchange_slot();
     test_build_finish_opaque_length_14();
     test_parse_finish_rsp_14_opaque_length();
     test_key_exchange_requires_cert();
@@ -1997,6 +2098,7 @@ int main(void)
     /* Measurement tests */
 #ifndef NO_WOLFSPDM_MEAS
     test_build_get_measurements();
+    test_build_get_measurements_slot();
     test_measurement_accessors();
     test_parse_measurements();
 #ifndef NO_WOLFSPDM_MEAS_VERIFY
@@ -2012,6 +2114,7 @@ int main(void)
 #ifndef NO_WOLFSPDM_CHALLENGE
     test_build_challenge();
     test_parse_challenge_auth();
+    test_parse_challenge_auth_slot_echo();
     test_parse_challenge_auth_reqctx_echo();
 #endif
 

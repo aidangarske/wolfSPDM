@@ -154,7 +154,11 @@ int wolfSPDM_BuildKeyExchange(WOLFSPDM_CTX* ctx, byte* buf, word32* bufSz)
     buf[offset++] = ctx->spdmVersion;
     buf[offset++] = SPDM_KEY_EXCHANGE;
     buf[offset++] = 0x00;  /* MeasurementSummaryHashType = None */
-    buf[offset++] = 0x00;  /* SlotID = 0 (certificate slot 0) */
+    /* SlotIDParam: authenticate the slot selected during GET_CERTIFICATE.
+     * Hard-coding 0 would break responders whose DIGESTS SlotMask omits
+     * slot 0 (the requester would then KEY_EXCHANGE against a different
+     * or empty slot than the one whose chain it just fetched). */
+    buf[offset++] = (byte)(ctx->currentSlotId & 0x0F);
 
     /* ReqSessionID (2 LE) */
     buf[offset++] = (byte)(ctx->reqSessionId & 0xFF);
@@ -904,8 +908,11 @@ int wolfSPDM_BuildGetMeasurements(WOLFSPDM_CTX* ctx, byte* buf, word32* bufSz,
         XMEMCPY(ctx->measNonce, &buf[offset], 32);
         offset += 32;
 
-        /* SlotIDParam (1 byte) - slot 0 */
-        buf[offset++] = 0x00;
+        /* SlotIDParam: the slot whose certificate authenticates the
+         * measurement signature. Must match the slot chosen during
+         * GET_CERTIFICATE (ctx->currentSlotId) so the responder signs
+         * with the key whose chain we hold. */
+        buf[offset++] = (byte)(ctx->currentSlotId & 0x0F);
     }
 
     /* DSP0274 v1.3.0 Table 50 / v1.4.0 Table 49: RequesterContext (8 bytes)
@@ -937,12 +944,13 @@ int wolfSPDM_ParseMeasurements(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufSz)
     SPDM_CHECK_PARSE_OR_ERROR_ARGS(ctx, buf, bufSz, 8);
     SPDM_CHECK_RESPONSE(ctx, buf, bufSz, SPDM_MEASUREMENTS, WOLFSPDM_E_MEASUREMENT);
 
-    /* DSP0274: Param2[3:0] echoes the SlotID the requester sent. wolfSPDM
-     * always issues GET_MEASUREMENTS with slot 0, so reject any other
-     * slot value. */
-    if ((buf[3] & 0x0F) != 0) {
+    /* DSP0274: Param2[3:0] echoes the SlotID the requester sent. The
+     * requester picks ctx->currentSlotId for signed requests, so reject
+     * any other slot value. */
+    if ((buf[3] & 0x0F) != (ctx->currentSlotId & 0x0F)) {
         wolfSPDM_DebugPrint(ctx,
-            "MEASUREMENTS: SlotID echo mismatch (%u)\n", buf[3] & 0x0F);
+            "MEASUREMENTS: SlotID echo mismatch (got %u expected %u)\n",
+            buf[3] & 0x0F, ctx->currentSlotId & 0x0F);
         return WOLFSPDM_E_MEASUREMENT;
     }
 
@@ -1373,8 +1381,9 @@ int wolfSPDM_BuildChallenge(WOLFSPDM_CTX* ctx, byte* buf, word32* bufSz,
     buf[offset++] = (byte)(slotId & 0x0F);
     buf[offset++] = measHashType;
 
-    /* Save measHashType for ParseChallengeAuth */
+    /* Save measHashType + slotId for ParseChallengeAuth echo check */
     ctx->challengeMeasHashType = measHashType;
+    ctx->challengeSlotId = (byte)(slotId & 0x0F);
 
     /* Nonce (32 bytes random) */
     rc = wolfSPDM_GetRandom(ctx, &buf[offset], 32);
@@ -1418,12 +1427,13 @@ int wolfSPDM_ParseChallengeAuth(WOLFSPDM_CTX* ctx, const byte* buf,
 
     SPDM_CHECK_RESPONSE(ctx, buf, bufSz, SPDM_CHALLENGE_AUTH, WOLFSPDM_E_CHALLENGE);
 
-    /* DSP0274 Sec. 10.8: Param1[3:0] echoes the requested SlotID. wolfSPDM
-     * currently always issues CHALLENGE for slot 0; reject a responder that
-     * authenticates a different slot. */
-    if ((buf[2] & 0x0F) != 0) {
+    /* DSP0274 Sec. 10.8: Param1[3:0] echoes the requested SlotID.
+     * BuildChallenge saved the slot it sent in ctx->challengeSlotId;
+     * reject a responder that authenticates a different slot. */
+    if ((buf[2] & 0x0F) != (ctx->challengeSlotId & 0x0F)) {
         wolfSPDM_DebugPrint(ctx,
-            "CHALLENGE_AUTH: SlotID echo mismatch (%u)\n", buf[2] & 0x0F);
+            "CHALLENGE_AUTH: SlotID echo mismatch (got %u expected %u)\n",
+            buf[2] & 0x0F, ctx->challengeSlotId & 0x0F);
         return WOLFSPDM_E_CHALLENGE;
     }
 
