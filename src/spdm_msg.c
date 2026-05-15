@@ -396,7 +396,6 @@ int wolfSPDM_ParseVersion(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufSz)
     word16 maxEntries;
     byte highestVersion = 0;  /* No version found yet */
     byte maxVer;
-    byte ver;
     word32 i;
 
     SPDM_CHECK_PARSE_OR_ERROR_ARGS(ctx, buf, bufSz, 6);
@@ -422,7 +421,7 @@ int wolfSPDM_ParseVersion(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufSz)
                                     : WOLFSPDM_MAX_SPDM_VERSION;
     for (i = 0; i < entryCount; i++) {
         /* Each entry is 2 bytes; high byte (offset +1) is Major.Minor */
-        ver = buf[6 + i * 2 + 1];
+        byte ver = buf[6 + i * 2 + 1];
         if (ver >= WOLFSPDM_MIN_SPDM_VERSION &&
             ver <= maxVer &&
             ver > highestVersion) {
@@ -477,12 +476,8 @@ int wolfSPDM_ParseAlgorithms(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufSz)
     byte extAsymCount;
     byte extHashCount;
     byte ai;
-    byte algType;
-    byte algCount;
-    word16 algSel;
     word32 algStart;
     word32 off;
-    word32 extLen;
     int dheOk = 0;
     int aeadOk = 0;
     int ksOk = 0;
@@ -563,13 +558,13 @@ int wolfSPDM_ParseAlgorithms(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufSz)
     }
     off = algStart;
     for (ai = 0; ai < numAlgs && off + 4 <= bufSz; ai++) {
-        algType  = buf[off];
-        algCount = buf[off + 1];
-        algSel = SPDM_Get16LE(&buf[off + 2]);
+        byte algType  = buf[off];
+        byte algCount = buf[off + 1];
+        word16 algSel = SPDM_Get16LE(&buf[off + 2]);
         /* Per DSP0274 Table 16: AlgCount low nibble = ExtAlgCount
          * (each ExtAlg is 4 bytes); high nibble = fixed-size marker
          * (= 2 in current spec). Use the LOW nibble for extLen. */
-        extLen = ((word32)(algCount & 0x0F)) * 4;
+        word32 extLen = ((word32)(algCount & 0x0F)) * 4;
         switch (algType) {
             case SPDM_ALG_TYPE_DHE:
                 if (algSel != SPDM_DHE_ALGO_SECP384R1) {
