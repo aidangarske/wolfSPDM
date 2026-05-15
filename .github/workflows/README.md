@@ -7,6 +7,7 @@
 | Compiler Warnings | `compiler-warnings.yml` | GCC strict warnings (`-Wpedantic -Wconversion -Wshadow -Werror`) and Clang `-Werror` build. |
 | Static Analysis | `static-analysis.yml` | Runs cppcheck (style, performance, portability) and Clang Static Analyzer (scan-build). |
 | Memory Check | `memory-check.yml` | Valgrind leak check with `--leak-check=full` for both static and dynamic memory modes. |
+| Empty Brace Scope Scan | `empty-brace-scan.yml` | Fails CI when C source/header files contain standalone brace scope blocks. |
 | CodeQL Security | `codeql.yml` | GitHub CodeQL security-and-quality analysis. Runs on PRs and weekly (Monday 6 AM UTC). |
 | Codespell | `codespell.yml` | Spell-checks source files. |
 | SPDM Emulator Test | `spdm-emu-test.yml` | End-to-end integration test against the DMTF libspdm emulator via wolfTPM. Runs 6 tests: session establishment, signed/unsigned measurements, challenge authentication, heartbeat, and key update. Dependencies (wolfSSL, spdm-emu, wolfTPM) are cached and refreshed every ~15 days. |
