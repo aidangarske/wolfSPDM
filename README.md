@@ -139,7 +139,7 @@ Runs on every push and PR:
 
 ## Documentation
 
-Full documentation is available in the Wiki:
+Full documentation is available in the [GitHub Wiki](https://github.com/aidangarske/wolfSPDM/wiki):
 
 - [Getting Started](https://github.com/aidangarske/wolfSPDM/wiki/Getting-Started): Build instructions, prerequisites, memory modes, and first connection steps
 - [Supported Operations](https://github.com/aidangarske/wolfSPDM/wiki/Supported-Operations): SPDM operation coverage and API mapping
