@@ -100,6 +100,9 @@ int wolfSPDM_NegotiateAlgorithms(WOLFSPDM_CTX* ctx)
     byte txBuf[52];   /* NEGOTIATE_ALGORITHMS: 48 bytes */
     byte rxBuf[80];   /* ALGORITHMS: ~56 bytes with struct tables */
     int rc;
+#ifndef NO_WOLFSPDM_CHALLENGE
+    int hashRc;
+#endif
 
     rc = wolfSPDM_ExchangeMsg(ctx, wolfSPDM_BuildNegotiateAlgorithms,
         wolfSPDM_ParseAlgorithms, txBuf, sizeof(txBuf), rxBuf, sizeof(rxBuf));
@@ -113,27 +116,24 @@ int wolfSPDM_NegotiateAlgorithms(WOLFSPDM_CTX* ctx)
 
 #ifndef NO_WOLFSPDM_CHALLENGE
     /* Initialize M1/M2 running hash for potential CHALLENGE auth.
-     * Start with VCA (A portion of the M1/M2 transcript per DSP0274). */
-    {
-        int hashRc;
-        /* Free a stale hash from a prior call so wc_InitSha384 doesn't
-         * leak whatever wolfCrypt allocated previously. */
-        if (ctx->flags.m1m2HashInit) {
-            wc_Sha384Free(&ctx->m1m2Hash);
-            ctx->flags.m1m2HashInit = 0;
-        }
-        hashRc = wc_InitSha384(&ctx->m1m2Hash);
+     * Start with VCA (A portion of the M1/M2 transcript per DSP0274).
+     * Free a stale hash from a prior call so wc_InitSha384 doesn't
+     * leak whatever wolfCrypt allocated previously.
+     * Non-fatal: challenge just won't work if this fails. */
+    if (ctx->flags.m1m2HashInit) {
+        wc_Sha384Free(&ctx->m1m2Hash);
+        ctx->flags.m1m2HashInit = 0;
+    }
+    hashRc = wc_InitSha384(&ctx->m1m2Hash);
+    if (hashRc == 0) {
+        hashRc = wc_Sha384Update(&ctx->m1m2Hash, ctx->transcript,
+            ctx->vcaLen);
         if (hashRc == 0) {
-            hashRc = wc_Sha384Update(&ctx->m1m2Hash, ctx->transcript,
-                ctx->vcaLen);
-            if (hashRc == 0) {
-                ctx->flags.m1m2HashInit = 1;
-            }
-            else {
-                wc_Sha384Free(&ctx->m1m2Hash);
-            }
+            ctx->flags.m1m2HashInit = 1;
         }
-        /* Non-fatal: challenge just won't work if this fails */
+        else {
+            wc_Sha384Free(&ctx->m1m2Hash);
+        }
     }
 #endif
 
@@ -416,6 +416,7 @@ int wolfSPDM_GetMeasurements(WOLFSPDM_CTX* ctx, byte measOperation,
     byte rxBuf[WOLFSPDM_MAX_MSG_SIZE];
     word32 txSz = sizeof(txBuf);
     word32 rxSz = sizeof(rxBuf);
+    int errCode;
     int rc;
 
     if (ctx == NULL) {
@@ -462,14 +463,12 @@ int wolfSPDM_GetMeasurements(WOLFSPDM_CTX* ctx, byte measOperation,
      * caller sees the more accurate PEER_ERROR. Stash the responder's
      * error code so callers can retrieve it via wolfSPDM_GetLastPeerError
      * (e.g. back off on BUSY, abort on UNSUPPORTED_REQUEST). */
-    {
-        int errCode = 0;
-        if (wolfSPDM_CheckError(rxBuf, rxSz, &errCode)) {
-            ctx->lastPeerErrorCode = (byte)errCode;
-            wolfSPDM_DebugPrint(ctx,
-                "GET_MEASUREMENTS: responder error 0x%02x\n", errCode);
-            return WOLFSPDM_E_PEER_ERROR;
-        }
+    errCode = 0;
+    if (wolfSPDM_CheckError(rxBuf, rxSz, &errCode)) {
+        ctx->lastPeerErrorCode = (byte)errCode;
+        wolfSPDM_DebugPrint(ctx,
+            "GET_MEASUREMENTS: responder error 0x%02x\n", errCode);
+        return WOLFSPDM_E_PEER_ERROR;
     }
 
     /* Parse the response */
@@ -632,7 +631,22 @@ int wolfSPDM_KeyUpdate(WOLFSPDM_CTX* ctx, int updateAll)
 {
     byte txBuf[8];
     byte rxBuf[32];
-    word32 txSz, rxSz;
+    byte encBuf[64];
+    byte rawRxBuf[64];
+    /* Snapshot the request-side keying material so a failed ACK decrypt
+     * can roll the session back to the pre-update state instead of
+     * leaving requester and responder permanently desynchronised. The
+     * responder side is only mutated when updateAll is set, so the rsp
+     * snapshot is only relevant in that branch. */
+    byte savedReqDataKey[WOLFSPDM_AEAD_KEY_SIZE];
+    byte savedReqDataIv[WOLFSPDM_AEAD_IV_SIZE];
+    byte savedReqAppSecret[WOLFSPDM_HASH_SIZE];
+    byte savedRspDataKey[WOLFSPDM_AEAD_KEY_SIZE];
+    byte savedRspDataIv[WOLFSPDM_AEAD_IV_SIZE];
+    byte savedRspAppSecret[WOLFSPDM_HASH_SIZE];
+    word64 savedReqSeqNum;
+    word64 savedRspSeqNum;
+    word32 txSz, rxSz, encSz, rawRxSz;
     byte tag, tag2;
     byte operation;
     int rc;
@@ -661,95 +675,80 @@ int wolfSPDM_KeyUpdate(WOLFSPDM_CTX* ctx, int updateAll)
 
     wolfSPDM_DebugPrint(ctx, "Sending KEY_UPDATE\n");
 
-    {
-        byte encBuf[64];
-        byte rawRxBuf[64];
-        word32 encSz = sizeof(encBuf);
-        word32 rawRxSz = sizeof(rawRxBuf);
-        /* Snapshot the request-side keying material so a failed ACK decrypt
-         * can roll the session back to the pre-update state instead of
-         * leaving requester and responder permanently desynchronised. The
-         * responder side is only mutated when updateAll is set, so the rsp
-         * snapshot is only relevant in that branch. */
-        byte savedReqDataKey[WOLFSPDM_AEAD_KEY_SIZE];
-        byte savedReqDataIv[WOLFSPDM_AEAD_IV_SIZE];
-        byte savedReqAppSecret[WOLFSPDM_HASH_SIZE];
-        byte savedRspDataKey[WOLFSPDM_AEAD_KEY_SIZE];
-        byte savedRspDataIv[WOLFSPDM_AEAD_IV_SIZE];
-        byte savedRspAppSecret[WOLFSPDM_HASH_SIZE];
-        word64 savedReqSeqNum = ctx->reqSeqNum;
-        word64 savedRspSeqNum = ctx->rspSeqNum;
+    encSz = sizeof(encBuf);
+    rawRxSz = sizeof(rawRxBuf);
+    savedReqSeqNum = ctx->reqSeqNum;
+    savedRspSeqNum = ctx->rspSeqNum;
 
-        XMEMCPY(savedReqDataKey, ctx->reqDataKey, sizeof(savedReqDataKey));
-        XMEMCPY(savedReqDataIv, ctx->reqDataIv, sizeof(savedReqDataIv));
-        XMEMCPY(savedReqAppSecret, ctx->reqAppSecret, sizeof(savedReqAppSecret));
-        XMEMCPY(savedRspDataKey, ctx->rspDataKey, sizeof(savedRspDataKey));
-        XMEMCPY(savedRspDataIv, ctx->rspDataIv, sizeof(savedRspDataIv));
-        XMEMCPY(savedRspAppSecret, ctx->rspAppSecret, sizeof(savedRspAppSecret));
+    XMEMCPY(savedReqDataKey, ctx->reqDataKey, sizeof(savedReqDataKey));
+    XMEMCPY(savedReqDataIv, ctx->reqDataIv, sizeof(savedReqDataIv));
+    XMEMCPY(savedReqAppSecret, ctx->reqAppSecret, sizeof(savedReqAppSecret));
+    XMEMCPY(savedRspDataKey, ctx->rspDataKey, sizeof(savedRspDataKey));
+    XMEMCPY(savedRspDataIv, ctx->rspDataIv, sizeof(savedRspDataIv));
+    XMEMCPY(savedRspAppSecret, ctx->rspAppSecret, sizeof(savedRspAppSecret));
 
-        /* Encrypt with current req key */
-        rc = wolfSPDM_EncryptInternal(ctx, txBuf, txSz, encBuf, &encSz);
-        if (rc != WOLFSPDM_SUCCESS) {
-            goto kupd_cleanup;
-        }
+    /* Encrypt with current req key */
+    rc = wolfSPDM_EncryptInternal(ctx, txBuf, txSz, encBuf, &encSz);
+    if (rc != WOLFSPDM_SUCCESS) {
+        goto kupd_cleanup;
+    }
 
-        /* Send and receive raw (don't decrypt yet) */
-        rc = wolfSPDM_SendReceive(ctx, encBuf, encSz, rawRxBuf, &rawRxSz);
-        if (rc != WOLFSPDM_SUCCESS) {
-            wolfSPDM_DebugPrint(ctx, "KEY_UPDATE: SendReceive failed: %d\n", rc);
-            goto kupd_cleanup;
-        }
+    /* Send and receive raw (don't decrypt yet) */
+    rc = wolfSPDM_SendReceive(ctx, encBuf, encSz, rawRxBuf, &rawRxSz);
+    if (rc != WOLFSPDM_SUCCESS) {
+        wolfSPDM_DebugPrint(ctx, "KEY_UPDATE: SendReceive failed: %d\n", rc);
+        goto kupd_cleanup;
+    }
 
-        /* Step 2: Derive new keys BEFORE decrypting ACK.
-         * The responder derives new keys upon receiving KEY_UPDATE and
-         * encrypts the ACK with the NEW response key. */
-        rc = wolfSPDM_DeriveUpdatedKeys(ctx, updateAll);
-        if (rc != WOLFSPDM_SUCCESS) {
-            wolfSPDM_DebugPrint(ctx, "KEY_UPDATE: DeriveUpdatedKeys failed: %d\n", rc);
-            goto kupd_cleanup;
-        }
-        /* Per DSP0277 Sec 11: reset only the seqNum for directions whose
-         * keys actually rotated. updateAll=0 (UpdateKey) only rotates the
-         * requester's send-direction; the responder keeps incrementing its
-         * old rspSeqNum until UpdateAll happens. */
-        ctx->reqSeqNum = 0;
+    /* Step 2: Derive new keys BEFORE decrypting ACK.
+     * The responder derives new keys upon receiving KEY_UPDATE and
+     * encrypts the ACK with the NEW response key. */
+    rc = wolfSPDM_DeriveUpdatedKeys(ctx, updateAll);
+    if (rc != WOLFSPDM_SUCCESS) {
+        wolfSPDM_DebugPrint(ctx, "KEY_UPDATE: DeriveUpdatedKeys failed: %d\n", rc);
+        goto kupd_cleanup;
+    }
+    /* Per DSP0277 Sec 11: reset only the seqNum for directions whose
+     * keys actually rotated. updateAll=0 (UpdateKey) only rotates the
+     * requester's send-direction; the responder keeps incrementing its
+     * old rspSeqNum until UpdateAll happens. */
+    ctx->reqSeqNum = 0;
+    if (updateAll) {
+        ctx->rspSeqNum = 0;
+    }
+
+    /* Decrypt ACK with new rsp key. If this fails, roll the session
+     * back to the pre-update keys / seqNums - otherwise a single failed
+     * ACK leaves the requester and responder permanently desynchronised
+     * (DoS). */
+    rxSz = sizeof(rxBuf);
+    rc = wolfSPDM_DecryptInternal(ctx, rawRxBuf, rawRxSz, rxBuf, &rxSz);
+    if (rc != WOLFSPDM_SUCCESS) {
+        wolfSPDM_DebugPrint(ctx,
+            "KEY_UPDATE: ACK decrypt failed (%d); rolling keys back\n", rc);
+        XMEMCPY(ctx->reqDataKey, savedReqDataKey, sizeof(savedReqDataKey));
+        XMEMCPY(ctx->reqDataIv, savedReqDataIv, sizeof(savedReqDataIv));
+        XMEMCPY(ctx->reqAppSecret, savedReqAppSecret,
+            sizeof(savedReqAppSecret));
         if (updateAll) {
-            ctx->rspSeqNum = 0;
+            XMEMCPY(ctx->rspDataKey, savedRspDataKey, sizeof(savedRspDataKey));
+            XMEMCPY(ctx->rspDataIv, savedRspDataIv, sizeof(savedRspDataIv));
+            XMEMCPY(ctx->rspAppSecret, savedRspAppSecret,
+                sizeof(savedRspAppSecret));
         }
+        ctx->reqSeqNum = savedReqSeqNum;
+        ctx->rspSeqNum = savedRspSeqNum;
+    }
 
-        /* Decrypt ACK with new rsp key. If this fails, roll the session
-         * back to the pre-update keys / seqNums - otherwise a single failed
-         * ACK leaves the requester and responder permanently desynchronised
-         * (DoS). */
-        rxSz = sizeof(rxBuf);
-        rc = wolfSPDM_DecryptInternal(ctx, rawRxBuf, rawRxSz, rxBuf, &rxSz);
-        if (rc != WOLFSPDM_SUCCESS) {
-            wolfSPDM_DebugPrint(ctx,
-                "KEY_UPDATE: ACK decrypt failed (%d); rolling keys back\n", rc);
-            XMEMCPY(ctx->reqDataKey, savedReqDataKey, sizeof(savedReqDataKey));
-            XMEMCPY(ctx->reqDataIv, savedReqDataIv, sizeof(savedReqDataIv));
-            XMEMCPY(ctx->reqAppSecret, savedReqAppSecret,
-                sizeof(savedReqAppSecret));
-            if (updateAll) {
-                XMEMCPY(ctx->rspDataKey, savedRspDataKey, sizeof(savedRspDataKey));
-                XMEMCPY(ctx->rspDataIv, savedRspDataIv, sizeof(savedRspDataIv));
-                XMEMCPY(ctx->rspAppSecret, savedRspAppSecret,
-                    sizeof(savedRspAppSecret));
-            }
-            ctx->reqSeqNum = savedReqSeqNum;
-            ctx->rspSeqNum = savedRspSeqNum;
-        }
-
-    kupd_cleanup:
-        wc_ForceZero(savedReqDataKey, sizeof(savedReqDataKey));
-        wc_ForceZero(savedReqDataIv, sizeof(savedReqDataIv));
-        wc_ForceZero(savedReqAppSecret, sizeof(savedReqAppSecret));
-        wc_ForceZero(savedRspDataKey, sizeof(savedRspDataKey));
-        wc_ForceZero(savedRspDataIv, sizeof(savedRspDataIv));
-        wc_ForceZero(savedRspAppSecret, sizeof(savedRspAppSecret));
-        if (rc != WOLFSPDM_SUCCESS) {
-            return rc;
-        }
+kupd_cleanup:
+    wc_ForceZero(savedReqDataKey, sizeof(savedReqDataKey));
+    wc_ForceZero(savedReqDataIv, sizeof(savedReqDataIv));
+    wc_ForceZero(savedReqAppSecret, sizeof(savedReqAppSecret));
+    wc_ForceZero(savedRspDataKey, sizeof(savedRspDataKey));
+    wc_ForceZero(savedRspDataIv, sizeof(savedRspDataIv));
+    wc_ForceZero(savedRspAppSecret, sizeof(savedRspAppSecret));
+    if (rc != WOLFSPDM_SUCCESS) {
+        return rc;
     }
 
     rc = wolfSPDM_ParseKeyUpdateAck(ctx, rxBuf, rxSz, operation, tag);

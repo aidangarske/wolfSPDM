@@ -497,7 +497,9 @@ static int test_build_finish_opaque_length_14(void)
     /* SPDM 1.4 adds OpaqueLength(2) to FINISH at offset 4. Verify both the
      * grown size requirement and that the field is actually written. */
     byte buf[128];
+    byte tinyBuf[53];
     word32 bufSz;
+    word32 tinySz;
     int i;
     TEST_CTX_SETUP_V12();
 
@@ -519,13 +521,10 @@ static int test_build_finish_opaque_length_14(void)
     ASSERT_EQ(buf[5], 0x00, "OpaqueLength byte 1 should be 0");
 
     /* 1.4 size guard: 53 bytes must be refused. */
-    {
-        byte tinyBuf[53];
-        word32 tinySz = sizeof(tinyBuf);
-        ASSERT_EQ(wolfSPDM_BuildFinish(ctx, tinyBuf, &tinySz),
-            WOLFSPDM_E_BUFFER_SMALL,
-            "1.4 FINISH should refuse 53 bytes (needs 54)");
-    }
+    tinySz = sizeof(tinyBuf);
+    ASSERT_EQ(wolfSPDM_BuildFinish(ctx, tinyBuf, &tinySz),
+        WOLFSPDM_E_BUFFER_SMALL,
+        "1.4 FINISH should refuse 53 bytes (needs 54)");
 
     TEST_CTX_FREE();
     TEST_PASS();
@@ -890,7 +889,14 @@ static int test_measurement_sig_verification(void)
     byte rawS[WOLFSPDM_ECC_KEY_SIZE];
     word32 rSz = sizeof(rawR);
     word32 sSz = sizeof(rawS);
+    byte pubDer[256];
+    word32 pubDerSz;
+    word32 idx;
+    byte signMsg[200];
+    word32 signMsgLen;
+    byte sigRaw[WOLFSPDM_ECC_SIG_SIZE];
     int rc;
+    int i;
     TEST_CTX_SETUP_V12();
 
     printf("test_measurement_sig_verification...\n");
@@ -908,61 +914,54 @@ static int test_measurement_sig_verification(void)
     TEST_ASSERT(rc == 0, "wc_ecc_init responderPubKey failed");
 
     /* Export/import just the public key */
-    {
-        byte pubDer[256];
-        word32 pubDerSz = sizeof(pubDer);
-        word32 idx = 0;
-        rc = wc_EccPublicKeyToDer(&sigKey, pubDer, pubDerSz, 1);
-        TEST_ASSERT(rc > 0, "EccPublicKeyToDer failed");
-        pubDerSz = (word32)rc;
-        rc = wc_EccPublicKeyDecode(pubDer, &idx, &ctx->responderPubKey,
-            pubDerSz);
-        TEST_ASSERT(rc == 0, "EccPublicKeyDecode failed");
-    }
+    pubDerSz = sizeof(pubDer);
+    idx = 0;
+    rc = wc_EccPublicKeyToDer(&sigKey, pubDer, pubDerSz, 1);
+    TEST_ASSERT(rc > 0, "EccPublicKeyToDer failed");
+    pubDerSz = (word32)rc;
+    rc = wc_EccPublicKeyDecode(pubDer, &idx, &ctx->responderPubKey,
+        pubDerSz);
+    TEST_ASSERT(rc == 0, "EccPublicKeyDecode failed");
     ctx->flags.hasResponderPubKey = 1;
 
     /* Build the response buffer (rspBase + signature) */
     XMEMCPY(rspBuf, rspBase, sizeof(rspBase));
     rspBufSz = sizeof(rspBase);
 
-    /* Compute Hash(L1||L2) where L2 = rspBase (before signature) */
-    /* Then build M = prefix||pad||context||hash, then Hash(M) */
-    {
-        static const char context_str[] = "responder-measurements signing";
-        #define TEST_PREFIX_SIZE 16
-        #define TEST_CONTEXT_STR_SIZE 30  /* strlen, no null terminator */
-        #define TEST_ZERO_PAD_SIZE (36 - TEST_CONTEXT_STR_SIZE)
-        byte signMsg[200];
-        word32 signMsgLen = 0;
-        int i;
+    /* Compute Hash(L1||L2) where L2 = rspBase (before signature),
+     * then build M = prefix||pad||context||hash, then Hash(M). */
+    #define TEST_CONTEXT_STR "responder-measurements signing"
+    #define TEST_PREFIX_SIZE 16
+    #define TEST_CONTEXT_STR_SIZE 30  /* strlen, no null terminator */
+    #define TEST_ZERO_PAD_SIZE (36 - TEST_CONTEXT_STR_SIZE)
+    signMsgLen = 0;
 
-        /* L1||L2 hash */
-        rc = wc_InitSha384(&sha);
-        TEST_ASSERT(rc == 0, "InitSha384 failed");
-        wc_Sha384Update(&sha, reqMsg, sizeof(reqMsg));
-        wc_Sha384Update(&sha, rspBuf, rspBufSz);
-        wc_Sha384Final(&sha, digest);
-        wc_Sha384Free(&sha);
+    /* L1||L2 hash */
+    rc = wc_InitSha384(&sha);
+    TEST_ASSERT(rc == 0, "InitSha384 failed");
+    wc_Sha384Update(&sha, reqMsg, sizeof(reqMsg));
+    wc_Sha384Update(&sha, rspBuf, rspBufSz);
+    wc_Sha384Final(&sha, digest);
+    wc_Sha384Free(&sha);
 
-        /* Build M */
-        for (i = 0; i < 4; i++) {
-            XMEMCPY(&signMsg[signMsgLen], "dmtf-spdm-v1.2.*", TEST_PREFIX_SIZE);
-            signMsgLen += TEST_PREFIX_SIZE;
-        }
-        XMEMSET(&signMsg[signMsgLen], 0x00, TEST_ZERO_PAD_SIZE);
-        signMsgLen += TEST_ZERO_PAD_SIZE;
-        XMEMCPY(&signMsg[signMsgLen], context_str, TEST_CONTEXT_STR_SIZE);
-        signMsgLen += TEST_CONTEXT_STR_SIZE;
-        XMEMCPY(&signMsg[signMsgLen], digest, WOLFSPDM_HASH_SIZE);
-        signMsgLen += WOLFSPDM_HASH_SIZE;
-
-        /* Hash(M) */
-        rc = wc_InitSha384(&sha2);
-        TEST_ASSERT(rc == 0, "InitSha384 for M failed");
-        wc_Sha384Update(&sha2, signMsg, signMsgLen);
-        wc_Sha384Final(&sha2, digest);
-        wc_Sha384Free(&sha2);
+    /* Build M */
+    for (i = 0; i < 4; i++) {
+        XMEMCPY(&signMsg[signMsgLen], "dmtf-spdm-v1.2.*", TEST_PREFIX_SIZE);
+        signMsgLen += TEST_PREFIX_SIZE;
     }
+    XMEMSET(&signMsg[signMsgLen], 0x00, TEST_ZERO_PAD_SIZE);
+    signMsgLen += TEST_ZERO_PAD_SIZE;
+    XMEMCPY(&signMsg[signMsgLen], TEST_CONTEXT_STR, TEST_CONTEXT_STR_SIZE);
+    signMsgLen += TEST_CONTEXT_STR_SIZE;
+    XMEMCPY(&signMsg[signMsgLen], digest, WOLFSPDM_HASH_SIZE);
+    signMsgLen += WOLFSPDM_HASH_SIZE;
+
+    /* Hash(M) */
+    rc = wc_InitSha384(&sha2);
+    TEST_ASSERT(rc == 0, "InitSha384 for M failed");
+    wc_Sha384Update(&sha2, signMsg, signMsgLen);
+    wc_Sha384Final(&sha2, digest);
+    wc_Sha384Free(&sha2);
 
     /* Sign Hash(M) with our test key (DER format) */
     rc = wc_ecc_sign_hash(digest, WOLFSPDM_HASH_SIZE, derSig, &derSigSz,
@@ -974,14 +973,11 @@ static int test_measurement_sig_verification(void)
     TEST_ASSERT(rc == 0, "ecc_sig_to_rs failed");
 
     /* Pad r and s to 48 bytes each (P-384) */
-    {
-        byte sigRaw[WOLFSPDM_ECC_SIG_SIZE];
-        XMEMSET(sigRaw, 0, sizeof(sigRaw));
-        /* Right-align r and s in their 48-byte fields */
-        XMEMCPY(sigRaw + (48 - rSz), rawR, rSz);
-        XMEMCPY(sigRaw + 48 + (48 - sSz), rawS, sSz);
-        XMEMCPY(rspBuf + rspBufSz, sigRaw, WOLFSPDM_ECC_SIG_SIZE);
-    }
+    XMEMSET(sigRaw, 0, sizeof(sigRaw));
+    /* Right-align r and s in their 48-byte fields */
+    XMEMCPY(sigRaw + (48 - rSz), rawR, rSz);
+    XMEMCPY(sigRaw + 48 + (48 - sSz), rawS, sSz);
+    XMEMCPY(rspBuf + rspBufSz, sigRaw, WOLFSPDM_ECC_SIG_SIZE);
     rspBufSz += WOLFSPDM_ECC_SIG_SIZE;
 
     /* Test 1: Valid signature should verify */
@@ -1609,6 +1605,15 @@ static int test_version_fallback(void)
         0x00, 0x12,                          /* 1.2 */
         0x00, 0x13                           /* 1.3 */
     };
+    byte rsp14[] = {
+        0x10, SPDM_VERSION, 0x00, 0x00,
+        0x05, 0x00,
+        0x00, 0x10,
+        0x00, 0x11,
+        0x00, 0x12,
+        0x00, 0x13,
+        0x00, 0x14
+    };
     TEST_CTX_SETUP();
 
     printf("test_version_fallback...\n");
@@ -1627,23 +1632,12 @@ static int test_version_fallback(void)
         "Should fall back to 1.2 with maxVersion cap");
 
     /* A responder advertising 1.4 should be selected when we allow it. */
-    {
-        byte rsp14[] = {
-            0x10, SPDM_VERSION, 0x00, 0x00,
-            0x05, 0x00,
-            0x00, 0x10,
-            0x00, 0x11,
-            0x00, 0x12,
-            0x00, 0x13,
-            0x00, 0x14
-        };
-        ctx->state = WOLFSPDM_STATE_INIT;
-        ctx->spdmVersion = 0;
-        ctx->maxVersion = 0;  /* compile-time default = 1.4 */
-        ASSERT_SUCCESS(wolfSPDM_ParseVersion(ctx, rsp14, sizeof(rsp14)));
-        ASSERT_EQ(ctx->spdmVersion, SPDM_VERSION_14,
-            "Should select 1.4 when offered and allowed");
-    }
+    ctx->state = WOLFSPDM_STATE_INIT;
+    ctx->spdmVersion = 0;
+    ctx->maxVersion = 0;  /* compile-time default = 1.4 */
+    ASSERT_SUCCESS(wolfSPDM_ParseVersion(ctx, rsp14, sizeof(rsp14)));
+    ASSERT_EQ(ctx->spdmVersion, SPDM_VERSION_14,
+        "Should select 1.4 when offered and allowed");
 
     TEST_CTX_FREE();
     TEST_PASS();
@@ -1730,7 +1724,9 @@ static int test_sequence_number_wrap(void)
 {
     byte plain[] = "hello-spdm";
     byte enc[256];
+    byte dec[256];
     word32 encSz;
+    word32 decSz;
     int i;
     TEST_CTX_SETUP_V12();
 
@@ -1768,12 +1764,9 @@ static int test_sequence_number_wrap(void)
      * buffer so a future change that writes before checking seqNum would
      * be caught instead of silently corrupting the input. */
     ctx->rspSeqNum = 0x10000;
-    {
-        byte dec[256];
-        word32 decSz = sizeof(dec);
-        ASSERT_EQ(wolfSPDM_DecryptInternal(ctx, enc, sizeof(enc), dec, &decSz),
-            WOLFSPDM_E_SEQUENCE, "Decrypt past seq=0xFFFF must be refused");
-    }
+    decSz = sizeof(dec);
+    ASSERT_EQ(wolfSPDM_DecryptInternal(ctx, enc, sizeof(enc), dec, &decSz),
+        WOLFSPDM_E_SEQUENCE, "Decrypt past seq=0xFFFF must be refused");
 
     /* A counter just inside the limit still works. */
     ctx->reqSeqNum = 0xFFFF;

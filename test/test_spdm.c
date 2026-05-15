@@ -54,6 +54,7 @@ static int tcp_io_callback(WOLFSPDM_CTX* ctx,
     TCP_CTX* tcpCtx = (TCP_CTX*)userCtx;
     byte sendBuf[512];
     byte recvHdr[12];
+    byte mctpHdr;
     ssize_t sent, recvd;
     word32 payloadSz, respSize;
 
@@ -102,11 +103,9 @@ static int tcp_io_callback(WOLFSPDM_CTX* ctx,
     }
 
     /* Skip MCTP header */
-    {
-        byte mctpHdr;
-        recvd = recv(tcpCtx->sockFd, &mctpHdr, 1, MSG_WAITALL);
-        if (recvd != 1) return -1;
-    }
+    recvd = recv(tcpCtx->sockFd, &mctpHdr, 1, MSG_WAITALL);
+    if (recvd != 1) return -1;
+    (void)mctpHdr;
 
     *rxSz = respSize - 1;
     if (*rxSz > 0) {

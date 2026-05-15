@@ -41,6 +41,8 @@ int wolfSPDM_EncryptInternal(WOLFSPDM_CTX* ctx,
     byte aad[8];
     byte plainBuf[WOLFSPDM_MAX_MSG_SIZE + 16];
     byte tag[WOLFSPDM_AEAD_TAG_SIZE];
+    word16 appDataLen;
+    word16 encDataLen;
     word32 plainBufSz;
     word16 recordLen;
     word32 hdrSz;
@@ -72,31 +74,29 @@ int wolfSPDM_EncryptInternal(WOLFSPDM_CTX* ctx,
      * Header: SessionID(4 LE) + SeqNum(2 LE) + Length(2 LE) = 8 bytes
      * AAD = Header
      */
-    {
-        word16 appDataLen = (word16)(1 + plainSz);
-        word16 encDataLen = (word16)(2 + appDataLen);
+    appDataLen = (word16)(1 + plainSz);
+    encDataLen = (word16)(2 + appDataLen);
 
-        plainBufSz = encDataLen;
-        recordLen = (word16)(encDataLen + WOLFSPDM_AEAD_TAG_SIZE);
-        hdrSz = 8;  /* 4 + 2 + 2 */
+    plainBufSz = encDataLen;
+    recordLen = (word16)(encDataLen + WOLFSPDM_AEAD_TAG_SIZE);
+    hdrSz = 8;  /* 4 + 2 + 2 */
 
-        if (*encSz < hdrSz + recordLen) {
-            return WOLFSPDM_E_BUFFER_SMALL;
-        }
-
-        /* Build plaintext: AppDataLen(2 LE) || MCTP header(0x05) || SPDM msg */
-        SPDM_Set16LE(plainBuf, appDataLen);
-        plainBuf[2] = MCTP_MESSAGE_TYPE_SPDM;
-        XMEMCPY(&plainBuf[3], plain, plainSz);
-
-        /* Build header/AAD: SessionID(4 LE) + SeqNum(2 LE) + Length(2 LE) */
-        SPDM_Set32LE(&enc[0], ctx->sessionId);
-        SPDM_Set16LE(&enc[4], (word16)ctx->reqSeqNum);
-        SPDM_Set16LE(&enc[6], recordLen);
-
-        aadSz = 8;
-        XMEMCPY(aad, enc, aadSz);
+    if (*encSz < hdrSz + recordLen) {
+        return WOLFSPDM_E_BUFFER_SMALL;
     }
+
+    /* Build plaintext: AppDataLen(2 LE) || MCTP header(0x05) || SPDM msg */
+    SPDM_Set16LE(plainBuf, appDataLen);
+    plainBuf[2] = MCTP_MESSAGE_TYPE_SPDM;
+    XMEMCPY(&plainBuf[3], plain, plainSz);
+
+    /* Build header/AAD: SessionID(4 LE) + SeqNum(2 LE) + Length(2 LE) */
+    SPDM_Set32LE(&enc[0], ctx->sessionId);
+    SPDM_Set16LE(&enc[4], (word16)ctx->reqSeqNum);
+    SPDM_Set16LE(&enc[6], recordLen);
+
+    aadSz = 8;
+    XMEMCPY(aad, enc, aadSz);
 
     /* Build IV: BaseIV XOR sequence number (DSP0277) */
     wolfSPDM_BuildIV(iv, ctx->reqDataIv, ctx->reqSeqNum);
@@ -384,7 +384,9 @@ int wolfSPDM_SecuredExchange(WOLFSPDM_CTX* ctx,
 int wolfSPDM_SendData(WOLFSPDM_CTX* ctx, const byte* data, word32 dataSz)
 {
     byte encBuf[WOLFSPDM_MAX_MSG_SIZE + 48];
+    byte rxBuf[16];
     word32 encSz = sizeof(encBuf);
+    word32 rxSz;
     int rc;
 
     if (ctx == NULL || data == NULL || dataSz == 0) {
@@ -415,13 +417,10 @@ int wolfSPDM_SendData(WOLFSPDM_CTX* ctx, const byte* data, word32 dataSz)
         return WOLFSPDM_E_IO_FAIL;
     }
 
-    {
-        byte rxBuf[16];
-        word32 rxSz = sizeof(rxBuf);
-        rc = ctx->ioCb(ctx, encBuf, encSz, rxBuf, &rxSz, ctx->ioUserCtx);
-        if (rc != 0) {
-            return WOLFSPDM_E_IO_FAIL;
-        }
+    rxSz = sizeof(rxBuf);
+    rc = ctx->ioCb(ctx, encBuf, encSz, rxBuf, &rxSz, ctx->ioUserCtx);
+    if (rc != 0) {
+        return WOLFSPDM_E_IO_FAIL;
     }
 
     return WOLFSPDM_SUCCESS;

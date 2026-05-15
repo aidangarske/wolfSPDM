@@ -147,6 +147,10 @@ int wolfSPDM_ComputeSharedSecret(WOLFSPDM_CTX* ctx,
     const byte* peerPubKeyX, const byte* peerPubKeyY)
 {
     ecc_key peerKey;
+    byte scratch[WOLFSPDM_ECC_KEY_SIZE];
+    word32 retSz;
+    word32 pad;
+    word32 i;
     int rc;
     int peerKeyInit = 0;
 
@@ -190,23 +194,18 @@ int wolfSPDM_ComputeSharedSecret(WOLFSPDM_CTX* ctx,
      * of how many high-order zero bytes wolfCrypt stripped. The underlying
      * wc_ecc_shared_secret length is itself a function of the secret X
      * coordinate; this routine just keeps the wolfSPDM-level work uniform. */
-    {
-        byte scratch[WOLFSPDM_ECC_KEY_SIZE];
-        word32 retSz = ctx->sharedSecretSz;
-        word32 pad;
-        word32 i;
-        if (retSz > WOLFSPDM_ECC_KEY_SIZE) {
-            rc = WOLFSPDM_E_CRYPTO_FAIL;
-            goto cleanup;
-        }
-        pad = WOLFSPDM_ECC_KEY_SIZE - retSz;
-        for (i = 0; i < WOLFSPDM_ECC_KEY_SIZE; i++) {
-            scratch[i] = (i < pad) ? (byte)0 : ctx->sharedSecret[i - pad];
-        }
-        XMEMCPY(ctx->sharedSecret, scratch, WOLFSPDM_ECC_KEY_SIZE);
-        wc_ForceZero(scratch, sizeof(scratch));
-        ctx->sharedSecretSz = WOLFSPDM_ECC_KEY_SIZE;
+    retSz = ctx->sharedSecretSz;
+    if (retSz > WOLFSPDM_ECC_KEY_SIZE) {
+        rc = WOLFSPDM_E_CRYPTO_FAIL;
+        goto cleanup;
     }
+    pad = WOLFSPDM_ECC_KEY_SIZE - retSz;
+    for (i = 0; i < WOLFSPDM_ECC_KEY_SIZE; i++) {
+        scratch[i] = (i < pad) ? (byte)0 : ctx->sharedSecret[i - pad];
+    }
+    XMEMCPY(ctx->sharedSecret, scratch, WOLFSPDM_ECC_KEY_SIZE);
+    wc_ForceZero(scratch, sizeof(scratch));
+    ctx->sharedSecretSz = WOLFSPDM_ECC_KEY_SIZE;
 
     wolfSPDM_DebugPrint(ctx, "ECDH shared secret computed (%u bytes)\n",
         ctx->sharedSecretSz);

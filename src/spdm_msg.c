@@ -302,6 +302,7 @@ int wolfSPDM_BuildFinish(WOLFSPDM_CTX* ctx, byte* buf, word32* bufSz)
     byte th2Hash[WOLFSPDM_HASH_SIZE];
     byte verifyData[WOLFSPDM_HASH_SIZE];
     word32 offset = 4;  /* Start after header */
+    word32 minSz;
     int rc;
 
     /* Check arguments first before any ctx dereference */
@@ -310,13 +311,11 @@ int wolfSPDM_BuildFinish(WOLFSPDM_CTX* ctx, byte* buf, word32* bufSz)
     }
 
     /* Check buffer size: header(4) + [OpaqueLength(2) for 1.4+] + HMAC(48) */
-    {
-        word32 minSz = 4 + WOLFSPDM_HASH_SIZE;  /* header + HMAC */
-        if (ctx->spdmVersion >= SPDM_VERSION_14)
-            minSz += 2;  /* OpaqueLength */
-        if (*bufSz < minSz)
-            return WOLFSPDM_E_BUFFER_SMALL;
-    }
+    minSz = 4 + WOLFSPDM_HASH_SIZE;  /* header + HMAC */
+    if (ctx->spdmVersion >= SPDM_VERSION_14)
+        minSz += 2;  /* OpaqueLength */
+    if (*bufSz < minSz)
+        return WOLFSPDM_E_BUFFER_SMALL;
 
     /* Build FINISH header (mutual auth not supported in standard requester) */
     buf[0] = ctx->spdmVersion;
@@ -396,6 +395,9 @@ int wolfSPDM_ParseVersion(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufSz)
     word16 entryCount;
     word16 maxEntries;
     byte highestVersion = 0;  /* No version found yet */
+    byte maxVer;
+    byte ver;
+    word32 i;
 
     SPDM_CHECK_PARSE_OR_ERROR_ARGS(ctx, buf, bufSz, 6);
     SPDM_CHECK_RESPONSE(ctx, buf, bufSz, SPDM_VERSION, WOLFSPDM_E_VERSION_MISMATCH);
@@ -416,18 +418,15 @@ int wolfSPDM_ParseVersion(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufSz)
      * Per DSP0274, negotiated version must be the highest version
      * that both sides support. We support WOLFSPDM_MIN_SPDM_VERSION
      * through WOLFSPDM_MAX_SPDM_VERSION (or ctx->maxVersion if set). */
-    {
-        byte maxVer = (ctx->maxVersion != 0) ? ctx->maxVersion
-                                              : WOLFSPDM_MAX_SPDM_VERSION;
-        word32 i;
-        for (i = 0; i < entryCount; i++) {
-            /* Each entry is 2 bytes; high byte (offset +1) is Major.Minor */
-            byte ver = buf[6 + i * 2 + 1];
-            if (ver >= WOLFSPDM_MIN_SPDM_VERSION &&
-                ver <= maxVer &&
-                ver > highestVersion) {
-                highestVersion = ver;
-            }
+    maxVer = (ctx->maxVersion != 0) ? ctx->maxVersion
+                                    : WOLFSPDM_MAX_SPDM_VERSION;
+    for (i = 0; i < entryCount; i++) {
+        /* Each entry is 2 bytes; high byte (offset +1) is Major.Minor */
+        ver = buf[6 + i * 2 + 1];
+        if (ver >= WOLFSPDM_MIN_SPDM_VERSION &&
+            ver <= maxVer &&
+            ver > highestVersion) {
+            highestVersion = ver;
         }
     }
 
@@ -474,6 +473,19 @@ int wolfSPDM_ParseAlgorithms(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufSz)
     word32 baseAsymAlgo;
     word32 baseHashAlgo;
     word16 declaredLen;
+    byte numAlgs;
+    byte extAsymCount;
+    byte extHashCount;
+    byte ai;
+    byte algType;
+    byte algCount;
+    word16 algSel;
+    word32 algStart;
+    word32 off;
+    word32 extLen;
+    int dheOk = 0;
+    int aeadOk = 0;
+    int ksOk = 0;
 
     SPDM_CHECK_PARSE_OR_ERROR_ARGS(ctx, buf, bufSz, 36);
     SPDM_CHECK_RESPONSE(ctx, buf, bufSz, SPDM_ALGORITHMS, WOLFSPDM_E_ALGO_MISMATCH);
@@ -535,67 +547,63 @@ int wolfSPDM_ParseAlgorithms(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufSz)
      * Set B (SECP_384_R1 / AES_256_GCM / SPDM). Require all three to be
      * present and match - a responder offering AlgStructCount=0 must not
      * bypass the Set-B contract. Layout per DSP0274 Table 18:
-     *   each struct: AlgType(1) | AlgCount(1) | AlgSupported(2 LE) | ext... */
-    {
-        /* DSP0274 Table 18: ExtAsymSelCount (buf[32]) + ExtHashSelCount
-         * (buf[33]) push the AlgStruct array past the fixed 36 bytes.
-         * Skip both ExtAsym/ExtHash tables (each entry is 4 bytes) before
-         * walking AlgStructs. */
-        byte numAlgs = buf[2];  /* Param1 = AlgStructCount */
-        byte extAsymCount = (bufSz >= 33) ? buf[32] : 0;
-        byte extHashCount = (bufSz >= 34) ? buf[33] : 0;
-        word32 algStart = (word32)36 +
-            (word32)extAsymCount * 4 + (word32)extHashCount * 4;
-        byte ai;
-        word32 off;
-        int dheOk = 0, aeadOk = 0, ksOk = 0;
-        if (algStart > bufSz) {
-            return WOLFSPDM_E_ALGO_MISMATCH;
+     *   each struct: AlgType(1) | AlgCount(1) | AlgSupported(2 LE) | ext...
+     *
+     * DSP0274 Table 18: ExtAsymSelCount (buf[32]) + ExtHashSelCount
+     * (buf[33]) push the AlgStruct array past the fixed 36 bytes.
+     * Skip both ExtAsym/ExtHash tables (each entry is 4 bytes) before
+     * walking AlgStructs. */
+    numAlgs = buf[2];  /* Param1 = AlgStructCount */
+    extAsymCount = (bufSz >= 33) ? buf[32] : 0;
+    extHashCount = (bufSz >= 34) ? buf[33] : 0;
+    algStart = (word32)36 +
+        (word32)extAsymCount * 4 + (word32)extHashCount * 4;
+    if (algStart > bufSz) {
+        return WOLFSPDM_E_ALGO_MISMATCH;
+    }
+    off = algStart;
+    for (ai = 0; ai < numAlgs && off + 4 <= bufSz; ai++) {
+        algType  = buf[off];
+        algCount = buf[off + 1];
+        algSel = SPDM_Get16LE(&buf[off + 2]);
+        /* Per DSP0274 Table 16: AlgCount low nibble = ExtAlgCount
+         * (each ExtAlg is 4 bytes); high nibble = fixed-size marker
+         * (= 2 in current spec). Use the LOW nibble for extLen. */
+        extLen = ((word32)(algCount & 0x0F)) * 4;
+        switch (algType) {
+            case SPDM_ALG_TYPE_DHE:
+                if (algSel != SPDM_DHE_ALGO_SECP384R1) {
+                    wolfSPDM_DebugPrint(ctx,
+                        "ALGORITHMS: DHE not SECP_384_R1 (0x%04x)\n", algSel);
+                    return WOLFSPDM_E_ALGO_MISMATCH;
+                }
+                dheOk = 1;
+                break;
+            case SPDM_ALG_TYPE_AEAD:
+                if (algSel != SPDM_AEAD_ALGO_AES_256_GCM) {
+                    wolfSPDM_DebugPrint(ctx,
+                        "ALGORITHMS: AEAD not AES_256_GCM (0x%04x)\n", algSel);
+                    return WOLFSPDM_E_ALGO_MISMATCH;
+                }
+                aeadOk = 1;
+                break;
+            case SPDM_ALG_TYPE_KEY_SCHEDULE:
+                if (algSel != SPDM_KEY_SCHEDULE_SPDM) {
+                    wolfSPDM_DebugPrint(ctx,
+                        "ALGORITHMS: KeySchedule not SPDM (0x%04x)\n", algSel);
+                    return WOLFSPDM_E_ALGO_MISMATCH;
+                }
+                ksOk = 1;
+                break;
+            default: break;
         }
-        off = algStart;
-        for (ai = 0; ai < numAlgs && off + 4 <= bufSz; ai++) {
-            byte algType  = buf[off];
-            byte algCount = buf[off + 1];
-            word16 algSel = SPDM_Get16LE(&buf[off + 2]);
-            /* Per DSP0274 Table 16: AlgCount low nibble = ExtAlgCount
-             * (each ExtAlg is 4 bytes); high nibble = fixed-size marker
-             * (= 2 in current spec). Use the LOW nibble for extLen. */
-            word32 extLen = ((word32)(algCount & 0x0F)) * 4;
-            switch (algType) {
-                case SPDM_ALG_TYPE_DHE:
-                    if (algSel != SPDM_DHE_ALGO_SECP384R1) {
-                        wolfSPDM_DebugPrint(ctx,
-                            "ALGORITHMS: DHE not SECP_384_R1 (0x%04x)\n", algSel);
-                        return WOLFSPDM_E_ALGO_MISMATCH;
-                    }
-                    dheOk = 1;
-                    break;
-                case SPDM_ALG_TYPE_AEAD:
-                    if (algSel != SPDM_AEAD_ALGO_AES_256_GCM) {
-                        wolfSPDM_DebugPrint(ctx,
-                            "ALGORITHMS: AEAD not AES_256_GCM (0x%04x)\n", algSel);
-                        return WOLFSPDM_E_ALGO_MISMATCH;
-                    }
-                    aeadOk = 1;
-                    break;
-                case SPDM_ALG_TYPE_KEY_SCHEDULE:
-                    if (algSel != SPDM_KEY_SCHEDULE_SPDM) {
-                        wolfSPDM_DebugPrint(ctx,
-                            "ALGORITHMS: KeySchedule not SPDM (0x%04x)\n", algSel);
-                        return WOLFSPDM_E_ALGO_MISMATCH;
-                    }
-                    ksOk = 1;
-                    break;
-                default: break;
-            }
-            off += 4 + extLen;
-        }
-        if (!dheOk || !aeadOk || !ksOk) {
-            wolfSPDM_DebugPrint(ctx,
-                "ALGORITHMS: missing required AlgStruct(s) dhe=%d aead=%d ks=%d\n",
-                dheOk, aeadOk, ksOk);
-            return WOLFSPDM_E_ALGO_MISMATCH;
-        }
+        off += 4 + extLen;
+    }
+    if (!dheOk || !aeadOk || !ksOk) {
+        wolfSPDM_DebugPrint(ctx,
+            "ALGORITHMS: missing required AlgStruct(s) dhe=%d aead=%d ks=%d\n",
+            dheOk, aeadOk, ksOk);
+        return WOLFSPDM_E_ALGO_MISMATCH;
     }
 
     wolfSPDM_DebugPrint(ctx, "ALGORITHMS: BaseAsym=0x%08x BaseHash=0x%08x\n",
@@ -667,6 +675,7 @@ int wolfSPDM_ParseCertificate(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufSz,
 
 int wolfSPDM_ParseKeyExchangeRsp(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufSz)
 {
+    static const char sigCtx[] = "responder-key_exchange_rsp signing";
     word16 opaqueLen;
     word32 sigOffset;
     word32 keRspPartialLen;
@@ -675,6 +684,8 @@ int wolfSPDM_ParseKeyExchangeRsp(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufS
     const byte* signature;
     const byte* rspVerifyData;
     byte expectedHmac[WOLFSPDM_HASH_SIZE];
+    byte th1Partial[WOLFSPDM_HASH_SIZE];
+    byte signedDigest[WOLFSPDM_HASH_SIZE];
     int rc;
 
     SPDM_CHECK_PARSE_OR_ERROR_ARGS(ctx, buf, bufSz, 140);
@@ -728,38 +739,27 @@ int wolfSPDM_ParseKeyExchangeRsp(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufS
      * BuildSignedHash("responder-key_exchange_rsp signing", Hash(partial
      * transcript)). wolfSPDM_KeyExchange refuses to proceed without a
      * parsed cert chain, so hasResponderPubKey is always true here. */
-    {
-        static const char sigCtx[] = "responder-key_exchange_rsp signing";
-        byte th1Partial[WOLFSPDM_HASH_SIZE];
-        byte signedDigest[WOLFSPDM_HASH_SIZE];
-
-        rc = wolfSPDM_TranscriptHash(ctx, th1Partial);
-        if (rc == WOLFSPDM_SUCCESS) {
-            rc = wolfSPDM_BuildSignedHash(ctx->spdmVersion,
-                sigCtx, (word32)(sizeof(sigCtx) - 1),
-                th1Partial, signedDigest);
-        }
-        if (rc == WOLFSPDM_SUCCESS) {
-            rc = wolfSPDM_VerifyEccSig(ctx, signature, WOLFSPDM_ECC_SIG_SIZE,
-                signedDigest, WOLFSPDM_HASH_SIZE);
-            if (rc != WOLFSPDM_SUCCESS) {
-                wolfSPDM_DebugPrint(ctx,
-                    "KEY_EXCHANGE_RSP signature verification failed (rc=%d)\n",
-                    rc);
-            }
-            else {
-                wolfSPDM_DebugPrint(ctx,
-                    "KEY_EXCHANGE_RSP signature verified\n");
-            }
-        }
-        /* Wipe partial-TH1 and assembled-digest before they go out of scope.
-         * These are intermediate handshake material; do not let them linger
-         * on the stack frame after this call returns. */
-        wc_ForceZero(th1Partial, sizeof(th1Partial));
-        wc_ForceZero(signedDigest, sizeof(signedDigest));
+    rc = wolfSPDM_TranscriptHash(ctx, th1Partial);
+    if (rc == WOLFSPDM_SUCCESS) {
+        rc = wolfSPDM_BuildSignedHash(ctx->spdmVersion,
+            sigCtx, (word32)(sizeof(sigCtx) - 1),
+            th1Partial, signedDigest);
+    }
+    if (rc == WOLFSPDM_SUCCESS) {
+        rc = wolfSPDM_VerifyEccSig(ctx, signature, WOLFSPDM_ECC_SIG_SIZE,
+            signedDigest, WOLFSPDM_HASH_SIZE);
         if (rc != WOLFSPDM_SUCCESS) {
-            goto cleanup;
+            wolfSPDM_DebugPrint(ctx,
+                "KEY_EXCHANGE_RSP signature verification failed (rc=%d)\n",
+                rc);
         }
+        else {
+            wolfSPDM_DebugPrint(ctx,
+                "KEY_EXCHANGE_RSP signature verified\n");
+        }
+    }
+    if (rc != WOLFSPDM_SUCCESS) {
+        goto cleanup;
     }
 
     /* Add signature to transcript (TH1 includes signature) */
@@ -810,10 +810,14 @@ int wolfSPDM_ParseKeyExchangeRsp(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufS
     rc = WOLFSPDM_SUCCESS;
 
 cleanup:
-    /* expectedHmac is derived from rspFinishedKey; wipe regardless of path. */
+    /* expectedHmac is derived from rspFinishedKey; wipe regardless of path.
+     * th1Partial / signedDigest are intermediate handshake material - wipe
+     * them too so they do not linger on the stack frame. */
     wc_ForceZero(expectedHmac, sizeof(expectedHmac));
     wc_ForceZero(peerPubKeyX, sizeof(peerPubKeyX));
     wc_ForceZero(peerPubKeyY, sizeof(peerPubKeyY));
+    wc_ForceZero(th1Partial, sizeof(th1Partial));
+    wc_ForceZero(signedDigest, sizeof(signedDigest));
     return rc;
 }
 
@@ -872,6 +876,7 @@ int wolfSPDM_BuildGetMeasurements(WOLFSPDM_CTX* ctx, byte* buf, word32* bufSz,
     byte operation, byte requestSig)
 {
     word32 offset = 0;
+    word32 minSz;
 
     if (ctx == NULL || buf == NULL || bufSz == NULL) {
         return WOLFSPDM_E_INVALID_ARG;
@@ -880,17 +885,15 @@ int wolfSPDM_BuildGetMeasurements(WOLFSPDM_CTX* ctx, byte* buf, word32* bufSz,
     /* Size: 4 header + (requestSig ? 32 nonce + 1 slotId : 0)
      * SPDM 1.3+ adds RequesterContext(8) always. OpaqueDataLength is NOT
      * part of GET_MEASUREMENTS request per DSP0274 Table 51 / libspdm. */
-    {
-        word32 minSz = 4;
-        if (requestSig) {
-            minSz += 32 + 1;  /* Nonce + SlotIDParam */
-        }
-        if (ctx->spdmVersion >= SPDM_VERSION_13) {
-            minSz += 8;       /* RequesterContext (always for 1.3+) */
-        }
-        if (*bufSz < minSz)
-            return WOLFSPDM_E_BUFFER_SMALL;
+    minSz = 4;
+    if (requestSig) {
+        minSz += 32 + 1;  /* Nonce + SlotIDParam */
     }
+    if (ctx->spdmVersion >= SPDM_VERSION_13) {
+        minSz += 8;       /* RequesterContext (always for 1.3+) */
+    }
+    if (*bufSz < minSz)
+        return WOLFSPDM_E_BUFFER_SMALL;
 
     buf[offset++] = ctx->spdmVersion;
     buf[offset++] = SPDM_GET_MEASUREMENTS;

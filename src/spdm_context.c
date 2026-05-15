@@ -113,13 +113,17 @@ WOLFSPDM_CTX* wolfSPDM_New(void)
 
 void wolfSPDM_Free(WOLFSPDM_CTX* ctx)
 {
+#ifdef WOLFSPDM_DYNAMIC_MEMORY
+    int wasDynamic;
+#endif
+
     if (ctx == NULL) {
         return;
     }
 
 #ifdef WOLFSPDM_DYNAMIC_MEMORY
-    {
-        int wasDynamic = ctx->flags.isDynamic;
+    /* Capture before wc_ForceZero wipes ctx->flags. */
+    wasDynamic = ctx->flags.isDynamic;
 #endif
 
     /* Free RNG */
@@ -149,9 +153,8 @@ void wolfSPDM_Free(WOLFSPDM_CTX* ctx)
     wc_ForceZero(ctx, sizeof(WOLFSPDM_CTX));
 
 #ifdef WOLFSPDM_DYNAMIC_MEMORY
-        if (wasDynamic) {
-            XFREE(ctx, NULL, DYNAMIC_TYPE_TMP_BUFFER);
-        }
+    if (wasDynamic) {
+        XFREE(ctx, NULL, DYNAMIC_TYPE_TMP_BUFFER);
     }
 #endif
 }
@@ -322,6 +325,8 @@ byte wolfSPDM_GetNegotiatedVersion(WOLFSPDM_CTX* ctx)
 static int wolfSPDM_ConnectStandard(WOLFSPDM_CTX* ctx)
 {
     int rc;
+    int slot;
+    int i;
 
     /* Reset state for new connection. Drop any cached responder public
      * key from a prior attempt - GetCertificate's guard otherwise skips
@@ -368,20 +373,17 @@ static int wolfSPDM_ConnectStandard(WOLFSPDM_CTX* ctx)
     /* DSP0274 Sec. 10.5: pick the lowest-numbered slot the responder said
      * is populated (DIGESTS Param1 SlotMask). Fall back to slot 0 if the
      * responder did not report a mask, matching the prior behavior. */
-    {
-        int slot = 0;
-        if (ctx->slotMask != 0) {
-            int i;
-            for (i = 0; i < 8; i++) {
-                if (ctx->slotMask & (1 << i)) {
-                    slot = i;
-                    break;
-                }
+    slot = 0;
+    if (ctx->slotMask != 0) {
+        for (i = 0; i < 8; i++) {
+            if (ctx->slotMask & (1 << i)) {
+                slot = i;
+                break;
             }
         }
-        SPDM_CONNECT_STEP(ctx, "Step 5: GET_CERTIFICATE\n",
-            wolfSPDM_GetCertificate(ctx, slot));
     }
+    SPDM_CONNECT_STEP(ctx, "Step 5: GET_CERTIFICATE\n",
+        wolfSPDM_GetCertificate(ctx, slot));
 
     /* Validate certificate chain if trusted CAs are loaded. GetCertificate
      * already guarantees flags.hasResponderPubKey is set on success (returns
