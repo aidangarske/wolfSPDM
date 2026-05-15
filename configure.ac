@@ -41,6 +41,22 @@ AC_CHECK_LIB([wolfssl], [wc_InitRng], [],
 AC_CHECK_HEADER([wolfssl/wolfcrypt/ecc.h], [],
     [AC_MSG_ERROR([wolfSSL headers not found. Use --with-wolfssl=PATH])])
 
+# wolfSSL minimum version: v5.8.0-stable. This is the oldest release the CI
+# matrix in .github/workflows/wolfssl-versions.yml exercises end-to-end; older
+# releases are not validated and may be missing API/curve fixes wolfSPDM relies
+# on (ECDHE P-384, HKDF-SHA384, AES-256-GCM record protection).
+AC_MSG_CHECKING([wolfSSL version >= v5.8.0])
+AC_COMPILE_IFELSE([AC_LANG_SOURCE([[
+    #include <wolfssl/version.h>
+    #if !defined(LIBWOLFSSL_VERSION_HEX) || LIBWOLFSSL_VERSION_HEX < 0x05008000
+    #error "wolfSSL < v5.8.0"
+    #endif
+    int main(void) { return 0; }
+]])],
+[AC_MSG_RESULT([yes])],
+[AC_MSG_RESULT([no])
+ AC_MSG_ERROR([wolfSPDM requires wolfSSL >= v5.8.0-stable. Please upgrade wolfSSL.])])
+
 # Debug mode
 AC_ARG_ENABLE([debug],
     [AS_HELP_STRING([--enable-debug], [Enable debug output])],
@@ -53,17 +69,6 @@ if test "x$enable_debug" = "xyes"; then
 else
     CFLAGS="$CFLAGS -O2"
 fi
-
-# Nuvoton TPM support (TCG binding + vendor commands)
-AC_ARG_ENABLE([nuvoton],
-    [AS_HELP_STRING([--enable-nuvoton], [Enable Nuvoton TPM support (TCG binding headers, vendor commands)])],
-    [enable_nuvoton=$enableval],
-    [enable_nuvoton=no])
-
-if test "x$enable_nuvoton" = "xyes"; then
-    AC_DEFINE([WOLFSPDM_NUVOTON], [1], [Enable Nuvoton TPM support])
-fi
-AM_CONDITIONAL([BUILD_NUVOTON], [test "x$enable_nuvoton" = "xyes"])
 
 # Dynamic memory allocation (enables wolfSPDM_New/XMALLOC)
 AC_ARG_ENABLE([dynamic-mem],
@@ -83,7 +88,6 @@ echo ""
 echo "wolfSPDM configuration summary:"
 echo "  Version:     $PACKAGE_VERSION"
 echo "  Debug:       $enable_debug"
-echo "  Nuvoton:     $enable_nuvoton"
 echo "  Dynamic mem: $enable_dynamic_mem"
 echo "  wolfSSL:     ${WOLFSSL_DIR:-system}"
 echo ""

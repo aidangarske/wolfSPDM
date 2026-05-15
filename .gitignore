@@ -34,6 +34,10 @@ test/.libs/
 test/*.o
 test/unit_test
 test/test_spdm
+examples/.libs/
+examples/*.o
+examples/.dirstamp
+examples/spdm_demo
 
 # pkg-config generated
 wolfspdm.pc

@@ -28,6 +28,16 @@
 #endif
 #include <wolfssl/wolfcrypt/settings.h>
 
+/* Visibility: when built as part of wolfTPM, use WOLFTPM_API for export */
+#ifdef BUILDING_WOLFTPM
+    #include <wolftpm/visibility.h>
+    #define WOLFSPDM_API WOLFTPM_API
+#else
+    #ifndef WOLFSPDM_API
+    #define WOLFSPDM_API
+    #endif
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -44,6 +54,7 @@ extern "C" {
 #define SPDM_VERSION_11             0x11    /* SPDM 1.1 */
 #define SPDM_VERSION_12             0x12    /* SPDM 1.2 */
 #define SPDM_VERSION_13             0x13    /* SPDM 1.3 */
+#define SPDM_VERSION_14             0x14    /* SPDM 1.4 */
 
 /* SPDM Message Header Size */
 #define SPDM_HEADER_SIZE            4       /* Version + Code + Param1 + Param2 */
@@ -125,11 +136,17 @@ extern "C" {
 /* Key Schedule (SPDM 1.2) */
 #define SPDM_KEY_SCHEDULE_SPDM      0x0001      /* Standard SPDM key schedule */
 
+/* ALGORITHMS AlgStruct AlgType values (DSP0274 Sec. 10.4 Table 16) */
+#define SPDM_ALG_TYPE_DHE           2
+#define SPDM_ALG_TYPE_AEAD          3
+#define SPDM_ALG_TYPE_REQ_BASE_ASYM 4
+#define SPDM_ALG_TYPE_KEY_SCHEDULE  5
+
 /* Algorithm Set B Fixed Parameters */
 #define WOLFSPDM_HASH_SIZE          48  /* SHA-384 output size */
 #define WOLFSPDM_ECC_KEY_SIZE       48  /* P-384 coordinate size */
-#define WOLFSPDM_ECC_POINT_SIZE     96  /* P-384 X||Y uncompressed */
-#define WOLFSPDM_ECC_SIG_SIZE       96  /* ECDSA P-384 r||s */
+#define WOLFSPDM_ECC_POINT_SIZE     (2 * WOLFSPDM_ECC_KEY_SIZE)  /* P-384 X||Y */
+#define WOLFSPDM_ECC_SIG_SIZE       (2 * WOLFSPDM_ECC_KEY_SIZE)  /* ECDSA r||s */
 #define WOLFSPDM_AEAD_KEY_SIZE      32  /* AES-256 key size */
 #define WOLFSPDM_AEAD_IV_SIZE       12  /* AES-GCM IV size */
 #define WOLFSPDM_AEAD_TAG_SIZE      16  /* AES-GCM tag size */
@@ -156,8 +173,10 @@ extern "C" {
 #define SPDM_CAP_PUB_KEY_ID_CAP     0x00010000  /* Public key ID */
 
 /* Default requester capabilities for Algorithm Set B session */
-#define WOLFSPDM_DEFAULT_REQ_CAPS   (SPDM_CAP_CERT_CAP | SPDM_CAP_CHAL_CAP | \
-                                     SPDM_CAP_ENCRYPT_CAP | SPDM_CAP_MAC_CAP | \
+/* DSP0274 Table 11: CERT_CAP and CHAL_CAP are responder-only bits.
+ * wolfSPDM is a pure requester and never serves certs or challenges, so
+ * those bits are intentionally absent from the default. */
+#define WOLFSPDM_DEFAULT_REQ_CAPS   (SPDM_CAP_ENCRYPT_CAP | SPDM_CAP_MAC_CAP | \
                                      SPDM_CAP_KEY_EX_CAP | SPDM_CAP_HBEAT_CAP | \
                                      SPDM_CAP_KEY_UPD_CAP)
 

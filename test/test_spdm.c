@@ -7,6 +7,7 @@
 #include <wolfspdm/spdm.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <string.h>
 
 #ifdef __linux__
@@ -25,10 +26,24 @@
 #ifdef HAS_SOCKET
 typedef struct {
     int sockFd;
-    int isSecured;
 } TCP_CTX;
 
-static TCP_CTX g_tcpCtx = { -1, 0 };
+static TCP_CTX g_tcpCtx = { -1 };
+
+/* Tell secured (post-KEY_EXCHANGE_RSP) records from plaintext handshake by
+ * matching the leading 4 bytes against the live session ID, the same way
+ * examples/spdm_demo.c does it. Using a static flag here would miss FINISH
+ * (encrypted, but before WOLFSPDM_STATE_CONNECTED). */
+static int is_secured_spdm(WOLFSPDM_CTX* ctx, const byte* buf, word32 sz)
+{
+    word32 sid, b0;
+    if (sz < 4) return 0;
+    sid = wolfSPDM_GetSessionId(ctx);
+    if (sid == 0) return 0;
+    b0 = (word32)buf[0] | ((word32)buf[1] << 8) |
+         ((word32)buf[2] << 16) | ((word32)buf[3] << 24);
+    return b0 == sid;
+}
 
 /* MCTP transport I/O callback for libspdm emulator */
 static int tcp_io_callback(WOLFSPDM_CTX* ctx,
@@ -39,10 +54,9 @@ static int tcp_io_callback(WOLFSPDM_CTX* ctx,
     TCP_CTX* tcpCtx = (TCP_CTX*)userCtx;
     byte sendBuf[512];
     byte recvHdr[12];
+    byte mctpHdr;
     ssize_t sent, recvd;
     word32 payloadSz, respSize;
-
-    (void)ctx;
 
     if (tcpCtx == NULL || tcpCtx->sockFd < 0) {
         return -1;
@@ -63,8 +77,9 @@ static int tcp_io_callback(WOLFSPDM_CTX* ctx,
     sendBuf[10] = (byte)(payloadSz >> 8);
     sendBuf[11] = (byte)(payloadSz & 0xFF);
 
-    /* MCTP header */
-    sendBuf[12] = tcpCtx->isSecured ? 0x06 : 0x05;
+    /* MCTP message type: secured (0x06) once the tx buffer starts with the
+     * live session ID, otherwise plaintext SPDM (0x05). */
+    sendBuf[12] = is_secured_spdm(ctx, txBuf, txSz) ? 0x06 : 0x05;
 
     if (txSz > 0) {
         memcpy(sendBuf + 13, txBuf, txSz);
@@ -88,11 +103,9 @@ static int tcp_io_callback(WOLFSPDM_CTX* ctx,
     }
 
     /* Skip MCTP header */
-    {
-        byte mctpHdr;
-        recvd = recv(tcpCtx->sockFd, &mctpHdr, 1, MSG_WAITALL);
-        if (recvd != 1) return -1;
-    }
+    recvd = recv(tcpCtx->sockFd, &mctpHdr, 1, MSG_WAITALL);
+    if (recvd != 1) return -1;
+    (void)mctpHdr;
 
     *rxSz = respSize - 1;
     if (*rxSz > 0) {
@@ -116,7 +129,7 @@ static int tcp_connect(const char* host, int port)
 
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
-    addr.sin_port = htons(port);
+    addr.sin_port = htons((uint16_t)port);
     if (inet_pton(AF_INET, host, &addr.sin_addr) != 1) {
         close(sockFd);
         return -1;
@@ -139,9 +152,9 @@ static void tcp_disconnect(void)
     }
 }
 
-/* Static context buffer — sized via wolfSPDM_GetCtxSize() at runtime,
- * but we need a compile-time upper bound. 16KB is generous. */
-#define CTX_BUF_SIZE 16384
+/* Static context buffer sized by the public header so wolfSSL configs that
+ * grow internal struct sizes (e.g. sp-math/ecc variants in CI) still fit. */
+#define CTX_BUF_SIZE WOLFSPDM_CTX_STATIC_SIZE
 static byte g_ctxBuf[CTX_BUF_SIZE];
 
 int main(int argc, char* argv[])
@@ -177,6 +190,11 @@ int main(int argc, char* argv[])
 
     wolfSPDM_SetDebug(ctx, 1);
     wolfSPDM_SetIO(ctx, tcp_io_callback, &g_tcpCtx);
+
+    /* Smoke test runs against spdm-emu with self-signed test certs; the
+     * library now refuses handshakes without a trust anchor unless the
+     * caller explicitly opts out. */
+    wolfSPDM_AllowUntrustedCerts(ctx, 1);
 
     printf("\nEstablishing SPDM session...\n\n");
     rc = wolfSPDM_Connect(ctx);

@@ -11,11 +11,6 @@ libwolfspdm_la_SOURCES = \
     src/spdm_session.c \
     src/spdm_transcript.c
 
-# Nuvoton TPM support (TCG binding + vendor commands)
-if BUILD_NUVOTON
-libwolfspdm_la_SOURCES += src/spdm_nuvoton.c
-endif
-
 libwolfspdm_la_CPPFLAGS = -I$(srcdir)/wolfspdm -I$(srcdir)/src
 libwolfspdm_la_LIBADD = -lwolfssl
 
@@ -23,7 +18,7 @@ libwolfspdm_la_LIBADD = -lwolfssl
 BUILT_SOURCES = wolfspdm/options.h
 wolfspdm/options.h: config.h
 	@mkdir -p wolfspdm
-	@echo '/* wolfspdm/options.h — auto-generated from config.h, do not edit */' > $@
+	@echo '/* wolfspdm/options.h - auto-generated from config.h, do not edit */' > $@
 	@echo '#ifndef WOLFSPDM_OPTIONS_H' >> $@
 	@echo '#define WOLFSPDM_OPTIONS_H' >> $@
 	@grep '^\#define WOLFSPDM_' config.h >> $@ || true
@@ -35,11 +30,6 @@ nobase_include_HEADERS = \
     wolfspdm/spdm_types.h \
     wolfspdm/spdm_error.h \
     wolfspdm/options.h
-
-# Nuvoton header (always installed, conditionally useful)
-if BUILD_NUVOTON
-nobase_include_HEADERS += wolfspdm/spdm_nuvoton.h
-endif
 
 # Test programs
 check_PROGRAMS = test/unit_test test/test_spdm
@@ -53,6 +43,13 @@ test_test_spdm_CPPFLAGS = -I$(srcdir)/wolfspdm
 test_test_spdm_LDADD = libwolfspdm.la -lwolfssl
 
 TESTS = test/unit_test
+
+# Example programs (built but not installed)
+noinst_PROGRAMS = examples/spdm_demo
+
+examples_spdm_demo_SOURCES = examples/spdm_demo.c
+examples_spdm_demo_CPPFLAGS = -I$(srcdir)/wolfspdm
+examples_spdm_demo_LDADD = libwolfspdm.la -lwolfssl
 
 # pkgconfig
 pkgconfigdir = $(libdir)/pkgconfig

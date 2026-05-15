@@ -5,6 +5,8 @@ on:
     branches: [ 'master', 'main', 'release/**' ]
   pull_request:
     branches: [ '*' ]
+  repository_dispatch:
+    types: [nightly-trigger]
 
 jobs:
   gcc-strict:
@@ -42,7 +44,7 @@ jobs:
     - name: Build with strict warnings
       run: |
         ./autogen.sh
-        ./configure --with-wolfssl=$HOME/wolfssl-install --enable-nuvoton
+        ./configure --with-wolfssl=$HOME/wolfssl-install
         make -j$(nproc) CFLAGS="-Wall -Wextra -Wpedantic -Werror -Wconversion -Wshadow"
 
   clang:
@@ -80,7 +82,7 @@ jobs:
     - name: Build with clang
       run: |
         ./autogen.sh
-        CC=clang ./configure --with-wolfssl=$HOME/wolfssl-install --enable-nuvoton
+        CC=clang ./configure --with-wolfssl=$HOME/wolfssl-install
         make -j$(nproc) CFLAGS="-Wall -Wextra -Werror"
 
     - name: Run unit tests

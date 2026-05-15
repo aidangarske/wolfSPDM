@@ -20,7 +20,6 @@
  */
 
 #include "spdm_internal.h"
-#include <string.h>
 
 /* --- Transcript Management ---
  * VCA = GET_VERSION || VERSION || GET_CAPS || CAPS || NEG_ALGO || ALGO
@@ -42,7 +41,6 @@ void wolfSPDM_TranscriptReset(WOLFSPDM_CTX* ctx)
 
     XMEMSET(ctx->certChainHash, 0, sizeof(ctx->certChainHash));
     XMEMSET(ctx->th1, 0, sizeof(ctx->th1));
-    XMEMSET(ctx->th2, 0, sizeof(ctx->th2));
 }
 
 int wolfSPDM_TranscriptAdd(WOLFSPDM_CTX* ctx, const byte* data, word32 len)
