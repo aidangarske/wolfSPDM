@@ -101,6 +101,19 @@ export SPDM_EMU_PATH=../spdm-emu/build/bin
 
 The driver starts/stops `spdm_responder_emu` per test and runs six scenarios — Session, Signed Measurements, Unsigned Measurements, Challenge, Heartbeat, Key Update — across SPDM 1.2, 1.3, and 1.4 (18 tests total).
 
+## Relationship to wolfTPM's SPDM
+
+wolfTPM ships its own SPDM implementation in `src/spdm/` for hardware-backed responders (Nuvoton NPCT75x, NSING NS350) with PSK / TCG-binding extensions. **wolfSPDM is a separate implementation** focused on the standard DSP0274 / DSP0277 requester for embedded use with `spdm-emu` and any standards-compliant peer. The two share heritage and are both designed for lightweight embedded use, with different deployment targets:
+
+| | wolfSPDM | wolfTPM `src/spdm/` |
+|---|---|---|
+| Role | Requester only | Requester + responder |
+| Scope | Pure standard SPDM 1.2 / 1.3 / 1.4 | Same, plus PSK / TCG / Nuvoton / Nations vendor bindings |
+| Target | Embedded / spdm-emu / generic SPDM peer | TPM hardware (Nuvoton, NS350) |
+| Footprint | ~32 KB context, zero-malloc (default static mode) | Lightweight embedded footprint; size depends on TPM stack, target, and build configuration |
+
+Either library can be used standalone; they aren't link-time compatible.
+
 ## CI / Testing
 
 Runs on every push and PR:
@@ -114,18 +127,27 @@ Runs on every push and PR:
 - **SPDM Emulator Integration**: 18-test matrix (6 scenarios x SPDM 1.2 / 1.3 / 1.4) across ubuntu-22.04 x64, ubuntu-24.04 x64, and ubuntu-24.04-arm aarch64
 - **Skoll review**: wolfSSL deep-review pipeline, pre-merge security and code review
 
-## Relationship to wolfTPM's SPDM
+<a href="https://github.com/aidangarske/wolfSPDM/actions">
+  <img src="https://img.shields.io/github/actions/workflow/status/aidangarske/wolfSPDM/build-test.yml?label=CI&logo=github">
+</a>
+<a href="https://github.com/wolfssl/skoll">
+  <img src="https://img.shields.io/badge/skoll-passed-blue">
+</a>
+<a href="https://github.com/wolfssl/fenrir">
+  <img src="https://img.shields.io/badge/fenrir-passed-blueviolet">
+</a>
 
-wolfTPM ships its own SPDM implementation in `src/spdm/` for hardware-backed responders (Nuvoton NPCT75x, NSING NS350) with PSK / TCG-binding extensions. **wolfSPDM is a separate implementation** focused on the standard DSP0274 / DSP0277 requester for embedded use with `spdm-emu` and any standards-compliant peer. The two share heritage but solve different problems:
+## Documentation
 
-| | wolfSPDM | wolfTPM `src/spdm/` |
-|---|---|---|
-| Role | Requester only | Requester + responder |
-| Scope | Pure standard SPDM 1.2 / 1.3 / 1.4 | Same, plus PSK / TCG / Nuvoton / Nations vendor bindings |
-| Target | Embedded / spdm-emu / generic SPDM peer | TPM hardware (Nuvoton, NS350) |
-| Footprint | ~32 KB context, zero-malloc | Larger; includes TPM stack |
+Full documentation is available in the Wiki:
 
-Either library can be used standalone; they aren't link-time compatible.
+- [Getting Started](https://github.com/aidangarske/wolfSPDM/wiki/Getting-Started): Build instructions, prerequisites, memory modes, and first connection steps
+- [Supported Operations](https://github.com/aidangarske/wolfSPDM/wiki/Supported-Operations): SPDM operation coverage and API mapping
+- [API Reference](https://github.com/aidangarske/wolfSPDM/wiki/API-Reference): Public function groups and common error-code references
+- [Configuration and Macros](https://github.com/aidangarske/wolfSPDM/wiki/Configuration-and-Macros): Configure flags and compile-time feature controls
+- [Testing and CI](https://github.com/aidangarske/wolfSPDM/wiki/Testing-and-CI): Unit tests, emulator integration tests, and CI workflow coverage
+- [Project Structure](https://github.com/aidangarske/wolfSPDM/wiki/Project-Structure): Source layout and module responsibilities
+- [Attestation Notes](https://github.com/aidangarske/wolfSPDM/wiki/Attestation-Notes): Measurement and challenge attestation behavior
 
 ## License
 
