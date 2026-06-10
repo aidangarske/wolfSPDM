@@ -71,7 +71,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/spdm-emu/build/bin
-          key: spdm-emu-pqc-openssl-${{ steps.cache-period.outputs.biweekly }}
+          key: spdm-emu-pqc-openssl-v2-${{ steps.cache-period.outputs.biweekly }}
 
       - name: Build spdm-emu (CRYPTO=openssl)
         if: steps.cache-spdm-emu.outputs.cache-hit != 'true'
@@ -125,20 +125,21 @@ jobs:
               emu=$!
               if wait_for_port; then
                 sleep 1
-                if "$DEMO" "$@" --ver 1.4; then rc=0; else rc=$?; fi
+                if "$DEMO" "$@" --ver 1.4 --debug; then rc=0; else rc=$?; fi
               else
                 rc=1
               fi
               kill $emu 2>/dev/null || true
               wait $emu 2>/dev/null || true
               [ $rc -eq 0 ] && break
+              echo "--- responder log (attempt $attempt) ---"
+              cat /tmp/pqc_emu_${alg}_${label}.log || true
               echo "attempt $attempt for $alg $label failed (rc=$rc), retrying"
               sleep 1
             done
             echo "::endgroup::"
             if [ $rc -ne 0 ]; then
               echo "::error::$alg $label failed after retries (rc=$rc)"
-              cat /tmp/pqc_emu_${alg}_${label}.log || true
               exit $rc
             fi
             echo "$alg $label: OK"

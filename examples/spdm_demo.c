@@ -236,11 +236,12 @@ static void usage(const char* argv0)
 {
     fprintf(stderr,
         "Usage: %s {--emu|--meas|--challenge|--heartbeat|--key-update}\n"
-        "          [--no-sig] [--ver 1.2|1.3|1.4]\n"
+        "          [--no-sig] [--ver 1.2|1.3|1.4] [--debug]\n"
         "\n"
         "Env:\n"
-        "  SPDM_EMU_PATH   path to spdm-emu build/bin/ (used for trusted CA\n"
-        "                  lookup in --challenge mode)\n",
+        "  SPDM_EMU_PATH      path to spdm-emu build/bin/ (used for trusted CA\n"
+        "                     lookup in --challenge mode)\n"
+        "  SPDM_EMU_CERT_DIR  cert subdir (ecp384 default, mldsa65, ...)\n",
         argv0);
 }
 
@@ -468,17 +469,19 @@ int main(int argc, char* argv[])
         { "heartbeat",  no_argument,       0, 'b' },
         { "key-update", no_argument,       0, 'k' },
         { "ver",        required_argument, 0, 'v' },
+        { "debug",      no_argument,       0, 'd' },
         { "help",       no_argument,       0, 'h' },
         { 0, 0, 0, 0 }
     };
     int mode = 0;
     int withSig = 1;
+    int debug = 0;
     byte maxVer = 0;
     int opt;
     int rc;
     WOLFSPDM_CTX* ctx = (WOLFSPDM_CTX*)g_ctxBuf;
 
-    while ((opt = getopt_long(argc, argv, "emncbkv:h", longOpts, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "emncbkv:hd", longOpts, NULL)) != -1) {
         switch (opt) {
             case 'e': mode = MODE_SESSION; break;
             case 'm': mode = MODE_MEAS; break;
@@ -486,6 +489,7 @@ int main(int argc, char* argv[])
             case 'c': mode = MODE_CHALLENGE; break;
             case 'b': mode = MODE_HEARTBEAT; break;
             case 'k': mode = MODE_KEY_UPDATE; break;
+            case 'd': debug = 1; break;
             case 'v':
                 maxVer = parse_version(optarg);
                 if (maxVer == 0) {
@@ -521,6 +525,10 @@ int main(int argc, char* argv[])
     }
 
     wolfSPDM_SetIO(ctx, tcp_io_callback, &g_tcpCtx);
+
+    if (debug) {
+        wolfSPDM_SetDebug(ctx, 1);
+    }
 
     /* Demo runs against the DMTF spdm-emu, which uses self-signed test
      * certs. Explicitly opt in to operating without a trust anchor so the
