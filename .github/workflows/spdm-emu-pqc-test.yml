@@ -66,12 +66,17 @@ jobs:
           LD_LIBRARY_PATH: ${{ github.workspace }}/.libs:${{ github.workspace }}/src/.libs:${{ env.HOME }}/wolfssl-install/lib
 
       # --- spdm-emu with OpenSSL backend (ML-DSA) ---
+      # Cache the whole build tree, not just build/bin: the OpenSSL-backed
+      # responder depends on the bundled OpenSSL libraries/providers built
+      # elsewhere under build/, so a build/bin-only cache restores a binary
+      # that fails mid-handshake. The full tree makes a restored build behave
+      # identically to a fresh one.
       - name: Cache spdm-emu (openssl)
         id: cache-spdm-emu
         uses: actions/cache@v4
         with:
-          path: ~/spdm-emu/build/bin
-          key: spdm-emu-pqc-openssl-v2-${{ steps.cache-period.outputs.biweekly }}
+          path: ~/spdm-emu/build
+          key: spdm-emu-pqc-openssl-v3-${{ steps.cache-period.outputs.biweekly }}
 
       - name: Build spdm-emu (CRYPTO=openssl)
         if: steps.cache-spdm-emu.outputs.cache-hit != 'true'
