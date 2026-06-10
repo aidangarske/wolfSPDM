@@ -15,6 +15,10 @@ Behavior:
 - `requestSignature=1`: requests signed measurements; verifies signature when verification support is compiled in
 - `requestSignature=0`: retrieves unsigned measurements (informational)
 
+Signature verification (measurements and `CHALLENGE_AUTH`) uses whichever
+asymmetric algorithm was negotiated — ECDSA P-384 or, on SPDM 1.4 with ML-DSA
+built in, ML-DSA-44/65/87. See [[Post-Quantum ML-DSA]].
+
 Result access:
 - `wolfSPDM_GetMeasurementCount`
 - `wolfSPDM_GetMeasurementBlock`

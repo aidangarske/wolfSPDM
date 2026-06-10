@@ -19,6 +19,10 @@ sudo make install
 sudo ldconfig
 ```
 
+For optional post-quantum ML-DSA support, add `--enable-dilithium` and use
+wolfSSL master (or a release that ships the `wc_MlDsaKey` context API). See
+[[Post-Quantum ML-DSA]].
+
 ## Build wolfSPDM
 
 ```bash
@@ -35,6 +39,7 @@ make check
 | `--with-wolfssl=PATH` | Path to wolfSSL headers/libs |
 | `--enable-debug` | Enables debug build flags and `WOLFSPDM_DEBUG` |
 | `--enable-dynamic-mem` | Enables heap-allocated context APIs (`wolfSPDM_New`) |
+| `--disable-mldsa` | Forces ML-DSA off (default auto-follows wolfSSL) |
 
 ## Memory modes
 
