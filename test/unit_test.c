@@ -399,6 +399,264 @@ static int test_parse_algorithms_set_b_enforcement(void)
     TEST_PASS();
 }
 
+#ifdef WOLFSPDM_HAVE_MLDSA
+static int test_negotiate_algorithms_pqc_build(void)
+{
+    byte buf[64];
+    word32 bufSz;
+    TEST_CTX_SETUP();
+
+    printf("test_negotiate_algorithms_pqc_build...\n");
+
+    /* SPDM 1.4: PqcAsymAlgo (offset 16) advertises ML-DSA-44|65|87 = 0x07. */
+    ctx->spdmVersion = SPDM_VERSION_14;
+    bufSz = sizeof(buf);
+    ASSERT_SUCCESS(wolfSPDM_BuildNegotiateAlgorithms(ctx, buf, &bufSz));
+    ASSERT_EQ(buf[16],
+        (SPDM_PQC_ASYM_ALGO_ML_DSA_44 | SPDM_PQC_ASYM_ALGO_ML_DSA_65 |
+         SPDM_PQC_ASYM_ALGO_ML_DSA_87),
+        "1.4 PqcAsymAlgo must advertise ML-DSA 44/65/87 at offset 16");
+    ASSERT_EQ(buf[8], 0x80, "BaseAsymAlgo ECDSA P-384 still advertised");
+
+    /* SPDM 1.2: offset 16 is reserved-zero (no PqcAsymAlgo). */
+    ctx->spdmVersion = SPDM_VERSION_12;
+    bufSz = sizeof(buf);
+    ASSERT_SUCCESS(wolfSPDM_BuildNegotiateAlgorithms(ctx, buf, &bufSz));
+    ASSERT_EQ(buf[16], 0x00, "1.2 must leave offset 16 reserved-zero");
+
+    TEST_CTX_FREE();
+    TEST_PASS();
+}
+
+/* Build a minimal SPDM 1.4 ALGORITHMS response with the given BaseAsymSel
+ * (offset 12) and PqcAsymSel (offset 20). Returns total length (52). */
+static word32 build_algorithms_14(byte* rsp, word32 baseAsymSel,
+    word32 pqcAsymSel)
+{
+    XMEMSET(rsp, 0, 52);
+    rsp[0] = SPDM_VERSION_14;
+    rsp[1] = SPDM_ALGORITHMS;
+    rsp[2] = 4;                  /* AlgStructCount */
+    SPDM_Set16LE(&rsp[4], 52);
+    rsp[6] = 0x01;               /* MeasurementSpecificationSel = DMTF */
+    rsp[7] = 0x02;               /* OtherParamsSel = OpaqueDataFormat1 */
+    SPDM_Set32LE(&rsp[12], baseAsymSel);
+    rsp[16] = SPDM_HASH_ALGO_SHA_384;
+    SPDM_Set32LE(&rsp[20], pqcAsymSel);
+    rsp[36] = 2; rsp[37] = 0x20; rsp[38] = 0x10;  /* DHE SECP_384_R1 */
+    rsp[40] = 3; rsp[41] = 0x20; rsp[42] = 0x02;  /* AEAD AES_256_GCM */
+    rsp[44] = 4; rsp[45] = 0x20; rsp[46] = 0x0F;  /* ReqBaseAsym */
+    rsp[48] = 5; rsp[49] = 0x20; rsp[50] = 0x01;  /* KeySchedule SPDM */
+    return 52;
+}
+
+static int test_parse_algorithms_pqc_select(void)
+{
+    byte rsp[64];
+    word32 levels[3];
+    int i;
+    TEST_CTX_SETUP();
+
+    levels[0] = SPDM_PQC_ASYM_ALGO_ML_DSA_44;
+    levels[1] = SPDM_PQC_ASYM_ALGO_ML_DSA_65;
+    levels[2] = SPDM_PQC_ASYM_ALGO_ML_DSA_87;
+
+    printf("test_parse_algorithms_pqc_select...\n");
+    ctx->spdmVersion = SPDM_VERSION_14;
+
+    /* Each ML-DSA level (44/65/87) with BaseAsymSel = 0: select ML-DSA. */
+    for (i = 0; i < 3; i++) {
+        build_algorithms_14(rsp, 0, levels[i]);
+        ASSERT_SUCCESS(wolfSPDM_ParseAlgorithms(ctx, rsp, 52));
+        ASSERT_EQ(ctx->asymType, WOLFSPDM_ASYM_MLDSA, "asymType must be ML-DSA");
+        ASSERT_EQ(ctx->pqcAsymSel, levels[i], "pqcAsymSel must echo level");
+    }
+
+    /* Both BaseAsymSel and PqcAsymSel set: spec caps combined bits at one. */
+    build_algorithms_14(rsp, SPDM_ASYM_ALGO_ECDSA_P384,
+        SPDM_PQC_ASYM_ALGO_ML_DSA_65);
+    ASSERT_EQ(wolfSPDM_ParseAlgorithms(ctx, rsp, 52),
+        WOLFSPDM_E_ALGO_MISMATCH, "both Base+Pqc selected must fail");
+
+    /* Unsupported PqcAsymSel bit (e.g. an SLH-DSA bit) must be rejected. */
+    build_algorithms_14(rsp, 0, 0x00000008);
+    ASSERT_EQ(wolfSPDM_ParseAlgorithms(ctx, rsp, 52),
+        WOLFSPDM_E_ALGO_MISMATCH, "unsupported PqcAsymSel must fail");
+
+    /* No PqcAsymSel: classic ECDSA path still works. */
+    build_algorithms_14(rsp, SPDM_ASYM_ALGO_ECDSA_P384, 0);
+    ASSERT_SUCCESS(wolfSPDM_ParseAlgorithms(ctx, rsp, 52));
+    ASSERT_EQ(ctx->asymType, WOLFSPDM_ASYM_ECDSA, "asymType must be ECDSA");
+
+    TEST_CTX_FREE();
+    TEST_PASS();
+}
+
+#ifndef NO_WOLFSPDM_MEAS_VERIFY
+/* Mirror wolfSPDM's data_to_be_signed construction (DSP0274 Sec. 15):
+ * M = combined_spdm_prefix(100) || message_hash(48), so the test signs exactly
+ * what wolfSPDM_VerifyMlDsaSig assembles and verifies. */
+static word32 build_signed_msg(byte version, const char* ctxStr,
+    word32 ctxLen, const byte* msgHash, byte* out)
+{
+    word32 n = 0;
+    word32 pad;
+    byte maj = (byte)('0' + ((version >> 4) & 0xF));
+    byte min = (byte)('0' + (version & 0xF));
+    int i;
+    for (i = 0; i < 4; i++) {
+        XMEMCPY(&out[n], "dmtf-spdm-v1.2.*", 16);
+        out[n + 11] = maj; out[n + 13] = min; out[n + 15] = '*';
+        n += 16;
+    }
+    pad = 36 - ctxLen;
+    XMEMSET(&out[n], 0, pad); n += pad;
+    XMEMCPY(&out[n], ctxStr, ctxLen); n += ctxLen;
+    XMEMCPY(&out[n], msgHash, WOLFSPDM_HASH_SIZE); n += WOLFSPDM_HASH_SIZE;
+    return n;
+}
+
+/* Sign an SPDM "measurements" message with a fresh ML-DSA key at the given
+ * level and confirm wolfSPDM_VerifyMeasurementSig accepts it (and rejects a
+ * tampered copy). Exercises GetSigSize, BuildSignedMsg, and VerifyCtx for one
+ * parameter set. Returns 0 on pass. */
+static int mldsa_verify_one(byte level, word32 pqcSel, word32 expSigLen)
+{
+    static const char measCtx[] = "responder-measurements signing";
+    WC_RNG rng;
+    byte reqMsg[8];
+    byte rspBuf[64 + WOLFSPDM_MLDSA87_SIG_SIZE];
+    byte msgHash[WOLFSPDM_HASH_SIZE];
+    byte signMsg[200];
+    word32 signMsgLen;
+    word32 sigLen;
+    word32 bodyLen = 16;
+    int rc;
+    TEST_CTX_SETUP();
+
+    ctx->spdmVersion = SPDM_VERSION_14;
+    ctx->asymType = WOLFSPDM_ASYM_MLDSA;
+    ctx->pqcAsymSel = pqcSel;
+    ctx->vcaLen = 0;
+
+    ASSERT_EQ(wc_InitRng(&rng), 0, "InitRng");
+    ASSERT_EQ(wc_MlDsaKey_Init(&ctx->responderPubKey.mldsa, NULL, INVALID_DEVID),
+        0, "MlDsaKey_Init");
+    ASSERT_EQ(wc_MlDsaKey_SetParams(&ctx->responderPubKey.mldsa, level),
+        0, "SetParams");
+    ASSERT_EQ(wc_MlDsaKey_MakeKey(&ctx->responderPubKey.mldsa, &rng), 0,
+        "MakeKey");
+    ctx->flags.hasResponderPubKey = 1;
+
+    XMEMSET(reqMsg, 0xA5, sizeof(reqMsg));
+    XMEMSET(rspBuf, 0x5A, bodyLen);
+
+    /* message_hash = SHA384(VCA(empty) || reqMsg || signed_body) */
+    ASSERT_EQ(wolfSPDM_Sha384Hash(msgHash, NULL, 0, reqMsg, sizeof(reqMsg),
+        rspBuf, bodyLen), 0, "hash");
+    signMsgLen = build_signed_msg(SPDM_VERSION_14, measCtx,
+        (word32)(sizeof(measCtx) - 1), msgHash, signMsg);
+
+    sigLen = (word32)(sizeof(rspBuf) - bodyLen);
+    rc = wc_MlDsaKey_SignCtx(&ctx->responderPubKey.mldsa,
+        (const byte*)measCtx, (byte)(sizeof(measCtx) - 1),
+        &rspBuf[bodyLen], &sigLen, signMsg, signMsgLen, &rng);
+    ASSERT_EQ(rc, 0, "SignCtx");
+    ASSERT_EQ(sigLen, expSigLen, "ML-DSA SigLen must match level");
+
+    /* Good signature verifies. */
+    ASSERT_SUCCESS(wolfSPDM_VerifyMeasurementSig(ctx, rspBuf, bodyLen + sigLen,
+        reqMsg, sizeof(reqMsg)));
+
+    /* Tamper a signed-body byte -> verification must fail. */
+    rspBuf[0] ^= 0xFF;
+    ASSERT_FAIL(wolfSPDM_VerifyMeasurementSig(ctx, rspBuf, bodyLen + sigLen,
+        reqMsg, sizeof(reqMsg)));
+
+    wc_FreeRng(&rng);
+    TEST_CTX_FREE();
+    return 0;
+}
+
+static int test_mldsa_measurement_verify(void)
+{
+    printf("test_mldsa_measurement_verify (ML-DSA 44/65/87)...\n");
+    if (mldsa_verify_one(WC_ML_DSA_44, SPDM_PQC_ASYM_ALGO_ML_DSA_44,
+            WOLFSPDM_MLDSA44_SIG_SIZE) != 0) {
+        return -1;
+    }
+    if (mldsa_verify_one(WC_ML_DSA_65, SPDM_PQC_ASYM_ALGO_ML_DSA_65,
+            WOLFSPDM_MLDSA65_SIG_SIZE) != 0) {
+        return -1;
+    }
+    if (mldsa_verify_one(WC_ML_DSA_87, SPDM_PQC_ASYM_ALGO_ML_DSA_87,
+            WOLFSPDM_MLDSA87_SIG_SIZE) != 0) {
+        return -1;
+    }
+    TEST_PASS();
+}
+#endif /* !NO_WOLFSPDM_MEAS_VERIFY */
+
+/* The KEY_EXCHANGE_RSP / CHALLENGE_AUTH parsers derive the signature offset
+ * from wolfSPDM_GetSigSize(ctx). These confirm the ML-DSA SigLen (not the
+ * 96-byte ECDSA size) drives the buffer-bound check: a response only large
+ * enough for an ECDSA signature is rejected once ML-DSA is negotiated. */
+static int test_key_exchange_rsp_mldsa_sigsize(void)
+{
+    byte buf[300];
+    TEST_CTX_SETUP();
+
+    printf("test_key_exchange_rsp_mldsa_sigsize...\n");
+    ctx->spdmVersion = SPDM_VERSION_14;
+    ctx->asymType = WOLFSPDM_ASYM_MLDSA;
+    ctx->pqcAsymSel = SPDM_PQC_ASYM_ALGO_ML_DSA_65;
+    ASSERT_EQ(wc_MlDsaKey_Init(&ctx->responderPubKey.mldsa, NULL, INVALID_DEVID),
+        0, "MlDsaKey_Init");
+    ctx->flags.hasResponderPubKey = 1;
+
+    XMEMSET(buf, 0, sizeof(buf));
+    buf[0] = SPDM_VERSION_14;
+    buf[1] = SPDM_KEY_EXCHANGE_RSP;
+    /* buf[6] MutAuth = 0; opaqueLen at 136-137 = 0 -> sigOffset = 138.
+     * 282 fits an ECDSA sig (138+96+48) but not ML-DSA-65 (138+3309+48). */
+    ASSERT_EQ(wolfSPDM_ParseKeyExchangeRsp(ctx, buf, 282),
+        WOLFSPDM_E_BUFFER_SMALL, "ML-DSA-65 KEY_EXCHANGE_RSP size guard");
+
+    TEST_CTX_FREE();
+    TEST_PASS();
+}
+
+#ifndef NO_WOLFSPDM_CHALLENGE
+static int test_challenge_auth_mldsa_sigsize(void)
+{
+    byte buf[200];
+    word32 sigOff = 0;
+    TEST_CTX_SETUP();
+
+    printf("test_challenge_auth_mldsa_sigsize...\n");
+    ctx->spdmVersion = SPDM_VERSION_12;
+    ctx->asymType = WOLFSPDM_ASYM_MLDSA;
+    ctx->pqcAsymSel = SPDM_PQC_ASYM_ALGO_ML_DSA_65;
+    ctx->challengeSlotId = 0;
+    ctx->challengeMeasHashType = SPDM_MEAS_SUMMARY_HASH_NONE;
+
+    XMEMSET(buf, 0, sizeof(buf));
+    buf[0] = SPDM_VERSION_12;
+    buf[1] = SPDM_CHALLENGE_AUTH;
+    buf[2] = 0;                                  /* SlotID echo */
+    XMEMSET(&buf[4], 0xCC, WOLFSPDM_HASH_SIZE);  /* CertChainHash */
+    XMEMSET(ctx->certChainHash, 0xCC, WOLFSPDM_HASH_SIZE);
+    /* Fixed tail ends at 4+48+32+2(opaqueLen=0) = 86; 182 fits an ECDSA sig
+     * but not ML-DSA-65 (86+3309), so the sig-room check must reject it. */
+    ASSERT_EQ(wolfSPDM_ParseChallengeAuth(ctx, buf, 182, &sigOff),
+        WOLFSPDM_E_CHALLENGE, "ML-DSA-65 CHALLENGE_AUTH size guard");
+
+    TEST_CTX_FREE();
+    TEST_PASS();
+}
+#endif /* !NO_WOLFSPDM_CHALLENGE */
+#endif /* WOLFSPDM_HAVE_MLDSA */
+
 static int test_build_get_digests(void)
 {
     byte buf[16];
@@ -2073,6 +2331,17 @@ int main(void)
     test_build_get_capabilities();
     test_build_negotiate_algorithms();
     test_parse_algorithms_set_b_enforcement();
+#ifdef WOLFSPDM_HAVE_MLDSA
+    test_negotiate_algorithms_pqc_build();
+    test_parse_algorithms_pqc_select();
+#ifndef NO_WOLFSPDM_MEAS_VERIFY
+    test_mldsa_measurement_verify();
+#endif
+    test_key_exchange_rsp_mldsa_sigsize();
+#ifndef NO_WOLFSPDM_CHALLENGE
+    test_challenge_auth_mldsa_sigsize();
+#endif
+#endif
     test_build_get_digests();
     test_build_get_certificate();
     test_build_key_exchange_opaque_data();

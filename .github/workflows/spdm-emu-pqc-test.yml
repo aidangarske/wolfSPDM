@@ -1,0 +1,142 @@
+name: SPDM Emulator PQC (ML-DSA) Test
+
+# Post-quantum interop. The wc_MlDsaKey context API wolfSPDM verifies with lands
+# post-v5.9.1-stable, so this job pins wolfSSL master. libspdm's ML-DSA is only
+# in its OpenSSL backend (the mbedtls backend stubs it out), so spdm-emu is
+# built with CRYPTO=openssl.
+
+on:
+  push:
+    branches: [ 'master', 'main', 'release/**' ]
+  pull_request:
+    branches: [ '*' ]
+  repository_dispatch:
+    types: [nightly-trigger]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  pqc-emu-test:
+    name: ML-DSA interop (wolfSSL master)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y autoconf automake libtool cmake
+
+      - name: Compute cache period
+        id: cache-period
+        run: echo "biweekly=$(( $(date +%s) / 1296000 ))" >> $GITHUB_OUTPUT
+
+      # --- wolfSSL master with ML-DSA (rebuilt to track upstream drift) ---
+      - name: Build wolfSSL master (--enable-dilithium)
+        run: |
+          cd ~
+          git clone --depth 1 --branch master https://github.com/wolfSSL/wolfssl.git
+          cd wolfssl
+          ./autogen.sh
+          ./configure --enable-ecc --enable-sha384 --enable-aesgcm \
+                      --enable-hkdf --enable-sp --enable-dilithium \
+                      --prefix=$HOME/wolfssl-install
+          make -j"$(nproc)"
+          make install
+          grep LIBWOLFSSL_VERSION_STRING $HOME/wolfssl-install/include/wolfssl/version.h
+
+      # --- wolfSPDM with ML-DSA asserted on ---
+      - name: Build and install wolfSPDM (--enable-mldsa)
+        run: |
+          ./autogen.sh
+          ./configure --with-wolfssl=$HOME/wolfssl-install \
+                      --prefix=$HOME/wolfspdm-install --enable-mldsa
+          make -j"$(nproc)"
+          make install
+
+      - name: Run unit tests (includes ML-DSA verify)
+        run: make check
+        env:
+          LD_LIBRARY_PATH: ${{ github.workspace }}/.libs:${{ github.workspace }}/src/.libs:${{ env.HOME }}/wolfssl-install/lib
+
+      # --- spdm-emu with OpenSSL backend (ML-DSA) ---
+      - name: Cache spdm-emu (openssl)
+        id: cache-spdm-emu
+        uses: actions/cache@v4
+        with:
+          path: ~/spdm-emu/build/bin
+          key: spdm-emu-pqc-openssl-${{ steps.cache-period.outputs.biweekly }}
+
+      - name: Build spdm-emu (CRYPTO=openssl)
+        if: steps.cache-spdm-emu.outputs.cache-hit != 'true'
+        run: |
+          cd ~
+          git clone --depth 1 --recurse-submodules https://github.com/DMTF/spdm-emu.git
+          cd spdm-emu
+          mkdir build && cd build
+          cmake -DARCH=x64 -DTOOLCHAIN=GCC -DTARGET=Release -DCRYPTO=openssl ..
+          make copy_sample_key
+          make -j"$(nproc)" spdm_responder_emu
+
+      # --- ML-DSA interop: responder offers only ML-DSA, requester verifies.
+      #     spdm-emu DataTransferSize is 0x1200 (4608 B): ML-DSA-44 (sig 2420)
+      #     and ML-DSA-65 (3309) responses fit one message, so they complete
+      #     without chunking. ML-DSA-87 (sig 4627) exceeds it and the responder
+      #     chunks the response, which needs the SPDM 1.2 chunking engine
+      #     (follow-on work) -- so 87 is covered by unit tests / cert parsing,
+      #     not this over-the-wire job.
+      - name: ML-DSA 44/65 session + measurements + challenge
+        run: |
+          set -e
+          export LD_LIBRARY_PATH=$HOME/wolfspdm-install/lib:$HOME/wolfssl-install/lib
+          export SPDM_EMU_PATH=$HOME/spdm-emu/build/bin
+          DEMO=./examples/spdm_demo
+
+          # $1 ML_DSA_xx (responder), $2 cert dir, $3 demo label, then demo args
+          run_case() {
+            local alg="$1" certdir="$2" label="$3"; shift 3
+            export SPDM_EMU_CERT_DIR="$certdir"
+            echo "::group::$alg $label"
+            ( cd "$SPDM_EMU_PATH" && ./spdm_responder_emu --ver 1.4 \
+                --hash SHA_384 --asym NONE --pqc_asym "$alg" \
+                --dhe SECP_384_R1 --aead AES_256_GCM \
+                >/tmp/pqc_emu_${alg}_${label}.log 2>&1 ) &
+            local emu=$!
+            sleep 2
+            "$DEMO" "$@" --ver 1.4
+            local rc=$?
+            kill $emu 2>/dev/null || true
+            wait $emu 2>/dev/null || true
+            echo "::endgroup::"
+            if [ $rc -ne 0 ]; then
+              echo "::error::$alg $label failed (rc=$rc)"
+              cat /tmp/pqc_emu_${alg}_${label}.log || true
+              exit $rc
+            fi
+            echo "$alg $label: OK"
+          }
+
+          for spec in "ML_DSA_44 mldsa44" "ML_DSA_65 mldsa65"; do
+            set -- $spec
+            alg="$1"; dir="$2"
+            run_case "$alg" "$dir" session   --emu
+            run_case "$alg" "$dir" meas      --meas
+            run_case "$alg" "$dir" challenge --challenge
+          done
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: spdm-emu-pqc-logs
+          path: |
+            config.log
+            test/*.log
+            /tmp/pqc_emu_*.log
+          retention-days: 5

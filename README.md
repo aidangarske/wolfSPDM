@@ -6,6 +6,7 @@ wolfSPDM is a lightweight C library implementing [SPDM 1.2 / 1.3 / 1.4](https://
 
 - **Standard SPDM 1.2 / 1.3 / 1.4 requester** per DMTF DSP0274 and DSP0277
 - **Algorithm Set B fixed:** ECDSA P-384, ECDHE P-384, SHA-384, AES-256-GCM, HKDF-SHA384
+- **Post-quantum signatures (SPDM 1.4):** optional ML-DSA-44 / 65 / 87 (FIPS 204), dual-stacked with ECDSA P-384 — see the [Post-Quantum ML-DSA](https://github.com/aidangarske/wolfSPDM/wiki/Post-Quantum-ML-DSA) wiki page
 - **Zero-malloc by default:** static memory, ~32 KB context, ideal for constrained/embedded environments
 - **Optional `--enable-dynamic-mem`** for heap-allocated contexts on small-stack platforms
 - **Full session lifecycle:** key exchange, finish, encrypted messaging, heartbeat keep-alive, key update
@@ -41,6 +42,8 @@ sudo ldconfig
 ```
 
 `--enable-sp` enables Single Precision math with optimized ECC P-384, required for SPDM Algorithm Set B on ARM64 and other constrained targets. `--enable-all` works as a superset.
+
+For post-quantum ML-DSA signatures, add `--enable-dilithium` and use wolfSSL master (or a release that ships the `wc_MlDsaKey` context API). wolfSPDM then auto-enables ML-DSA; `./configure --disable-mldsa` forces it off.
 
 ## Build
 

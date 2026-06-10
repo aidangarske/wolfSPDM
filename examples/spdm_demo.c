@@ -288,6 +288,7 @@ static int sanitize_emu_path(const char* emuPath, char* outReal, size_t outSz)
 static int load_trusted_ca(WOLFSPDM_CTX* ctx)
 {
     const char* emuPath = getenv("SPDM_EMU_PATH");
+    const char* certDir = getenv("SPDM_EMU_CERT_DIR");
     char realEmu[PATH_MAX];
     char path[PATH_MAX];
     byte* der;
@@ -304,7 +305,16 @@ static int load_trusted_ca(WOLFSPDM_CTX* ctx)
         fprintf(stderr, "ERROR: SPDM_EMU_PATH is not a valid directory path\n");
         return -1;
     }
-    n = snprintf(path, sizeof(path), "%s/ecp384/ca.cert.der", realEmu);
+    /* Cert subdir matches the responder's selected algorithm (e.g. "ecp384"
+     * for ECDSA P-384, "mldsa65" for ML-DSA-65). Defaults to ecp384. */
+    if (certDir == NULL || certDir[0] == '\0') {
+        certDir = "ecp384";
+    }
+    if (strchr(certDir, '/') != NULL || strstr(certDir, "..") != NULL) {
+        fprintf(stderr, "ERROR: invalid SPDM_EMU_CERT_DIR\n");
+        return -1;
+    }
+    n = snprintf(path, sizeof(path), "%s/%s/ca.cert.der", realEmu, certDir);
     if (n < 0 || (size_t)n >= sizeof(path)) {
         fprintf(stderr, "ERROR: certificate path too long\n");
         return -1;
