@@ -287,14 +287,23 @@ static int sanitize_emu_path(const char* emuPath, char* outReal, size_t outSz)
 
 static int load_trusted_ca(WOLFSPDM_CTX* ctx)
 {
+    /* Cert subdir matches the responder's selected algorithm. Only a fixed set
+     * of spdm-emu directory names is accepted; the env value is mapped to the
+     * matching string literal so no caller-controlled data reaches the fopen()
+     * path below (avoids path traversal). */
+    static const char* const allowedCertDirs[] = {
+        "ecp256", "ecp384", "ecp521", "mldsa44", "mldsa65", "mldsa87"
+    };
     const char* emuPath = getenv("SPDM_EMU_PATH");
     const char* certDir = getenv("SPDM_EMU_CERT_DIR");
+    const char* safeDir = NULL;
     char realEmu[PATH_MAX];
     char path[PATH_MAX];
     byte* der;
     word32 derSz;
     int rc;
     int n;
+    unsigned int i;
 
     if (emuPath == NULL) {
         fprintf(stderr, "ERROR: SPDM_EMU_PATH not set; cannot locate "
@@ -305,16 +314,20 @@ static int load_trusted_ca(WOLFSPDM_CTX* ctx)
         fprintf(stderr, "ERROR: SPDM_EMU_PATH is not a valid directory path\n");
         return -1;
     }
-    /* Cert subdir matches the responder's selected algorithm (e.g. "ecp384"
-     * for ECDSA P-384, "mldsa65" for ML-DSA-65). Defaults to ecp384. */
     if (certDir == NULL || certDir[0] == '\0') {
-        certDir = "ecp384";
+        certDir = "ecp384";  /* default: ECDSA P-384 */
     }
-    if (strchr(certDir, '/') != NULL || strstr(certDir, "..") != NULL) {
-        fprintf(stderr, "ERROR: invalid SPDM_EMU_CERT_DIR\n");
+    for (i = 0; i < sizeof(allowedCertDirs) / sizeof(allowedCertDirs[0]); i++) {
+        if (strcmp(certDir, allowedCertDirs[i]) == 0) {
+            safeDir = allowedCertDirs[i];
+            break;
+        }
+    }
+    if (safeDir == NULL) {
+        fprintf(stderr, "ERROR: unsupported SPDM_EMU_CERT_DIR '%s'\n", certDir);
         return -1;
     }
-    n = snprintf(path, sizeof(path), "%s/%s/ca.cert.der", realEmu, certDir);
+    n = snprintf(path, sizeof(path), "%s/%s/ca.cert.der", realEmu, safeDir);
     if (n < 0 || (size_t)n >= sizeof(path)) {
         fprintf(stderr, "ERROR: certificate path too long\n");
         return -1;
