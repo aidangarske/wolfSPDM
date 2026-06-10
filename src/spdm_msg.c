@@ -230,6 +230,8 @@ static word32 wolfSPDM_GetSigSize(const WOLFSPDM_CTX* ctx)
         }
         return WOLFSPDM_MLDSA65_SIG_SIZE;
     }
+#else
+    (void)ctx;
 #endif
     return WOLFSPDM_ECC_SIG_SIZE;
 }
