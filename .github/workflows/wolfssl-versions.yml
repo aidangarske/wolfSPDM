@@ -94,7 +94,7 @@ jobs:
               https://github.com/wolfSSL/wolfssl.git
           cd wolfssl
           PQC_FLAGS=""
-          if [ "${{ matrix.pqc }}" = "true" ]; then PQC_FLAGS="--enable-dilithium"; fi
+          if [ "${{ matrix.pqc }}" = "true" ]; then PQC_FLAGS="--enable-mldsa"; fi
           ./autogen.sh
           ./configure --enable-wolftpm --enable-ecc --enable-sha384 \
                       --enable-aesgcm --enable-hkdf --enable-sp $PQC_FLAGS \

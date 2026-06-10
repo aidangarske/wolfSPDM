@@ -43,7 +43,7 @@ sudo ldconfig
 
 `--enable-sp` enables Single Precision math with optimized ECC P-384, required for SPDM Algorithm Set B on ARM64 and other constrained targets. `--enable-all` works as a superset.
 
-For post-quantum ML-DSA signatures, add `--enable-dilithium` and use wolfSSL master (or a release that ships the `wc_MlDsaKey` context API). wolfSPDM then auto-enables ML-DSA; `./configure --disable-mldsa` forces it off.
+For post-quantum ML-DSA signatures, add `--enable-mldsa` and use wolfSSL master (or a release that ships the `wc_MlDsaKey` context API). wolfSPDM then auto-enables ML-DSA; `./configure --disable-mldsa` forces it off.
 
 ## Build
 

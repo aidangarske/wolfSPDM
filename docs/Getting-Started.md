@@ -19,7 +19,7 @@ sudo make install
 sudo ldconfig
 ```
 
-For optional post-quantum ML-DSA support, add `--enable-dilithium` and use
+For optional post-quantum ML-DSA support, add `--enable-mldsa` and use
 wolfSSL master (or a release that ships the `wc_MlDsaKey` context API). See
 [[Post-Quantum ML-DSA]].
 

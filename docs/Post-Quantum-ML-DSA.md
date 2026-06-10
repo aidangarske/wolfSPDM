@@ -44,7 +44,7 @@ mLen, &res)`. Public keys are imported from the leaf certificate with
 
 ML-DSA follows the linked wolfSSL automatically: it is enabled when wolfSSL
 reports `WOLFSSL_HAVE_MLDSA` and provides the `wc_MlDsaKey` context API (wolfSSL
-master or a release that ships it; build wolfSSL with `--enable-dilithium`). The
+master or a release that ships it; build wolfSSL with `--enable-mldsa`). The
 capability is detected at configure time — wolfSPDM does not gate on a wolfSSL
 version number, since master and the matching stable can report the same
 `LIBWOLFSSL_VERSION_HEX`.
@@ -52,7 +52,7 @@ version number, since master and the matching stable can report the same
 ```sh
 # wolfSSL with ML-DSA
 ./configure --enable-ecc --enable-sha384 --enable-aesgcm --enable-hkdf \
-            --enable-sp --enable-dilithium --prefix=$HOME/wolfssl-install
+            --enable-sp --enable-mldsa --prefix=$HOME/wolfssl-install
 make && make install
 
 # wolfSPDM (ML-DSA auto-enabled; --enable-mldsa asserts it, --disable-mldsa off)

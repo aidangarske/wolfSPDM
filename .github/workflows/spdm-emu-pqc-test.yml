@@ -38,14 +38,14 @@ jobs:
         run: echo "biweekly=$(( $(date +%s) / 1296000 ))" >> $GITHUB_OUTPUT
 
       # --- wolfSSL master with ML-DSA (rebuilt to track upstream drift) ---
-      - name: Build wolfSSL master (--enable-dilithium)
+      - name: Build wolfSSL master (--enable-mldsa)
         run: |
           cd ~
           git clone --depth 1 --branch master https://github.com/wolfSSL/wolfssl.git
           cd wolfssl
           ./autogen.sh
           ./configure --enable-ecc --enable-sha384 --enable-aesgcm \
-                      --enable-hkdf --enable-sp --enable-dilithium \
+                      --enable-hkdf --enable-sp --enable-mldsa \
                       --prefix=$HOME/wolfssl-install
           make -j"$(nproc)"
           make install
