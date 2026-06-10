@@ -98,24 +98,46 @@ jobs:
           export SPDM_EMU_PATH=$HOME/spdm-emu/build/bin
           DEMO=./examples/spdm_demo
 
-          # $1 ML_DSA_xx (responder), $2 cert dir, $3 demo label, then demo args
+          # Wait until the responder is accepting connections on port 2323.
+          wait_for_port() {
+            local i
+            for i in $(seq 1 50); do
+              if ss -ltn 2>/dev/null | grep -q ':2323 '; then return 0; fi
+              sleep 0.2
+            done
+            return 1
+          }
+
+          # $1 ML_DSA_xx (responder), $2 cert dir, $3 demo label, then demo args.
+          # The OpenSSL-backed ML-DSA responder is slower to become ready than
+          # the mbedtls/ECDSA one, and it stops after a failed connection, so
+          # retry the whole case (restarting the responder) a few times.
           run_case() {
             local alg="$1" certdir="$2" label="$3"; shift 3
             export SPDM_EMU_CERT_DIR="$certdir"
             echo "::group::$alg $label"
-            ( cd "$SPDM_EMU_PATH" && ./spdm_responder_emu --ver 1.4 \
-                --hash SHA_384 --asym NONE --pqc_asym "$alg" \
-                --dhe SECP_384_R1 --aead AES_256_GCM \
-                >/tmp/pqc_emu_${alg}_${label}.log 2>&1 ) &
-            local emu=$!
-            sleep 2
-            "$DEMO" "$@" --ver 1.4
-            local rc=$?
-            kill $emu 2>/dev/null || true
-            wait $emu 2>/dev/null || true
+            local attempt rc=1 emu
+            for attempt in 1 2 3; do
+              ( cd "$SPDM_EMU_PATH" && ./spdm_responder_emu --ver 1.4 \
+                  --hash SHA_384 --asym NONE --pqc_asym "$alg" \
+                  --dhe SECP_384_R1 --aead AES_256_GCM \
+                  >/tmp/pqc_emu_${alg}_${label}.log 2>&1 ) &
+              emu=$!
+              if wait_for_port; then
+                sleep 1
+                if "$DEMO" "$@" --ver 1.4; then rc=0; else rc=$?; fi
+              else
+                rc=1
+              fi
+              kill $emu 2>/dev/null || true
+              wait $emu 2>/dev/null || true
+              [ $rc -eq 0 ] && break
+              echo "attempt $attempt for $alg $label failed (rc=$rc), retrying"
+              sleep 1
+            done
             echo "::endgroup::"
             if [ $rc -ne 0 ]; then
-              echo "::error::$alg $label failed (rc=$rc)"
+              echo "::error::$alg $label failed after retries (rc=$rc)"
               cat /tmp/pqc_emu_${alg}_${label}.log || true
               exit $rc
             fi
