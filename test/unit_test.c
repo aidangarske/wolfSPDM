@@ -937,6 +937,67 @@ static int test_parse_key_exchange_rsp_mlkem_offset(void)
     TEST_CTX_FREE();
     TEST_PASS();
 }
+
+/* Error/guard paths: the public preference API and the ML-KEM helpers must
+ * fail closed on invalid input and bad state. */
+static int test_mlkem_error_paths(void)
+{
+    byte ek[WOLFSPDM_MLKEM768_EK_SIZE];
+    byte small[64];
+    byte req[WOLFSPDM_KEX_REQ_BUF];
+    byte ct[WOLFSPDM_MLKEM768_CT_SIZE];
+    word32 sz;
+    TEST_CTX_SETUP();
+
+    printf("test_mlkem_error_paths...\n");
+    ctx->spdmVersion = SPDM_VERSION_14;
+
+    /* wolfSPDM_SetKeyExchangePref validation. */
+    ASSERT_EQ(wolfSPDM_SetKeyExchangePref(NULL, 1, 0), WOLFSPDM_E_INVALID_ARG,
+        "SetKeyExchangePref NULL ctx");
+    ASSERT_EQ(wolfSPDM_SetKeyExchangePref(ctx, 0, 0), WOLFSPDM_E_INVALID_ARG,
+        "SetKeyExchangePref no methods");
+    ASSERT_EQ(wolfSPDM_SetKeyExchangePref(ctx, 0, 0x0008),
+        WOLFSPDM_E_INVALID_ARG, "SetKeyExchangePref undefined KEM bit");
+    ASSERT_SUCCESS(wolfSPDM_SetKeyExchangePref(ctx, 1,
+        SPDM_KEM_ALGO_ML_KEM_768));
+
+    /* GenerateMlKemKey: NULL, unknown KEM selection, ek output too small. */
+    sz = sizeof(ek);
+    ASSERT_EQ(wolfSPDM_GenerateMlKemKey(NULL, ek, &sz), WOLFSPDM_E_INVALID_ARG,
+        "GenerateMlKemKey NULL ctx");
+    ctx->kemAlgSel = 0;  /* not a valid ML-KEM selection */
+    sz = sizeof(ek);
+    ASSERT_EQ(wolfSPDM_GenerateMlKemKey(ctx, ek, &sz), WOLFSPDM_E_ALGO_MISMATCH,
+        "GenerateMlKemKey unknown KEM set");
+    ctx->kemAlgSel = SPDM_KEM_ALGO_ML_KEM_768;
+    sz = sizeof(small);  /* 64 < 1184 */
+    ASSERT_EQ(wolfSPDM_GenerateMlKemKey(ctx, small, &sz),
+        WOLFSPDM_E_BUFFER_SMALL, "GenerateMlKemKey ek buffer too small");
+
+    /* MlKemDecapsulate: NULL, and no live ephemeral key / wrong kexType. */
+    ASSERT_EQ(wolfSPDM_MlKemDecapsulate(ctx, NULL, 0), WOLFSPDM_E_INVALID_ARG,
+        "MlKemDecapsulate NULL ct");
+    ctx->flags.ephemeralKeyInit = 0;
+    ctx->kexType = WOLFSPDM_KEX_MLKEM;
+    ASSERT_EQ(wolfSPDM_MlKemDecapsulate(ctx, ct, sizeof(ct)),
+        WOLFSPDM_E_BAD_STATE, "MlKemDecapsulate no live key");
+
+    /* BuildKeyExchange: unrecognized kexType fails closed; ML-KEM request that
+     * does not fit the caller buffer is rejected. */
+    ctx->kexType = (byte)0xEE;
+    sz = sizeof(req);
+    ASSERT_EQ(wolfSPDM_BuildKeyExchange(ctx, req, &sz), WOLFSPDM_E_BAD_STATE,
+        "BuildKeyExchange unknown kexType");
+    ctx->kexType = WOLFSPDM_KEX_MLKEM;
+    ctx->kemAlgSel = SPDM_KEM_ALGO_ML_KEM_768;
+    sz = 500;  /* >= 180 arg check, < 40 + 1184 ek + 22 */
+    ASSERT_EQ(wolfSPDM_BuildKeyExchange(ctx, req, &sz), WOLFSPDM_E_BUFFER_SMALL,
+        "BuildKeyExchange ML-KEM request exceeds buffer");
+
+    TEST_CTX_FREE();
+    TEST_PASS();
+}
 #endif /* WOLFSPDM_HAVE_MLKEM */
 
 #ifdef WOLFSPDM_HAVE_CHUNK
@@ -2970,6 +3031,7 @@ int main(void)
     test_build_key_exchange_mlkem();
     test_key_exchange_mlkem_exceeds_dts();
     test_parse_key_exchange_rsp_mlkem_offset();
+    test_mlkem_error_paths();
 #endif
 #ifdef WOLFSPDM_HAVE_CHUNK
     test_chunk_reassemble();

@@ -227,8 +227,8 @@ int wolfSPDM_BuildKeyExchange(WOLFSPDM_CTX* ctx, byte* buf, word32* bufSz)
     offset += WOLFSPDM_RANDOM_SIZE;
 
     /* ExchangeData: the negotiated method's public value (DSP0274 1.4 Table 77).
-     * ML-KEM sends the encapsulation key ek; ECDHE sends X || Y. */
-    rc = WOLFSPDM_SUCCESS;
+     * ML-KEM sends the encapsulation key ek; ECDHE sends X || Y. Every branch
+     * below (incl. the unrecognized-kexType else) assigns rc. */
 #ifdef WOLFSPDM_HAVE_MLKEM
     if (ctx->kexType == WOLFSPDM_KEX_MLKEM) {
         /* Reserve the trailing OpaqueData block so handing the remaining buffer
