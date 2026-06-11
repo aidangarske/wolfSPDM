@@ -65,6 +65,18 @@ header plus payload).
   echoes of `Handle`/`ChunkSeqNo`, and the per-message and total length before
   any copy.
 
+## Spec deviation: CHUNK_GET only, no CHUNK_SEND
+
+wolfSPDM advertises `CHUNK_CAP` but implements only the **inbound** half of the
+mechanism — reassembling large *responses* via `CHUNK_GET`. It never sends
+`CHUNK_SEND`, because every request it builds (GET_VERSION through
+GET_MEASUREMENTS, KEY_EXCHANGE, FINISH) fits well under any responder's
+`DataTransferSize`; nothing the requester emits is large enough to chunk. This
+is an intentional, accepted deviation, not an omission — `CHUNK_SEND` /
+`CHUNK_SEND_ACK` are defined in `spdm_types.h` but deliberately unimplemented. A
+responder that requires the requester to chunk a request is not interoperable
+with wolfSPDM by design.
+
 ## References
 
 - DMTF DSP0274 1.4.0 — Sec. 10.27 (Large SPDM message transfer), Tables 68 / 101–105

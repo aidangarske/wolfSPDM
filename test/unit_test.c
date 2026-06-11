@@ -670,6 +670,8 @@ static int    g_chunkBadHandle;    /* echo a wrong Handle on chunk 0 */
 static int    g_chunkNeverLast;    /* never set LastChunk (MAX_CHUNKS guard) */
 static int    g_chunkShortLast;    /* LastChunk on chunk 0 but off < total */
 static int    g_chunkTrigger;      /* answer a non-CHUNK_GET with ERROR(LargeResp) */
+static int    g_chunkSecured;      /* encrypt each CHUNK_RESPONSE (secured path) */
+static word32 g_chunkSecuredSeq;   /* mock-side seq counter for the secured path */
 
 /* Mock I/O: answer each CHUNK_GET(seq) with the matching synthetic
  * CHUNK_RESPONSE chunk of g_chunkLarge (version-correct layout), splitting
@@ -677,61 +679,88 @@ static int    g_chunkTrigger;      /* answer a non-CHUNK_GET with ERROR(LargeRes
 static int chunk_mock_io(WOLFSPDM_CTX* ctx, const byte* tx, word32 txSz,
     byte* rx, word32* rxSz, void* user)
 {
-    word32 seq, off, csz, dataOff;
+    byte resp[CHUNK_TEST_MAX + 16];
+    word32 seq, off, csz, dataOff, respSz;
+    word32 savedReq;
     byte handle;
+    int rc;
     (void)txSz; (void)user;
-    if (tx[1] != SPDM_CHUNK_GET) {
-        /* Trigger path: an arbitrary request gets ERROR(LargeResponse) so the
-         * SendReceive hook drives reassembly. */
-        if (g_chunkTrigger) {
+
+    if (g_chunkSecured) {
+        /* tx is an encrypted CHUNK_GET; drive seq from a local counter rather
+         * than decoding it, and echo the fixed handle. */
+        seq = g_chunkSecuredSeq++;
+        handle = 0x42;
+    }
+    else {
+        if (tx[1] != SPDM_CHUNK_GET) {
+            /* Trigger path: an arbitrary request gets ERROR(LargeResponse) so
+             * the SendReceive hook drives reassembly. */
+            if (g_chunkTrigger) {
+                rx[0] = SPDM_VERSION_14;
+                rx[1] = SPDM_ERROR;
+                rx[2] = SPDM_ERROR_LARGE_RESPONSE;
+                rx[3] = 0;
+                rx[4] = 0x42;          /* ExtendedErrorData: Handle */
+                *rxSz = 5;
+                return 0;
+            }
+            return -1;
+        }
+        handle = tx[3];
+        seq = (ctx != NULL && ctx->spdmVersion >= SPDM_VERSION_14)
+            ? SPDM_Get32LE(&tx[4])
+            : (word32)SPDM_Get16LE(&tx[4]);
+        if (seq == g_chunkErrSeq) {
             rx[0] = SPDM_VERSION_14;
             rx[1] = SPDM_ERROR;
-            rx[2] = SPDM_ERROR_LARGE_RESPONSE;
+            rx[2] = SPDM_ERROR_UNSPECIFIED;
             rx[3] = 0;
-            rx[4] = 0x42;          /* ExtendedErrorData: Handle */
-            *rxSz = 5;
+            *rxSz = 4;
             return 0;
         }
-        return -1;
     }
-    handle = tx[3];
-    seq = (ctx != NULL && ctx->spdmVersion >= SPDM_VERSION_14)
-        ? SPDM_Get32LE(&tx[4])
-        : (word32)SPDM_Get16LE(&tx[4]);
-    if (seq == g_chunkErrSeq) {
-        rx[0] = SPDM_VERSION_14;
-        rx[1] = SPDM_ERROR;
-        rx[2] = SPDM_ERROR_UNSPECIFIED;
-        rx[3] = 0;
-        *rxSz = 4;
-        return 0;
-    }
+
     off = seq * g_chunkPer;
     csz = g_chunkTotal - off;
     if (csz > g_chunkPer) {
         csz = g_chunkPer;
     }
-    rx[0] = (ctx != NULL) ? ctx->spdmVersion : SPDM_VERSION_14;
-    rx[1] = SPDM_CHUNK_RESPONSE;
-    rx[2] = (off + csz >= g_chunkTotal) ? SPDM_CHUNK_LAST_CHUNK : 0;
+    resp[0] = (ctx != NULL) ? ctx->spdmVersion : SPDM_VERSION_14;
+    resp[1] = SPDM_CHUNK_RESPONSE;
+    resp[2] = (off + csz >= g_chunkTotal) ? SPDM_CHUNK_LAST_CHUNK : 0;
     if (g_chunkNeverLast) {
-        rx[2] = 0;                          /* force the MAX_CHUNKS guard */
+        resp[2] = 0;                        /* force the MAX_CHUNKS guard */
     }
     if (g_chunkShortLast && seq == 0) {
-        rx[2] = SPDM_CHUNK_LAST_CHUNK;      /* claim last while off < total */
+        resp[2] = SPDM_CHUNK_LAST_CHUNK;    /* claim last while off < total */
     }
-    rx[3] = (g_chunkBadHandle && seq == 0) ? (byte)(handle ^ 0xFF) : handle;
-    SPDM_Set32LE(&rx[4], seq);
-    SPDM_Set32LE(&rx[8], (seq == g_chunkBadSizeSeq) ? 0xFFFFFFF8u : csz);
+    resp[3] = (g_chunkBadHandle && seq == 0) ? (byte)(handle ^ 0xFF) : handle;
+    SPDM_Set32LE(&resp[4], seq);
+    SPDM_Set32LE(&resp[8], (seq == g_chunkBadSizeSeq) ? 0xFFFFFFF8u : csz);
     if (seq == 0) {
-        SPDM_Set32LE(&rx[12], g_chunkTotal);
+        SPDM_Set32LE(&resp[12], g_chunkTotal);
         dataOff = 16;
     }
     else {
         dataOff = 12;
     }
-    XMEMCPY(&rx[dataOff], &g_chunkLarge[off], csz);
-    *rxSz = dataOff + csz;
+    XMEMCPY(&resp[dataOff], &g_chunkLarge[off], csz);
+    respSz = dataOff + csz;
+
+    if (g_chunkSecured) {
+        /* Encrypt the CHUNK_RESPONSE so DecryptInternal round-trips it. The test
+         * installs symmetric req/rsp keys, so encrypting at the seq the decrypt
+         * side expects (rspSeqNum) yields a record it accepts; restore the req
+         * counter the secured transport advanced on its CHUNK_GET. */
+        savedReq = ctx->reqSeqNum;
+        ctx->reqSeqNum = ctx->rspSeqNum;
+        rc = wolfSPDM_EncryptInternal(ctx, resp, respSz, rx, rxSz);
+        ctx->reqSeqNum = savedReq;
+        return (rc == WOLFSPDM_SUCCESS) ? 0 : -1;
+    }
+    XMEMCPY(rx, resp, respSz);
+    *rxSz = respSz;
     return 0;
 }
 
@@ -747,6 +776,8 @@ static void chunk_mock_reset(word32 total, word32 per)
     g_chunkNeverLast = 0;
     g_chunkShortLast = 0;
     g_chunkTrigger = 0;
+    g_chunkSecured = 0;
+    g_chunkSecuredSeq = 0;
     for (i = 0; i < total; i++) {
         g_chunkLarge[i] = (byte)((i * 7u + 1u) & 0xFF);
     }
@@ -876,6 +907,48 @@ static int test_chunk_reassemble(void)
     rsz = sizeof(out);
     ASSERT_SUCCESS(wolfSPDM_SendReceive(ctx, req, sizeof(req), out, &rsz));
     ASSERT_EQ(out[1], SPDM_ERROR, "no CHUNK_CAP: raw ERROR returned");
+
+    TEST_CTX_FREE();
+    TEST_PASS();
+}
+
+/* Drive the secured (in-session) reassembly path: each CHUNK_GET is encrypted
+ * and each CHUNK_RESPONSE decrypted through wolfSPDM_ChunkXferSecured. A loopback
+ * mock with symmetric req/rsp keys stands in for the responder. */
+static int test_chunk_reassemble_secured(void)
+{
+    byte out[CHUNK_TEST_MAX];
+    word32 outSz = 0;
+    int i;
+    TEST_CTX_SETUP_V12();
+
+    printf("test_chunk_reassemble_secured...\n");
+    ASSERT_SUCCESS(wolfSPDM_SetIO(ctx, chunk_mock_io, NULL));
+    ctx->state = WOLFSPDM_STATE_CONNECTED;
+    ctx->sessionId = 0xCAFEBABE;
+    for (i = 0; i < WOLFSPDM_AEAD_KEY_SIZE; i++) {
+        ctx->reqDataKey[i] = (byte)(i + 1);
+        ctx->rspDataKey[i] = (byte)(i + 1);
+    }
+    for (i = 0; i < WOLFSPDM_AEAD_IV_SIZE; i++) {
+        ctx->reqDataIv[i] = (byte)(0x40 + i);
+        ctx->rspDataIv[i] = (byte)(0x40 + i);
+    }
+    ctx->reqSeqNum = 0;
+    ctx->rspSeqNum = 0;
+
+    chunk_mock_reset(3309, 800);   /* ML-DSA-65 SigLen over several chunks */
+    g_chunkSecured = 1;
+
+#ifndef WOLFSPDM_CHUNK_NO_SECURED
+    ASSERT_SUCCESS(wolfSPDM_ReassembleLargeResponse(ctx, 1, 0x42, out,
+        sizeof(out), &outSz));
+    ASSERT_EQ(outSz, 3309, "secured reassembled size");
+    ASSERT_EQ(XMEMCMP(out, g_chunkLarge, 3309), 0, "secured reassembled bytes");
+#else
+    ASSERT_EQ(wolfSPDM_ReassembleLargeResponse(ctx, 1, 0x42, out, sizeof(out),
+        &outSz), WOLFSPDM_E_CHUNK, "secured path compiled out returns E_CHUNK");
+#endif
 
     TEST_CTX_FREE();
     TEST_PASS();
@@ -2569,6 +2642,7 @@ int main(void)
 #endif
 #ifdef WOLFSPDM_HAVE_CHUNK
     test_chunk_reassemble();
+    test_chunk_reassemble_secured();
 #endif
     test_build_get_digests();
     test_build_get_certificate();
