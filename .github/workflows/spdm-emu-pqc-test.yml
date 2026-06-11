@@ -261,6 +261,77 @@ jobs:
           fi
           echo "All ML-KEM 512/768/1024 interop cases passed."
 
+      # --- Full post-quantum handshake: ML-KEM-768 key exchange + ML-DSA
+      #     signing together, no classical asymmetric crypto. ML-DSA-65 fits one
+      #     message; ML-DSA-87 (sig 4627 B) + ciphertext c (1088 B) exceeds the
+      #     DataTransferSize, so this case also exercises CHUNK_GET reassembly -
+      #     ML-KEM + ML-DSA + chunking in a single handshake.
+      - name: Full PQ (ML-KEM-768 + ML-DSA 65/87) session + measurements + challenge
+        run: |
+          export LD_LIBRARY_PATH=$HOME/wolfspdm-install/lib:$HOME/wolfssl-install/lib
+          export SPDM_EMU_PATH=$HOME/spdm-emu/build/bin
+          DEMO=./examples/spdm_demo
+          FAILURES=""
+
+          wait_for_port() {
+            local i
+            for i in $(seq 1 50); do
+              if ss -ltn 2>/dev/null | grep -q ':2323 '; then return 0; fi
+              sleep 0.2
+            done
+            return 1
+          }
+
+          # $1 pqc_asym (ML_DSA_xx), $2 cert dir, $3 label, then demo args. KEM is
+          # ML-KEM-768 throughout; the requester forces it with --kex mlkem768.
+          run_pq() {
+            local pqc="$1" certdir="$2" label="$3"; shift 3
+            export SPDM_EMU_CERT_DIR="$certdir"
+            echo "::group::$pqc+ML_KEM_768 $label"
+            local attempt rc=1 emu
+            for attempt in 1 2 3; do
+              ( cd "$SPDM_EMU_PATH" && ./spdm_responder_emu --ver 1.4 \
+                  --hash SHA_384 --asym NONE --pqc_asym "$pqc" \
+                  --dhe NONE --kem ML_KEM_768 --aead AES_256_GCM \
+                  >/tmp/pqc_emu_${pqc}_kem_${label}.log 2>&1 ) &
+              emu=$!
+              if wait_for_port; then
+                sleep 1
+                if "$DEMO" "$@" --ver 1.4 --kex mlkem768 --debug; then rc=0; else rc=$?; fi
+              else
+                rc=1
+              fi
+              kill $emu 2>/dev/null || true
+              wait $emu 2>/dev/null || true
+              [ $rc -eq 0 ] && break
+              echo "--- responder log (attempt $attempt) ---"
+              cat /tmp/pqc_emu_${pqc}_kem_${label}.log || true
+              echo "attempt $attempt for $pqc+KEM $label failed (rc=$rc), retrying"
+              sleep 1
+            done
+            echo "::endgroup::"
+            if [ $rc -ne 0 ]; then
+              echo "::error::$pqc+ML_KEM_768 $label failed after retries (rc=$rc)"
+              FAILURES="$FAILURES $pqc+kem/$label"
+            else
+              echo "$pqc+ML_KEM_768 $label: OK"
+            fi
+          }
+
+          for spec in "ML_DSA_65 mldsa65" "ML_DSA_87 mldsa87"; do
+            set -- $spec
+            pqc="$1"; dir="$2"
+            run_pq "$pqc" "$dir" session   --emu
+            run_pq "$pqc" "$dir" meas      --meas
+            run_pq "$pqc" "$dir" challenge --challenge
+          done
+
+          if [ -n "$FAILURES" ]; then
+            echo "::error::Full-PQ interop failures:$FAILURES"
+            exit 1
+          fi
+          echo "All full-PQ (ML-KEM + ML-DSA) interop cases passed."
+
       - name: Upload logs on failure
         if: failure()
         uses: actions/upload-artifact@v4
