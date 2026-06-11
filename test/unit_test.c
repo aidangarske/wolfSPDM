@@ -659,13 +659,18 @@ static int test_challenge_auth_mldsa_sigsize(void)
 
 #ifdef WOLFSPDM_HAVE_CHUNK
 #define CHUNK_TEST_MAX 4627            /* ML-DSA-87 SigLen — largest we reassemble */
+#define CHUNK_NONE 0xFFFFFFFFu
 static byte g_chunkLarge[CHUNK_TEST_MAX];
 static word32 g_chunkTotal;
 static word32 g_chunkPer;
+/* Adversarial-injection knobs (CHUNK_NONE = off) for malformed-responder tests */
+static word32 g_chunkBadSizeSeq;   /* inject oversized ChunkSize at this seq */
+static word32 g_chunkErrSeq;       /* return SPDM_ERROR at this seq */
+static int    g_chunkBadHandle;    /* echo a wrong Handle on chunk 0 */
 
 /* Mock I/O: answer each CHUNK_GET(seq) with the matching synthetic
  * CHUNK_RESPONSE chunk of g_chunkLarge (1.4 u32 layout), splitting g_chunkTotal
- * bytes into g_chunkPer-sized chunks. */
+ * bytes into g_chunkPer-sized chunks. Honors the g_chunk* injection knobs. */
 static int chunk_mock_io(WOLFSPDM_CTX* ctx, const byte* tx, word32 txSz,
     byte* rx, word32* rxSz, void* user)
 {
@@ -677,6 +682,14 @@ static int chunk_mock_io(WOLFSPDM_CTX* ctx, const byte* tx, word32 txSz,
     }
     handle = tx[3];
     seq = SPDM_Get32LE(&tx[4]);
+    if (seq == g_chunkErrSeq) {
+        rx[0] = SPDM_VERSION_14;
+        rx[1] = SPDM_ERROR;
+        rx[2] = SPDM_ERROR_UNSPECIFIED;
+        rx[3] = 0;
+        *rxSz = 4;
+        return 0;
+    }
     off = seq * g_chunkPer;
     csz = g_chunkTotal - off;
     if (csz > g_chunkPer) {
@@ -685,9 +698,9 @@ static int chunk_mock_io(WOLFSPDM_CTX* ctx, const byte* tx, word32 txSz,
     rx[0] = SPDM_VERSION_14;
     rx[1] = SPDM_CHUNK_RESPONSE;
     rx[2] = (off + csz >= g_chunkTotal) ? SPDM_CHUNK_LAST_CHUNK : 0;
-    rx[3] = handle;
+    rx[3] = (g_chunkBadHandle && seq == 0) ? (byte)(handle ^ 0xFF) : handle;
     SPDM_Set32LE(&rx[4], seq);
-    SPDM_Set32LE(&rx[8], csz);
+    SPDM_Set32LE(&rx[8], (seq == g_chunkBadSizeSeq) ? 0xFFFFFFF8u : csz);
     if (seq == 0) {
         SPDM_Set32LE(&rx[12], g_chunkTotal);
         dataOff = 16;
@@ -700,20 +713,29 @@ static int chunk_mock_io(WOLFSPDM_CTX* ctx, const byte* tx, word32 txSz,
     return 0;
 }
 
+/* Reset the mock to well-formed behavior. */
+static void chunk_mock_reset(word32 total, word32 per)
+{
+    word32 i;
+    g_chunkTotal = total;
+    g_chunkPer = per;
+    g_chunkBadSizeSeq = CHUNK_NONE;
+    g_chunkErrSeq = CHUNK_NONE;
+    g_chunkBadHandle = 0;
+    for (i = 0; i < total; i++) {
+        g_chunkLarge[i] = (byte)((i * 7u + 1u) & 0xFF);
+    }
+}
+
 /* Reassemble a `total`-byte message split into `per`-byte chunks and verify the
  * bytes round-trip. Returns 0 on pass. */
 static int chunk_reassemble_one(WOLFSPDM_CTX* ctx, word32 total, word32 per)
 {
     byte out[CHUNK_TEST_MAX];
     word32 outSz = 0;
-    word32 i;
     int rc;
 
-    g_chunkTotal = total;
-    g_chunkPer = per;
-    for (i = 0; i < total; i++) {
-        g_chunkLarge[i] = (byte)((i * 7u + 1u) & 0xFF);
-    }
+    chunk_mock_reset(total, per);
     rc = wolfSPDM_ReassembleLargeResponse(ctx, 0, 0x42, out, sizeof(out), &outSz);
     if (rc != WOLFSPDM_SUCCESS || outSz != total ||
         XMEMCMP(out, g_chunkLarge, total) != 0) {
@@ -726,6 +748,7 @@ static int test_chunk_reassemble(void)
 {
     byte cg[8];
     byte small[64];
+    byte out[CHUNK_TEST_MAX];
     word32 cgSz = sizeof(cg);
     word32 outSz = 0;
     TEST_CTX_SETUP();
@@ -751,9 +774,42 @@ static int test_chunk_reassemble(void)
     ASSERT_EQ(chunk_reassemble_one(ctx, 4627, 1000), 0, "ML-DSA-87 SigLen");
     ASSERT_EQ(chunk_reassemble_one(ctx, 4627, 512), 0, "ML-DSA-87, small MTU");
 
-    /* Negative: LargeMessageSize (4627) exceeds the output buffer. */
-    g_chunkTotal = CHUNK_TEST_MAX;
-    g_chunkPer = 512;
+    /* SPDM < 1.4 uses a u16 ChunkSeqNo; the synthetic 1.4 layout is compatible
+     * (seq low bytes + zero reserved), so reassembly must still succeed. */
+    ctx->spdmVersion = SPDM_VERSION_12;
+    ASSERT_EQ(chunk_reassemble_one(ctx, 2420, 1000), 0, "SPDM 1.2 u16 seqNo");
+    ctx->spdmVersion = SPDM_VERSION_14;
+
+    /* --- Adversarial responders (every CHUNK_RESPONSE byte is untrusted) --- */
+
+    /* Oversized ChunkSize (~UINT32_MAX) on the FIRST chunk — must be rejected
+     * with no copy (this is the integer-overflow case). */
+    chunk_mock_reset(2420, 1000);
+    g_chunkBadSizeSeq = 0;
+    ASSERT_EQ(wolfSPDM_ReassembleLargeResponse(ctx, 0, 0x42, out, sizeof(out),
+        &outSz), WOLFSPDM_E_CHUNK, "oversized ChunkSize (seq 0) rejected");
+
+    /* Oversized ChunkSize on a LATER chunk (off > 0) — the overflow path that
+     * wraps off+chunkSize; must be rejected. */
+    chunk_mock_reset(2420, 1000);
+    g_chunkBadSizeSeq = 1;
+    ASSERT_EQ(wolfSPDM_ReassembleLargeResponse(ctx, 0, 0x42, out, sizeof(out),
+        &outSz), WOLFSPDM_E_CHUNK, "oversized ChunkSize (seq>0) rejected");
+
+    /* Mismatched Handle echo. */
+    chunk_mock_reset(2420, 1000);
+    g_chunkBadHandle = 1;
+    ASSERT_EQ(wolfSPDM_ReassembleLargeResponse(ctx, 0, 0x42, out, sizeof(out),
+        &outSz), WOLFSPDM_E_CHUNK, "wrong Handle rejected");
+
+    /* Mid-stream SPDM_ERROR surfaces as a peer error. */
+    chunk_mock_reset(2420, 1000);
+    g_chunkErrSeq = 1;
+    ASSERT_EQ(wolfSPDM_ReassembleLargeResponse(ctx, 0, 0x42, out, sizeof(out),
+        &outSz), WOLFSPDM_E_PEER_ERROR, "mid-stream ERROR surfaced");
+
+    /* LargeMessageSize exceeds the output buffer. */
+    chunk_mock_reset(CHUNK_TEST_MAX, 512);
     ASSERT_EQ(wolfSPDM_ReassembleLargeResponse(ctx, 0, 0x42, small,
         sizeof(small), &outSz), WOLFSPDM_E_BUFFER_SMALL,
         "oversized message rejected");
@@ -980,7 +1036,7 @@ static int test_parse_key_exchange_rsp_mutual_auth_refused(void)
     rsp[0] = SPDM_VERSION_12;
     rsp[1] = SPDM_KEY_EXCHANGE_RSP;
     rsp[6] = 0x01;  /* MutAuthRequested - we don't support it */
-    ASSERT_EQ(wc_ecc_init(&ctx->responderPubKey), 0, "ecc_init");
+    ASSERT_EQ(wc_ecc_init(&ctx->responderPubKey.ecc), 0, "ecc_init");
     ctx->flags.hasResponderPubKey = 1;
     ctx->sessionId = 0;
     ASSERT_EQ(wolfSPDM_ParseKeyExchangeRsp(ctx, rsp, sizeof(rsp)),
@@ -1012,7 +1068,7 @@ static int test_parse_key_exchange_rsp_too_short(void)
     /* Properly init the ecc_key the flag references; wolfSPDM_Free's
      * wc_ecc_free should run against a wolfCrypt-initialized state, not
      * a zeroed-but-never-initialized struct. */
-    ASSERT_EQ(wc_ecc_init(&ctx->responderPubKey), 0, "ecc_init");
+    ASSERT_EQ(wc_ecc_init(&ctx->responderPubKey.ecc), 0, "ecc_init");
     ctx->flags.hasResponderPubKey = 1;
     rc = wolfSPDM_ParseKeyExchangeRsp(ctx, rsp, sizeof(rsp));
     ASSERT_NE(rc, WOLFSPDM_SUCCESS,
@@ -1274,7 +1330,7 @@ static int test_measurement_sig_verification(void)
     TEST_ASSERT(rc == 0, "wc_ecc_make_key failed");
 
     /* Copy public key into context for verification */
-    rc = wc_ecc_init(&ctx->responderPubKey);
+    rc = wc_ecc_init(&ctx->responderPubKey.ecc);
     TEST_ASSERT(rc == 0, "wc_ecc_init responderPubKey failed");
 
     /* Export/import just the public key */
@@ -1283,7 +1339,7 @@ static int test_measurement_sig_verification(void)
     rc = wc_EccPublicKeyToDer(&sigKey, pubDer, pubDerSz, 1);
     TEST_ASSERT(rc > 0, "EccPublicKeyToDer failed");
     pubDerSz = (word32)rc;
-    rc = wc_EccPublicKeyDecode(pubDer, &idx, &ctx->responderPubKey,
+    rc = wc_EccPublicKeyDecode(pubDer, &idx, &ctx->responderPubKey.ecc,
         pubDerSz);
     TEST_ASSERT(rc == 0, "EccPublicKeyDecode failed");
     ctx->flags.hasResponderPubKey = 1;

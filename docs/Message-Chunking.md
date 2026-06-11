@@ -39,6 +39,29 @@ emits the version-appropriate form. The first chunk (`ChunkSeqNo == 0`) carries
 
 The configure summary prints `Chunking: enabled|disabled`.
 
+`WOLFSPDM_CHUNK_BUF_SIZE` has a hard floor of 64 (it must hold a CHUNK_RESPONSE
+header plus payload).
+
+## Memory and interop notes
+
+- **Advertised DataTransferSize drops to the MTU.** With chunking enabled,
+  GET_CAPABILITIES advertises `DataTransferSize = WOLFSPDM_CHUNK_BUF_SIZE` (4096
+  by default) rather than `WOLFSPDM_MAX_MSG_SIZE`. This is the intended
+  constrained-device tradeoff — the responder chunks anything larger. A
+  responder that does **not** implement `CHUNK_CAP` must then keep every single
+  response within that MTU; raise `WOLFSPDM_CHUNK_BUF_SIZE` (e.g. to
+  `WOLFSPDM_MAX_MSG_SIZE`) if you need a larger single-message limit while still
+  reassembling anything above it.
+- **Secured path stack.** In-session reassembly (GET_MEASUREMENTS) encrypts each
+  CHUNK_GET and decrypts each CHUNK_RESPONSE, using an on-stack buffer of
+  ~`WOLFSPDM_CHUNK_BUF_SIZE` during the transfer. It scales with the MTU knob, so
+  lowering `WOLFSPDM_CHUNK_BUF_SIZE` lowers the peak stack too;
+  `WOLFSPDM_CHUNK_NO_SECURED` removes it entirely.
+- **Untrusted input.** Every CHUNK_RESPONSE byte is responder-controlled; the
+  reassembler validates `ChunkSize` with overflow-safe (subtraction) bounds,
+  echoes of `Handle`/`ChunkSeqNo`, and the per-message and total length before
+  any copy.
+
 ## References
 
 - DMTF DSP0274 1.4.0 — Sec. 10.27 (Large SPDM message transfer), Tables 68 / 101–105

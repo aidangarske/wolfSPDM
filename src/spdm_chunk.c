@@ -102,6 +102,7 @@ int wolfSPDM_ReassembleLargeResponse(WOLFSPDM_CTX* ctx, int secured,
     word32 chunkSize;
     word32 dataOff;
     word32 seqEcho;
+    word32 minSz;
     byte attrs;
     int last = 0;
     int rc;
@@ -137,15 +138,21 @@ int wolfSPDM_ReassembleLargeResponse(WOLFSPDM_CTX* ctx, int secured,
             return rc;
         }
 
-        /* Smallest valid CHUNK_RESPONSE: header(4) + seq(4) + size(4). */
-        if (rxSz < 12) {
-            return WOLFSPDM_E_CHUNK;
-        }
-        if (ctx->chunkBuf[1] == SPDM_ERROR) {
+        /* A mid-stream ERROR (e.g. the responder aborting the transfer) is a
+         * valid 4-byte response; surface its code before the CHUNK_RESPONSE
+         * length checks. */
+        if (rxSz >= 4 && ctx->chunkBuf[1] == SPDM_ERROR) {
             ctx->lastPeerErrorCode = ctx->chunkBuf[2];
             wolfSPDM_DebugPrint(ctx, "CHUNK: responder ERROR 0x%02x\n",
                 ctx->chunkBuf[2]);
             return WOLFSPDM_E_PEER_ERROR;
+        }
+        /* Minimum CHUNK_RESPONSE: header(4)+seq(4)+size(4); the first chunk
+         * (seq 0) also carries LargeMessageSize, so require 4 more before
+         * reading it. */
+        minSz = (seq == 0) ? 16u : 12u;
+        if (rxSz < minSz) {
+            return WOLFSPDM_E_CHUNK;
         }
         if (ctx->chunkBuf[1] != SPDM_CHUNK_RESPONSE ||
             ctx->chunkBuf[3] != handle) {
@@ -172,8 +179,12 @@ int wolfSPDM_ReassembleLargeResponse(WOLFSPDM_CTX* ctx, int secured,
             }
         }
 
-        if (chunkSize == 0 || dataOff + chunkSize > rxSz ||
-            off + chunkSize > total) {
+        /* chunkSize is fully responder-controlled. Validate with subtraction so
+         * an oversized value cannot wrap an addition: dataOff <= rxSz (minSz)
+         * and off <= total hold by construction, so the differences are safe. */
+        if (chunkSize == 0 ||
+            chunkSize > rxSz - dataOff ||
+            chunkSize > total - off) {
             return WOLFSPDM_E_CHUNK;
         }
         XMEMCPY(outBuf + off, &ctx->chunkBuf[dataOff], chunkSize);

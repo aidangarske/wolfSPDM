@@ -242,6 +242,10 @@ extern "C" {
 #ifndef WOLFSPDM_CHUNK_BUF_SIZE
 #define WOLFSPDM_CHUNK_BUF_SIZE     4096
 #endif
+/* Must hold a CHUNK_RESPONSE header (16 B) plus useful payload. */
+#if WOLFSPDM_CHUNK_BUF_SIZE < 64
+#error "WOLFSPDM_CHUNK_BUF_SIZE must be at least 64"
+#endif
 /* Reassembly loop guard (max chunks per large message). */
 #ifndef WOLFSPDM_CHUNK_MAX_CHUNKS
 #define WOLFSPDM_CHUNK_MAX_CHUNKS   64
