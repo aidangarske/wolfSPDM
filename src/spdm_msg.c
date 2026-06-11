@@ -225,10 +225,18 @@ int wolfSPDM_BuildKeyExchange(WOLFSPDM_CTX* ctx, byte* buf, word32* bufSz)
     rc = WOLFSPDM_SUCCESS;
 #ifdef WOLFSPDM_HAVE_MLKEM
     if (ctx->kexType == WOLFSPDM_KEX_MLKEM) {
-        ekSz = *bufSz - offset;
-        rc = wolfSPDM_GenerateMlKemKey(ctx, &buf[offset], &ekSz);
-        if (rc == WOLFSPDM_SUCCESS) {
-            offset += ekSz;
+        /* Reserve the trailing OpaqueData block so handing the remaining buffer
+         * to GenerateMlKemKey (which only bounds the ek) cannot leave the
+         * OpaqueData write below to overrun. */
+        if (*bufSz < offset + WOLFSPDM_KEX_OPAQUE_LEN) {
+            rc = WOLFSPDM_E_BUFFER_SMALL;
+        }
+        else {
+            ekSz = *bufSz - offset - WOLFSPDM_KEX_OPAQUE_LEN;
+            rc = wolfSPDM_GenerateMlKemKey(ctx, &buf[offset], &ekSz);
+            if (rc == WOLFSPDM_SUCCESS) {
+                offset += ekSz;
+            }
         }
     }
     else

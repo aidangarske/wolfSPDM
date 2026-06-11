@@ -303,6 +303,11 @@ int wolfSPDM_SetKeyExchangePref(WOLFSPDM_CTX* ctx, int advDhe, word16 kemMask)
     if (advDhe == 0 && kemMask == 0) {
         return WOLFSPDM_E_INVALID_ARG;  /* must advertise at least one method */
     }
+    if ((kemMask & ~(word16)(SPDM_KEM_ALGO_ML_KEM_512 |
+                             SPDM_KEM_ALGO_ML_KEM_768 |
+                             SPDM_KEM_ALGO_ML_KEM_1024)) != 0) {
+        return WOLFSPDM_E_INVALID_ARG;  /* undefined ML-KEM bit(s) */
+    }
 #ifndef WOLFSPDM_HAVE_MLKEM
     if (kemMask != 0) {
         return WOLFSPDM_E_INVALID_ARG;  /* ML-KEM not built in */

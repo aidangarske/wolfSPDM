@@ -227,6 +227,9 @@ extern "C" {
 #define WOLFSPDM_KEM_SS_SIZE        32
 #define WOLFSPDM_MAX_KEM_EK_SIZE    WOLFSPDM_MLKEM1024_EK_SIZE
 #define WOLFSPDM_MAX_KEM_CT_SIZE    WOLFSPDM_MLKEM1024_CT_SIZE
+/* Fixed OpaqueData block wolfSPDM_BuildKeyExchange appends after ExchangeData
+ * (2-byte OpaqueLength + 20-byte secured-message-version block). */
+#define WOLFSPDM_KEX_OPAQUE_LEN     22
 /* KEY_EXCHANGE request buffer: fixed fields + the largest ek + OpaqueData. */
 #define WOLFSPDM_KEX_REQ_BUF        (96 + WOLFSPDM_MAX_KEM_EK_SIZE)
 #else

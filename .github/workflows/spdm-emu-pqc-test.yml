@@ -76,6 +76,22 @@ jobs:
           make install
           grep LIBWOLFSSL_VERSION_STRING $HOME/wolfssl-install/include/wolfssl/version.h
 
+      # --- ML-KEM without ML-DSA: a real config (ML-KEM/Kyber is commonly
+      #     enabled for TLS hybrid KEX while ML-DSA is not). Exercises the
+      #     ML-KEM-only WOLFSPDM_CTX_STATIC_SIZE budget and unit tests, which
+      #     the combined build below does not. Cleaned up before the full build. ---
+      - name: Build + test wolfSPDM ML-KEM-only (--disable-mldsa --enable-mlkem)
+        run: |
+          ./autogen.sh
+          ./configure --with-wolfssl=$HOME/wolfssl-install \
+                      --disable-mldsa --enable-mlkem \
+                      ${{ matrix.dynamic-mem == 'yes' && '--enable-dynamic-mem' || '' }}
+          make -j"$(nproc)"
+          make check
+          make distclean
+        env:
+          LD_LIBRARY_PATH: ${{ github.workspace }}/.libs:${{ github.workspace }}/src/.libs:${{ env.HOME }}/wolfssl-install/lib
+
       # --- wolfSPDM with ML-DSA + ML-KEM asserted on, static or dynamic memory ---
       - name: Build and install wolfSPDM (--enable-mldsa --enable-mlkem)
         run: |

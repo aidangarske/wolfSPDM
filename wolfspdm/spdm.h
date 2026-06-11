@@ -94,8 +94,13 @@ extern "C" {
  * key push it to ~67 KB, rounded to 72 KB. wolfSPDM_InitStatic() verifies at
  * runtime that the provided buffer is large enough (WOLFSPDM_E_BUFFER_SMALL);
  * a compile-time _Static_assert in spdm_context.c also guards this value. */
-#ifdef WOLFSPDM_HAVE_MLDSA
+#if defined(WOLFSPDM_HAVE_MLDSA)
 #define WOLFSPDM_CTX_STATIC_SIZE  73728  /* 72KB - fits CTX with ML-DSA buffers */
+#elif defined(WOLFSPDM_HAVE_MLKEM)
+/* ML-KEM (no ML-DSA): the ephemeralKey union holds an MlKemKey (larger than
+ * ecc_key, and larger still with WOLFSSL_MLKEM_CACHE_A) instead of the classical
+ * key, so allow extra headroom over the 32KB classical budget. */
+#define WOLFSPDM_CTX_STATIC_SIZE  49152  /* 48KB */
 #else
 #define WOLFSPDM_CTX_STATIC_SIZE  32768  /* 32KB - fits CTX with cert validation + challenge + key update fields */
 #endif

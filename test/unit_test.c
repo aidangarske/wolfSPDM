@@ -868,6 +868,26 @@ static int test_build_key_exchange_mlkem(void)
     TEST_CTX_FREE();
     TEST_PASS();
 }
+
+/* An ML-KEM KEY_EXCHANGE request larger than the responder's DataTransferSize
+ * must fail fast (no CHUNK_SEND), not emit a non-conformant oversized message. */
+static int test_key_exchange_mlkem_exceeds_dts(void)
+{
+    TEST_CTX_SETUP();
+
+    printf("test_key_exchange_mlkem_exceeds_dts...\n");
+    ctx->spdmVersion = SPDM_VERSION_14;
+    ctx->kexType = WOLFSPDM_KEX_MLKEM;
+    ctx->kemAlgSel = SPDM_KEM_ALGO_ML_KEM_1024;   /* ek 1568 -> request ~1630 B */
+    ctx->flags.hasResponderPubKey = 1;            /* pass the precondition */
+    ctx->dataTransferSize = 512;                  /* smaller than the request */
+
+    ASSERT_EQ(wolfSPDM_KeyExchange(ctx), WOLFSPDM_E_BUFFER_SMALL,
+        "oversized ML-KEM KEY_EXCHANGE rejected before send");
+
+    TEST_CTX_FREE();
+    TEST_PASS();
+}
 #endif /* WOLFSPDM_HAVE_MLKEM */
 
 #ifdef WOLFSPDM_HAVE_CHUNK
@@ -2899,6 +2919,7 @@ int main(void)
     test_mlkem_decapsulate();
     test_kex_reconnect_method_switch();
     test_build_key_exchange_mlkem();
+    test_key_exchange_mlkem_exceeds_dts();
 #endif
 #ifdef WOLFSPDM_HAVE_CHUNK
     test_chunk_reassemble();
