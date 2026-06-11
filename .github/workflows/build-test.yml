@@ -72,3 +72,73 @@ jobs:
         path: |
           test/*.log
           config.log
+
+  chunk-config:
+    name: chunking / ${{ matrix.variant }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: default
+            configure: ''
+          - variant: disabled
+            configure: '--disable-chunking'
+          - variant: no-secured
+            configure: 'CPPFLAGS=-DWOLFSPDM_CHUNK_NO_SECURED'
+          - variant: small-mtu
+            configure: 'CPPFLAGS=-DWOLFSPDM_CHUNK_BUF_SIZE=1024'
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y autoconf automake libtool
+
+    - name: Cache wolfSSL
+      id: cache-wolfssl
+      uses: actions/cache@v4
+      with:
+        path: ~/wolfssl-install
+        key: wolfssl-ubuntu-latest-v1
+
+    - name: Build wolfSSL
+      if: steps.cache-wolfssl.outputs.cache-hit != 'true'
+      run: |
+        cd ~
+        git clone --depth 1 https://github.com/wolfSSL/wolfssl.git
+        cd wolfssl
+        ./autogen.sh
+        ./configure --enable-ecc --enable-sha384 --enable-aesgcm --enable-hkdf \
+                    --enable-ecccustcurves --enable-keygen \
+                    --prefix=$HOME/wolfssl-install
+        make -j$(nproc)
+        make install
+
+    - name: Generate configure
+      run: ./autogen.sh
+
+    - name: Configure
+      run: ./configure --with-wolfssl=$HOME/wolfssl-install ${{ matrix.configure }}
+
+    - name: Verify chunking status
+      run: grep -E 'Chunking:' config.log || true
+
+    - name: Build
+      run: make -j$(nproc)
+
+    - name: Run unit tests
+      run: make check
+      env:
+        LD_LIBRARY_PATH: ${{ github.workspace }}/src/.libs:$HOME/wolfssl-install/lib
+
+    - name: Upload test logs on failure
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: test-logs-chunk-${{ matrix.variant }}
+        path: |
+          test/*.log
+          config.log
