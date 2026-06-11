@@ -65,17 +65,26 @@ header plus payload).
   echoes of `Handle`/`ChunkSeqNo`, and the per-message and total length before
   any copy.
 
-## Spec deviation: CHUNK_GET only, no CHUNK_SEND
+## Why CHUNK_GET only (no CHUNK_SEND)
 
-wolfSPDM advertises `CHUNK_CAP` but implements only the **inbound** half of the
-mechanism — reassembling large *responses* via `CHUNK_GET`. It never sends
-`CHUNK_SEND`, because every request it builds (GET_VERSION through
-GET_MEASUREMENTS, KEY_EXCHANGE, FINISH) fits well under any responder's
-`DataTransferSize`; nothing the requester emits is large enough to chunk. This
-is an intentional, accepted deviation, not an omission — `CHUNK_SEND` /
-`CHUNK_SEND_ACK` are defined in `spdm_types.h` but deliberately unimplemented. A
-responder that requires the requester to chunk a request is not interoperable
-with wolfSPDM by design.
+The mechanism has two directions, controlled by different endpoints:
+
+- `CHUNK_GET` pulls a large **response** the responder chose to split. The
+  requester has no control over a responder's reply size (an ML-DSA-87 signature
+  is 4627 B regardless), so it must be able to reassemble one. wolfSPDM
+  implements this.
+- `CHUNK_SEND` pushes a large **request** in pieces. This is requester-initiated:
+  the requester decides to chunk its own outbound request; a responder cannot
+  force it.
+
+Every request wolfSPDM builds (GET_VERSION through GET_MEASUREMENTS,
+KEY_EXCHANGE, FINISH) is small and fixed, well under any responder's
+`DataTransferSize`, so `CHUNK_SEND` is never needed — it is not applicable to
+this library's traffic rather than missing. `CHUNK_CAP` advertises support for
+the large-message mechanism; it does not obligate an endpoint to chunk requests
+it never sends, so a requester that only emits small requests is fully
+conformant supporting `CHUNK_GET` alone. `CHUNK_SEND` / `CHUNK_SEND_ACK` are
+defined in `spdm_types.h` for completeness but intentionally unimplemented.
 
 ## References
 
