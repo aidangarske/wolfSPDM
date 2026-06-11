@@ -80,6 +80,21 @@ if test "x$enable_dynamic_mem" = "xyes"; then
     AC_DEFINE([WOLFSPDM_DYNAMIC_MEMORY], [1], [Enable dynamic memory allocation])
 fi
 
+# Large-response chunking (DSP0274 Sec. 10.27 CHUNK_GET). Default: enabled.
+# Lets the requester reassemble responses the responder splits because they
+# exceed DataTransferSize (needed for ML-DSA-87 over the wire).
+AC_ARG_ENABLE([chunking],
+    [AS_HELP_STRING([--disable-chunking], [Disable SPDM message chunking (CHUNK_GET)])],
+    [enable_chunking=$enableval],
+    [enable_chunking=yes])
+
+if test "x$enable_chunking" = "xno"; then
+    AC_DEFINE([WOLFSPDM_NO_CHUNK], [1], [Disable SPDM message chunking])
+    chunking_status=disabled
+else
+    chunking_status=enabled
+fi
+
 # ML-DSA (FIPS 204) post-quantum signatures (DSP0274 1.4). Default: auto-follow
 # the linked wolfSSL - on when it reports WOLFSSL_HAVE_MLDSA, off otherwise.
 AC_ARG_ENABLE([mldsa],
@@ -143,6 +158,7 @@ echo "wolfSPDM configuration summary:"
 echo "  Version:     $PACKAGE_VERSION"
 echo "  Debug:       $enable_debug"
 echo "  Dynamic mem: $enable_dynamic_mem"
+echo "  Chunking:    $chunking_status"
 echo "  ML-DSA:      $mldsa_status"
 echo "  wolfSSL:     ${WOLFSSL_DIR:-system}"
 echo ""

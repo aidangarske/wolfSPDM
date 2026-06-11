@@ -4,6 +4,7 @@ lib_LTLIBRARIES = libwolfspdm.la
 
 libwolfspdm_la_SOURCES = \
     src/spdm_context.c \
+    src/spdm_chunk.c \
     src/spdm_crypto.c \
     src/spdm_kdf.c \
     src/spdm_msg.c \

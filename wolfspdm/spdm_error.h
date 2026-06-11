@@ -58,6 +58,7 @@ enum WOLFSPDM_ERROR {
     WOLFSPDM_E_CERT_PARSE       = -24,  /* Failed to parse responder certificate */
     WOLFSPDM_E_CHALLENGE         = -25,  /* Challenge authentication failed */
     WOLFSPDM_E_KEY_UPDATE        = -26,  /* Key update failed */
+    WOLFSPDM_E_CHUNK             = -27,  /* Large-response chunking failed */
 };
 
 /* Get human-readable error string */

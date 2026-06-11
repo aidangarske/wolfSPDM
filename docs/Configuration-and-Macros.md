@@ -10,6 +10,7 @@ From `configure.ac`:
 | `--enable-debug` | off | Defines `WOLFSPDM_DEBUG`, builds with `-g -O0` |
 | `--enable-dynamic-mem` | off | Defines `WOLFSPDM_DYNAMIC_MEMORY` and enables `wolfSPDM_New` |
 | `--disable-mldsa` | auto | Force ML-DSA off (default follows wolfSSL — see [[Post-Quantum ML-DSA]]) |
+| `--disable-chunking` | on | Defines `WOLFSPDM_NO_CHUNK` — compile out CHUNK_GET (see [[Message Chunking]]) |
 
 ## Public feature macros
 
@@ -20,6 +21,7 @@ Defined in `wolfspdm/spdm.h` depending on build flags:
 - `WOLFSPDM_HAS_HEARTBEAT`
 - `WOLFSPDM_HAS_KEY_UPDATE`
 - `WOLFSPDM_HAVE_MLDSA` *(defined when ML-DSA is built in; follows wolfSSL's `WOLFSSL_HAVE_MLDSA`, suppress with `WOLFSPDM_NO_MLDSA`)*
+- `WOLFSPDM_HAVE_CHUNK` *(defined when CHUNK_GET chunking is built in; suppress with `WOLFSPDM_NO_CHUNK`)* — tunables `WOLFSPDM_CHUNK_BUF_SIZE` (MTU, default 4096), `WOLFSPDM_CHUNK_MAX_CHUNKS` (default 64), and `WOLFSPDM_CHUNK_NO_SECURED` (drop the encrypted path). See [[Message Chunking]].
 
 ## Size and protocol constants
 
