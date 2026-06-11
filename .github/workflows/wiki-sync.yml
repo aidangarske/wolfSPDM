@@ -2,7 +2,7 @@ name: Sync docs to wiki
 
 on:
   push:
-    branches: [master, main]
+    branches: [main]
     paths: ['docs/**']
   workflow_dispatch:
 
