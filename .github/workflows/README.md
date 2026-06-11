@@ -11,3 +11,4 @@
 | CodeQL Security | `codeql.yml` | GitHub CodeQL security-and-quality analysis. Runs on PRs and weekly (Monday 6 AM UTC). |
 | Codespell | `codespell.yml` | Spell-checks source files. |
 | SPDM Emulator Test | `spdm-emu-test.yml` | End-to-end integration test against the DMTF libspdm emulator. Runs 18 tests (6 scenarios x SPDM 1.2/1.3/1.4): session establishment, signed/unsigned measurements, challenge authentication, heartbeat, key update. Matrix across ubuntu-22.04 (x64), ubuntu-24.04 (x64), ubuntu-24.04-arm (aarch64). |
+| SPDM Emulator PQC Test | `spdm-emu-pqc-test.yml` | Post-quantum interop against spdm-emu (OpenSSL backend, wolfSSL master) on the x64 + aarch64 matrix: ML-DSA-44/65/87 signatures, ML-KEM-512/768/1024 key exchange, and a fully post-quantum leg (ML-KEM-768 + ML-DSA-65/87, also exercising chunking) for session/measurements/challenge. Also builds the ML-KEM-only config. |

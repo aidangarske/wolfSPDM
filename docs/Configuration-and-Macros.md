@@ -10,6 +10,7 @@ From `configure.ac`:
 | `--enable-debug` | off | Defines `WOLFSPDM_DEBUG`, builds with `-g -O0` |
 | `--enable-dynamic-mem` | off | Defines `WOLFSPDM_DYNAMIC_MEMORY` and enables `wolfSPDM_New` |
 | `--disable-mldsa` | auto | Force ML-DSA off (default follows wolfSSL — see [[Post-Quantum ML-DSA]]) |
+| `--disable-mlkem` | auto | Force ML-KEM off (default follows wolfSSL — see [[Post-Quantum ML-KEM]]) |
 | `--disable-chunking` | on | Defines `WOLFSPDM_NO_CHUNK` — compile out CHUNK_GET (see [[Message Chunking]]) |
 
 ## Public feature macros
@@ -21,20 +22,26 @@ Defined in `wolfspdm/spdm.h` depending on build flags:
 - `WOLFSPDM_HAS_HEARTBEAT`
 - `WOLFSPDM_HAS_KEY_UPDATE`
 - `WOLFSPDM_HAVE_MLDSA` *(defined when ML-DSA is built in; follows wolfSSL's `WOLFSSL_HAVE_MLDSA`, suppress with `WOLFSPDM_NO_MLDSA`)*
+- `WOLFSPDM_HAVE_MLKEM` *(defined when ML-KEM key exchange is built in; follows wolfSSL's `WOLFSSL_HAVE_MLKEM`, suppress with `WOLFSPDM_NO_MLKEM`)* — see [[Post-Quantum ML-KEM]]. The advertised key-exchange methods are chosen at runtime with `wolfSPDM_SetKeyExchangePref(ctx, advDhe, kemMask)` (default: ECDHE + all ML-KEM sets).
 - `WOLFSPDM_HAVE_CHUNK` *(defined when CHUNK_GET chunking is built in; suppress with `WOLFSPDM_NO_CHUNK`)* — tunables `WOLFSPDM_CHUNK_BUF_SIZE` (MTU, default 4096), `WOLFSPDM_CHUNK_MAX_CHUNKS` (default 64), and `WOLFSPDM_CHUNK_NO_SECURED` (drop the encrypted path). See [[Message Chunking]].
 
 ## Size and protocol constants
 
 From `wolfspdm/spdm.h` and `wolfspdm/spdm_types.h`. The buffer/context defaults
 grow when ML-DSA is built in so ML-DSA-65 payloads fit a single message
-(all three buffer caps are overridable with `-D`):
+(all caps are overridable with `-D`). ML-KEM-only builds use an intermediate
+context/transcript budget for the in-context ephemeral ML-KEM key:
 
-| Constant | Classical | With ML-DSA |
-|----------|-----------|-------------|
-| `WOLFSPDM_CTX_STATIC_SIZE` | `32768` | `73728` |
-| `WOLFSPDM_MAX_MSG_SIZE` | `4096` | `8192` |
-| `WOLFSPDM_MAX_CERT_CHAIN` | `4096` | `24576` |
-| `WOLFSPDM_MAX_TRANSCRIPT` | `4096` | `16384` |
+| Constant | Classical | ML-KEM only | With ML-DSA |
+|----------|-----------|-------------|-------------|
+| `WOLFSPDM_CTX_STATIC_SIZE` | `32768` | `49152` | `73728` |
+| `WOLFSPDM_MAX_MSG_SIZE` | `4096` | `4096` | `8192` |
+| `WOLFSPDM_MAX_CERT_CHAIN` | `4096` | `4096` | `24576` |
+| `WOLFSPDM_MAX_TRANSCRIPT` | `4096` | `8192` | `16384` |
+
+ML-KEM size constants (`WOLFSPDM_HAVE_MLKEM`): `WOLFSPDM_MLKEM{512,768,1024}_EK_SIZE`
+(encapsulation key), `_CT_SIZE` (ciphertext), and `WOLFSPDM_KEM_SS_SIZE` (32).
+KEM algorithm bits: `SPDM_KEM_ALGO_ML_KEM_512/768/1024` (`0x01/0x02/0x04`).
 
 Version constants:
 - `SPDM_VERSION_12`, `SPDM_VERSION_13`, `SPDM_VERSION_14`
