@@ -178,6 +178,7 @@ jobs:
               fi
               kill $emu 2>/dev/null || true
               wait $emu 2>/dev/null || true
+              pkill -f spdm_responder_emu 2>/dev/null || true
               [ $rc -eq 0 ] && break
               echo "--- responder log (attempt $attempt) ---"
               cat /tmp/pqc_emu_${alg}_${label}.log || true
@@ -248,6 +249,7 @@ jobs:
               fi
               kill $emu 2>/dev/null || true
               wait $emu 2>/dev/null || true
+              pkill -f spdm_responder_emu 2>/dev/null || true
               [ $rc -eq 0 ] && break
               echo "--- responder log (attempt $attempt) ---"
               cat /tmp/pqc_emu_${kem}_${label}.log || true
@@ -320,6 +322,7 @@ jobs:
               fi
               kill $emu 2>/dev/null || true
               wait $emu 2>/dev/null || true
+              pkill -f spdm_responder_emu 2>/dev/null || true
               [ $rc -eq 0 ] && break
               echo "--- responder log (attempt $attempt) ---"
               cat /tmp/pqc_emu_${pqc}_kem_${label}.log || true

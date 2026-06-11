@@ -260,6 +260,9 @@ int wolfSPDM_BuildKeyExchange(WOLFSPDM_CTX* ctx, byte* buf, word32* bufSz)
             offset += WOLFSPDM_ECC_KEY_SIZE;
         }
     }
+    else {
+        rc = WOLFSPDM_E_BAD_STATE;  /* unrecognized kexType: fail closed */
+    }
     if (rc != WOLFSPDM_SUCCESS) {
         return rc;
     }
@@ -874,6 +877,9 @@ int wolfSPDM_ParseAlgorithms(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufSz)
         return WOLFSPDM_E_ALGO_MISMATCH;
     }
     ctx->kexType = kemOk ? WOLFSPDM_KEX_MLKEM : WOLFSPDM_KEX_ECDHE;
+    if (!kemOk) {
+        ctx->kemAlgSel = 0;  /* no stale KEM selection on the ECDHE branch */
+    }
 
     wolfSPDM_DebugPrint(ctx, "ALGORITHMS: BaseAsym=0x%08x BaseHash=0x%08x\n",
         baseAsymAlgo, baseHashAlgo);
