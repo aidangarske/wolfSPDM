@@ -50,10 +50,12 @@ header plus payload).
   constrained-device tradeoff — the responder chunks anything larger. A
   responder that does **not** implement `CHUNK_CAP` must then keep every single
   response within that MTU; raise `WOLFSPDM_CHUNK_BUF_SIZE` if you need a larger
-  single-message limit while still reassembling anything above it. Raising it
-  also enlarges the in-context `chunkBuf`, so bump `WOLFSPDM_CTX_STATIC_SIZE`
-  to match (a `_Static_assert` in `spdm_context.c` enforces this at compile
-  time — in ML-DSA builds the context already sits ~1 KB under the default cap).
+  single-message limit while still reassembling anything above it. Two ceilings
+  apply: it must stay `<= WOLFSPDM_MAX_MSG_SIZE` (the secured path decrypts each
+  chunk through a `WOLFSPDM_MAX_MSG_SIZE` stage buffer — a compile-time `#error`
+  enforces this), and raising it enlarges the in-context `chunkBuf`, so bump
+  `WOLFSPDM_CTX_STATIC_SIZE` to match (a `_Static_assert` in `spdm_context.c`
+  enforces that — in ML-DSA builds the context already sits ~1 KB under the cap).
 - **Secured path stack.** In-session reassembly (GET_MEASUREMENTS) encrypts each
   CHUNK_GET and decrypts each CHUNK_RESPONSE. Nested under
   `wolfSPDM_SecuredExchange`'s frame plus the AEAD scratch buffers, peak stack

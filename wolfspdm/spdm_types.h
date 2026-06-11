@@ -268,13 +268,20 @@ extern "C" {
 /* ML-DSA payloads (multi-KB sigs, pubkeys, cert chains) need larger buffers
  * than Algorithm Set B. Defaults grow when ML-DSA is built in so ML-DSA-65
  * fits a single message; all three are overridable with -D. ML-DSA-87 and
- * very large chains rely on the (future) chunking engine. */
+ * very large chains rely on the chunking engine. */
 #ifndef WOLFSPDM_MAX_MSG_SIZE
 #ifdef WOLFSPDM_HAVE_MLDSA
 #define WOLFSPDM_MAX_MSG_SIZE       8192    /* Maximum SPDM message size */
 #else
 #define WOLFSPDM_MAX_MSG_SIZE       4096
 #endif
+#endif
+/* The secured chunk path decrypts each CHUNK_RESPONSE through a
+ * WOLFSPDM_MAX_MSG_SIZE-bounded stage buffer, so a chunk's plaintext (up to the
+ * advertised MTU) cannot exceed it. */
+#if defined(WOLFSPDM_HAVE_CHUNK) && !defined(WOLFSPDM_CHUNK_NO_SECURED) && \
+    (WOLFSPDM_CHUNK_BUF_SIZE > WOLFSPDM_MAX_MSG_SIZE)
+#error "WOLFSPDM_CHUNK_BUF_SIZE must be <= WOLFSPDM_MAX_MSG_SIZE for the secured chunk path"
 #endif
 #ifndef WOLFSPDM_MAX_CERT_CHAIN
 #ifdef WOLFSPDM_HAVE_MLDSA
