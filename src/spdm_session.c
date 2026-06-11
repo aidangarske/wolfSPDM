@@ -306,6 +306,20 @@ int wolfSPDM_KeyExchange(WOLFSPDM_CTX* ctx)
         return rc;
     }
 
+    /* An ML-KEM encapsulation key makes this request large (up to ~1.6 KB for
+     * ML-KEM-1024), unlike the ~158-byte ECDHE request. wolfSPDM implements
+     * CHUNK_GET (response reassembly) but not CHUNK_SEND (request
+     * fragmentation), so if the request exceeds the responder's advertised
+     * DataTransferSize, fail fast with a clear error rather than transmit a
+     * non-conformant oversized request (DSP0274 Sec. 10.27). */
+    if (ctx->dataTransferSize != 0 && txSz > ctx->dataTransferSize) {
+        wolfSPDM_DebugPrint(ctx,
+            "KEY_EXCHANGE %u B exceeds responder DataTransferSize %u "
+            "(no CHUNK_SEND)\n",
+            (unsigned)txSz, (unsigned)ctx->dataTransferSize);
+        return WOLFSPDM_E_BUFFER_SMALL;
+    }
+
     rc = wolfSPDM_TranscriptAdd(ctx, txBuf, txSz);
     if (rc != WOLFSPDM_SUCCESS) {
         return rc;

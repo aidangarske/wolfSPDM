@@ -79,14 +79,21 @@ The mechanism has two directions, controlled by different endpoints:
   the requester decides to chunk its own outbound request; a responder cannot
   force it.
 
-Every request wolfSPDM builds (GET_VERSION through GET_MEASUREMENTS,
-KEY_EXCHANGE, FINISH) is small and fixed, well under any responder's
-`DataTransferSize`, so `CHUNK_SEND` is never needed — it is not applicable to
-this library's traffic rather than missing. `CHUNK_CAP` advertises support for
-the large-message mechanism; it does not obligate an endpoint to chunk requests
-it never sends, so a requester that only emits small requests is fully
-conformant supporting `CHUNK_GET` alone. `CHUNK_SEND` / `CHUNK_SEND_ACK` are
-defined in `spdm_types.h` for completeness but intentionally unimplemented.
+Almost every request wolfSPDM builds (GET_VERSION through GET_MEASUREMENTS,
+FINISH) is small and fixed, well under any responder's `DataTransferSize`. The
+one exception is an **ML-KEM** KEY_EXCHANGE, whose `ExchangeData` carries the
+encapsulation key `ek` (800/1184/1568 B for ML-KEM-512/768/1024) — a request of
+~870–1640 B. This still fits common responders (e.g. spdm-emu advertises
+4608 B), but a constrained responder could advertise a smaller
+`DataTransferSize`. Because `CHUNK_SEND` is unimplemented, `wolfSPDM_KeyExchange`
+**fails fast** (`WOLFSPDM_E_BUFFER_SMALL`) when the built request exceeds the
+responder's `DataTransferSize` rather than emit a non-conformant oversized
+message — so the library never sends something it cannot chunk.
+
+`CHUNK_CAP` advertises support for the large-message mechanism; it does not
+obligate an endpoint to chunk requests it never sends. `CHUNK_SEND` /
+`CHUNK_SEND_ACK` are defined in `spdm_types.h` for completeness but intentionally
+unimplemented; the fail-fast guard keeps that conformant.
 
 ## References
 
