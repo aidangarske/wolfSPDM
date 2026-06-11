@@ -110,6 +110,9 @@ int wolfSPDM_ReassembleLargeResponse(WOLFSPDM_CTX* ctx, int secured,
     if (ctx == NULL || outBuf == NULL || outSz == NULL) {
         return WOLFSPDM_E_INVALID_ARG;
     }
+    /* The < 1.4 CHUNK_GET is 6 bytes; zero the buffer so the trailing two bytes
+     * are deterministic rather than stale stack. */
+    XMEMSET(txBuf, 0, sizeof(txBuf));
 
     while (!last) {
         if (seq >= WOLFSPDM_CHUNK_MAX_CHUNKS) {

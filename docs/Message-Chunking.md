@@ -49,14 +49,17 @@ header plus payload).
   by default) rather than `WOLFSPDM_MAX_MSG_SIZE`. This is the intended
   constrained-device tradeoff — the responder chunks anything larger. A
   responder that does **not** implement `CHUNK_CAP` must then keep every single
-  response within that MTU; raise `WOLFSPDM_CHUNK_BUF_SIZE` (e.g. to
-  `WOLFSPDM_MAX_MSG_SIZE`) if you need a larger single-message limit while still
-  reassembling anything above it.
+  response within that MTU; raise `WOLFSPDM_CHUNK_BUF_SIZE` if you need a larger
+  single-message limit while still reassembling anything above it. Raising it
+  also enlarges the in-context `chunkBuf`, so bump `WOLFSPDM_CTX_STATIC_SIZE`
+  to match (a `_Static_assert` in `spdm_context.c` enforces this at compile
+  time — in ML-DSA builds the context already sits ~1 KB under the default cap).
 - **Secured path stack.** In-session reassembly (GET_MEASUREMENTS) encrypts each
-  CHUNK_GET and decrypts each CHUNK_RESPONSE, using an on-stack buffer of
-  ~`WOLFSPDM_CHUNK_BUF_SIZE` during the transfer. It scales with the MTU knob, so
-  lowering `WOLFSPDM_CHUNK_BUF_SIZE` lowers the peak stack too;
-  `WOLFSPDM_CHUNK_NO_SECURED` removes it entirely.
+  CHUNK_GET and decrypts each CHUNK_RESPONSE. Nested under
+  `wolfSPDM_SecuredExchange`'s frame plus the AEAD scratch buffers, peak stack
+  approaches ~30 KB in ML-DSA builds during a chunked GET_MEASUREMENTS (it
+  scales with `WOLFSPDM_MAX_MSG_SIZE` and `WOLFSPDM_CHUNK_BUF_SIZE`). Lower the
+  MTU or use `WOLFSPDM_CHUNK_NO_SECURED` on stack-constrained targets.
 - **Untrusted input.** Every CHUNK_RESPONSE byte is responder-controlled; the
   reassembler validates `ChunkSize` with overflow-safe (subtraction) bounds,
   echoes of `Handle`/`ChunkSeqNo`, and the per-message and total length before

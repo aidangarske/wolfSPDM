@@ -90,7 +90,7 @@ extern "C" {
 #define SPDM_END_SESSION            0xEA
 #endif
 #define SPDM_CHUNK_SEND             0x85    /* Large request chunking (unused) */
-#define SPDM_CHUNK_GET             0x86    /* Large response chunking (CHUNK_GET) */
+#define SPDM_CHUNK_GET              0x86    /* Large response chunking (CHUNK_GET) */
 #define SPDM_VENDOR_DEFINED         0xFF
 
 /* SPDM Response Codes (sent by responder) */

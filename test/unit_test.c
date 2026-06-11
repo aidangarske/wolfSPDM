@@ -667,21 +667,37 @@ static word32 g_chunkPer;
 static word32 g_chunkBadSizeSeq;   /* inject oversized ChunkSize at this seq */
 static word32 g_chunkErrSeq;       /* return SPDM_ERROR at this seq */
 static int    g_chunkBadHandle;    /* echo a wrong Handle on chunk 0 */
+static int    g_chunkNeverLast;    /* never set LastChunk (MAX_CHUNKS guard) */
+static int    g_chunkShortLast;    /* LastChunk on chunk 0 but off < total */
+static int    g_chunkTrigger;      /* answer a non-CHUNK_GET with ERROR(LargeResp) */
 
 /* Mock I/O: answer each CHUNK_GET(seq) with the matching synthetic
- * CHUNK_RESPONSE chunk of g_chunkLarge (1.4 u32 layout), splitting g_chunkTotal
- * bytes into g_chunkPer-sized chunks. Honors the g_chunk* injection knobs. */
+ * CHUNK_RESPONSE chunk of g_chunkLarge (version-correct layout), splitting
+ * g_chunkTotal bytes into g_chunkPer-sized chunks. Honors the g_chunk* knobs. */
 static int chunk_mock_io(WOLFSPDM_CTX* ctx, const byte* tx, word32 txSz,
     byte* rx, word32* rxSz, void* user)
 {
     word32 seq, off, csz, dataOff;
     byte handle;
-    (void)ctx; (void)txSz; (void)user;
+    (void)txSz; (void)user;
     if (tx[1] != SPDM_CHUNK_GET) {
+        /* Trigger path: an arbitrary request gets ERROR(LargeResponse) so the
+         * SendReceive hook drives reassembly. */
+        if (g_chunkTrigger) {
+            rx[0] = SPDM_VERSION_14;
+            rx[1] = SPDM_ERROR;
+            rx[2] = SPDM_ERROR_LARGE_RESPONSE;
+            rx[3] = 0;
+            rx[4] = 0x42;          /* ExtendedErrorData: Handle */
+            *rxSz = 5;
+            return 0;
+        }
         return -1;
     }
     handle = tx[3];
-    seq = SPDM_Get32LE(&tx[4]);
+    seq = (ctx != NULL && ctx->spdmVersion >= SPDM_VERSION_14)
+        ? SPDM_Get32LE(&tx[4])
+        : (word32)SPDM_Get16LE(&tx[4]);
     if (seq == g_chunkErrSeq) {
         rx[0] = SPDM_VERSION_14;
         rx[1] = SPDM_ERROR;
@@ -695,9 +711,15 @@ static int chunk_mock_io(WOLFSPDM_CTX* ctx, const byte* tx, word32 txSz,
     if (csz > g_chunkPer) {
         csz = g_chunkPer;
     }
-    rx[0] = SPDM_VERSION_14;
+    rx[0] = (ctx != NULL) ? ctx->spdmVersion : SPDM_VERSION_14;
     rx[1] = SPDM_CHUNK_RESPONSE;
     rx[2] = (off + csz >= g_chunkTotal) ? SPDM_CHUNK_LAST_CHUNK : 0;
+    if (g_chunkNeverLast) {
+        rx[2] = 0;                          /* force the MAX_CHUNKS guard */
+    }
+    if (g_chunkShortLast && seq == 0) {
+        rx[2] = SPDM_CHUNK_LAST_CHUNK;      /* claim last while off < total */
+    }
     rx[3] = (g_chunkBadHandle && seq == 0) ? (byte)(handle ^ 0xFF) : handle;
     SPDM_Set32LE(&rx[4], seq);
     SPDM_Set32LE(&rx[8], (seq == g_chunkBadSizeSeq) ? 0xFFFFFFF8u : csz);
@@ -722,6 +744,9 @@ static void chunk_mock_reset(word32 total, word32 per)
     g_chunkBadSizeSeq = CHUNK_NONE;
     g_chunkErrSeq = CHUNK_NONE;
     g_chunkBadHandle = 0;
+    g_chunkNeverLast = 0;
+    g_chunkShortLast = 0;
+    g_chunkTrigger = 0;
     for (i = 0; i < total; i++) {
         g_chunkLarge[i] = (byte)((i * 7u + 1u) & 0xFF);
     }
@@ -749,8 +774,10 @@ static int test_chunk_reassemble(void)
     byte cg[8];
     byte small[64];
     byte out[CHUNK_TEST_MAX];
+    byte req[4];
     word32 cgSz = sizeof(cg);
     word32 outSz = 0;
+    word32 rsz;
     TEST_CTX_SETUP();
 
     printf("test_chunk_reassemble...\n");
@@ -813,6 +840,42 @@ static int test_chunk_reassemble(void)
     ASSERT_EQ(wolfSPDM_ReassembleLargeResponse(ctx, 0, 0x42, small,
         sizeof(small), &outSz), WOLFSPDM_E_BUFFER_SMALL,
         "oversized message rejected");
+
+    /* Responder claims LastChunk before delivering the full message. */
+    chunk_mock_reset(1000, 100);
+    g_chunkShortLast = 1;
+    ASSERT_EQ(wolfSPDM_ReassembleLargeResponse(ctx, 0, 0x42, out, sizeof(out),
+        &outSz), WOLFSPDM_E_CHUNK, "short final chunk rejected");
+
+    /* Never-ending stream hits the WOLFSPDM_CHUNK_MAX_CHUNKS guard. */
+    chunk_mock_reset(CHUNK_TEST_MAX, 16);
+    g_chunkNeverLast = 1;
+    ASSERT_EQ(wolfSPDM_ReassembleLargeResponse(ctx, 0, 0x42, out, sizeof(out),
+        &outSz), WOLFSPDM_E_CHUNK, "max-chunks guard");
+
+    /* Transparent trigger: wolfSPDM_SendReceive sees ERROR(LargeResponse) and
+     * reassembles. Requires the peer to have negotiated CHUNK_CAP. */
+    chunk_mock_reset(2420, 1000);
+    g_chunkTrigger = 1;
+    ctx->rspCaps |= SPDM_CAP_CHUNK_CAP;
+    req[0] = SPDM_VERSION_14;
+    req[1] = SPDM_GET_MEASUREMENTS;
+    req[2] = 0;
+    req[3] = 0;
+    rsz = sizeof(out);
+    ASSERT_SUCCESS(wolfSPDM_SendReceive(ctx, req, sizeof(req), out, &rsz));
+    ASSERT_EQ(rsz, 2420, "SendReceive hook reassembled size");
+    ASSERT_EQ(XMEMCMP(out, g_chunkLarge, 2420), 0,
+        "SendReceive hook reassembled bytes");
+
+    /* Same ERROR(LargeResponse) with CHUNK_CAP NOT negotiated: the hook must
+     * not fire; the raw ERROR is returned for the caller to handle. */
+    chunk_mock_reset(2420, 1000);
+    g_chunkTrigger = 1;
+    ctx->rspCaps &= ~(word32)SPDM_CAP_CHUNK_CAP;
+    rsz = sizeof(out);
+    ASSERT_SUCCESS(wolfSPDM_SendReceive(ctx, req, sizeof(req), out, &rsz));
+    ASSERT_EQ(out[1], SPDM_ERROR, "no CHUNK_CAP: raw ERROR returned");
 
     TEST_CTX_FREE();
     TEST_PASS();

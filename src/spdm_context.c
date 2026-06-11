@@ -531,8 +531,11 @@ int wolfSPDM_SendReceive(WOLFSPDM_CTX* ctx,
 
 #ifdef WOLFSPDM_HAVE_CHUNK
     /* Transparently reassemble a cleartext response the responder chunked
-     * (ERROR(LargeResponse)); the caller then parses the logical message. */
+     * (ERROR(LargeResponse)); the caller then parses the logical message. Only
+     * when the responder actually negotiated CHUNK_CAP, so a non-conformant
+     * LargeResponse fails fast rather than driving a doomed CHUNK_GET loop. */
     if (rc == WOLFSPDM_SUCCESS && rxSz != NULL &&
+        (ctx->rspCaps & SPDM_CAP_CHUNK_CAP) != 0 &&
         wolfSPDM_IsLargeResponse(rxBuf, *rxSz, &handle)) {
         rc = wolfSPDM_ReassembleLargeResponse(ctx, 0, handle, rxBuf, cap, rxSz);
     }

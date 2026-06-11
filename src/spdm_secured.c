@@ -385,8 +385,10 @@ int wolfSPDM_SecuredExchange(WOLFSPDM_CTX* ctx,
     rc = wolfSPDM_DecryptInternal(ctx, rxBuf, rxSz, rspPlain, rspSz);
 
 #if defined(WOLFSPDM_HAVE_CHUNK) && !defined(WOLFSPDM_CHUNK_NO_SECURED)
-    /* Reassemble a secured response the responder chunked. */
+    /* Reassemble a secured response the responder chunked (only when CHUNK_CAP
+     * was negotiated). */
     if (rc == WOLFSPDM_SUCCESS &&
+        (ctx->rspCaps & SPDM_CAP_CHUNK_CAP) != 0 &&
         wolfSPDM_IsLargeResponse(rspPlain, *rspSz, &handle)) {
         rc = wolfSPDM_ReassembleLargeResponse(ctx, 1, handle, rspPlain, cap,
             rspSz);
