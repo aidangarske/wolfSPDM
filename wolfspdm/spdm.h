@@ -209,6 +209,21 @@ WOLFSPDM_API int wolfSPDM_SetIO(WOLFSPDM_CTX* ctx, WOLFSPDM_IO_CB ioCb, void* us
 WOLFSPDM_API int wolfSPDM_SetMaxVersion(WOLFSPDM_CTX* ctx, byte maxVersion);
 
 /**
+ * Choose which key-exchange methods NEGOTIATE_ALGORITHMS advertises (SPDM 1.4).
+ * Default is dual-stack: the DHE group and all ML-KEM sets, letting the responder
+ * select. Pass advDhe=0 with a single SPDM_KEM_ALGO_ML_KEM_* in kemMask to force
+ * the responder onto a specific ML-KEM set (e.g. for PQC-only interop). ML-KEM is
+ * only advertised at SPDM 1.4+ and when built with ML-KEM support.
+ *
+ * @param ctx     The wolfSPDM context.
+ * @param advDhe  Non-zero to advertise the classical DHE group.
+ * @param kemMask Bit mask of SPDM_KEM_ALGO_ML_KEM_* sets to advertise (0 = none).
+ * @return WOLFSPDM_SUCCESS or negative error code.
+ */
+WOLFSPDM_API int wolfSPDM_SetKeyExchangePref(WOLFSPDM_CTX* ctx, int advDhe,
+    word16 kemMask);
+
+/**
  * Pin the requester session ID used during KEY_EXCHANGE.
  * Default behavior is to draw a random non-reserved value during Connect().
  * Use this only for deterministic test setups; the reserved values 0x0000

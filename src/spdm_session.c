@@ -274,7 +274,7 @@ int wolfSPDM_GetCertificate(WOLFSPDM_CTX* ctx, int slotId)
 
 int wolfSPDM_KeyExchange(WOLFSPDM_CTX* ctx)
 {
-    byte txBuf[192];  /* KEY_EXCHANGE: ~158 bytes */
+    byte txBuf[WOLFSPDM_KEX_REQ_BUF];  /* KEY_EXCHANGE: ~158 B / ML-KEM ek */
     byte rxBuf[WOLFSPDM_SIG_RSP_BUF];  /* KEY_EXCHANGE_RSP (ECDSA ~302 / ML-DSA) */
     word32 txSz = sizeof(txBuf);
     word32 rxSz = sizeof(rxBuf);

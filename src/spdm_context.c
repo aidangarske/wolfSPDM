@@ -73,6 +73,15 @@ int wolfSPDM_Init(WOLFSPDM_CTX* ctx)
     /* Set default requester capabilities */
     ctx->reqCaps = WOLFSPDM_DEFAULT_REQ_CAPS;
 
+    /* Key-exchange advertisement: DHE always; ML-KEM (all sets, at 1.4)
+     * dual-stack alongside it by default. wolfSPDM_SetKeyExchangePref overrides. */
+    ctx->kexAdvDhe = 1;
+#ifdef WOLFSPDM_HAVE_MLKEM
+    ctx->kexAdvKem = (word16)(SPDM_KEM_ALGO_ML_KEM_512 |
+                              SPDM_KEM_ALGO_ML_KEM_768 |
+                              SPDM_KEM_ALGO_ML_KEM_1024);
+#endif
+
     /* Pick a random, non-reserved ReqSessionID (DSP0277 reserves 0x0000 and
      * 0xFFFF). Callers needing determinism can override via
      * wolfSPDM_SetRequesterSessionId. */
@@ -133,7 +142,7 @@ void wolfSPDM_Free(WOLFSPDM_CTX* ctx)
 
     /* Free ephemeral key */
     if (ctx->flags.ephemeralKeyInit) {
-        wc_ecc_free(&ctx->ephemeralKey);
+        wolfSPDM_FreeEphemeralKey(ctx);
     }
 
     /* Free responder public key (used for measurement/challenge verification) */
@@ -283,6 +292,21 @@ int wolfSPDM_SetMaxVersion(WOLFSPDM_CTX* ctx, byte maxVersion)
     }
 
     ctx->maxVersion = maxVersion;
+    return WOLFSPDM_SUCCESS;
+}
+
+int wolfSPDM_SetKeyExchangePref(WOLFSPDM_CTX* ctx, int advDhe, word16 kemMask)
+{
+    if (ctx == NULL) {
+        return WOLFSPDM_E_INVALID_ARG;
+    }
+#ifndef WOLFSPDM_HAVE_MLKEM
+    if (kemMask != 0) {
+        return WOLFSPDM_E_INVALID_ARG;  /* ML-KEM not built in */
+    }
+#endif
+    ctx->kexAdvDhe = (byte)(advDhe != 0);
+    ctx->kexAdvKem = kemMask;
     return WOLFSPDM_SUCCESS;
 }
 

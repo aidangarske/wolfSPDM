@@ -69,14 +69,29 @@ int wolfSPDM_BuildGetCapabilities(WOLFSPDM_CTX* ctx, byte* buf, word32* bufSz)
 
 int wolfSPDM_BuildNegotiateAlgorithms(WOLFSPDM_CTX* ctx, byte* buf, word32* bufSz)
 {
-    SPDM_CHECK_BUILD_ARGS(ctx, buf, bufSz, 48);
+    word32 off;
+    byte numStructs = 0;
+    int advDhe;
+#ifdef WOLFSPDM_HAVE_MLKEM
+    int advKem;
+#endif
 
-    XMEMSET(buf, 0, 48);
+    /* Fixed header (32 bytes) + up to 5 AlgStructs (4 bytes each) = 52. */
+    SPDM_CHECK_BUILD_ARGS(ctx, buf, bufSz, 52);
+
+    advDhe = (ctx->kexAdvDhe != 0);
+#ifdef WOLFSPDM_HAVE_MLKEM
+    advKem = (ctx->spdmVersion >= SPDM_VERSION_14 && ctx->kexAdvKem != 0);
+    if (!advDhe && !advKem) {
+        advDhe = 1;  /* never advertise zero key-exchange methods */
+    }
+#else
+    advDhe = 1;
+#endif
+
+    XMEMSET(buf, 0, 52);
     buf[0] = ctx->spdmVersion;  /* Use negotiated version */
     buf[1] = SPDM_NEGOTIATE_ALGORITHMS;
-    buf[2] = 0x04;  /* NumAlgoStructTables = 4 */
-    buf[3] = 0x00;
-    buf[4] = 48; buf[5] = 0x00;  /* Length = 48 */
     buf[6] = 0x01;  /* MeasurementSpecification = DMTF */
     buf[7] = 0x02;  /* OtherParamsSupport = MULTI_KEY_CONN */
 
@@ -97,17 +112,38 @@ int wolfSPDM_BuildNegotiateAlgorithms(WOLFSPDM_CTX* ctx, byte* buf, word32* bufS
     }
 #endif
 
-    /* Struct tables start at offset 32 */
-    /* DHE: SECP_384_R1 */
-    buf[32] = 0x02; buf[33] = 0x20; buf[34] = 0x10; buf[35] = 0x00;
-    /* AEAD: AES_256_GCM */
-    buf[36] = 0x03; buf[37] = 0x20; buf[38] = 0x02; buf[39] = 0x00;
-    /* ReqBaseAsymAlg */
-    buf[40] = 0x04; buf[41] = 0x20; buf[42] = 0x0F; buf[43] = 0x00;
-    /* KeySchedule */
-    buf[44] = 0x05; buf[45] = 0x20; buf[46] = 0x01; buf[47] = 0x00;
+    /* AlgStruct tables start at offset 32, emitted at a running offset so the
+     * key-exchange methods can be advertised independently (DHE, ML-KEM, or
+     * both). */
+    off = 32;
+    if (advDhe) {
+        buf[off] = SPDM_ALG_TYPE_DHE; buf[off + 1] = 0x20;
+        SPDM_Set16LE(&buf[off + 2], SPDM_DHE_ALGO_SECP384R1);
+        off += 4; numStructs++;
+    }
+    buf[off] = SPDM_ALG_TYPE_AEAD; buf[off + 1] = 0x20;
+    SPDM_Set16LE(&buf[off + 2], SPDM_AEAD_ALGO_AES_256_GCM);
+    off += 4; numStructs++;
+    buf[off] = SPDM_ALG_TYPE_REQ_BASE_ASYM; buf[off + 1] = 0x20;
+    buf[off + 2] = 0x0F;
+    off += 4; numStructs++;
+    buf[off] = SPDM_ALG_TYPE_KEY_SCHEDULE; buf[off + 1] = 0x20;
+    buf[off + 2] = 0x01;
+    off += 4; numStructs++;
+#ifdef WOLFSPDM_HAVE_MLKEM
+    /* DSP0274 1.4 Table 24 KEMAlg struct (AlgType 0x07). AlgCount 0x20 =
+     * 2-byte mask. No hybrid in 1.4: the responder selects DHE or a KEM. */
+    if (advKem) {
+        buf[off] = SPDM_ALG_TYPE_KEM; buf[off + 1] = 0x20;
+        SPDM_Set16LE(&buf[off + 2], ctx->kexAdvKem);
+        off += 4; numStructs++;
+    }
+#endif
 
-    *bufSz = 48;
+    buf[2] = numStructs;             /* NumAlgoStructTables */
+    buf[4] = (byte)off; buf[5] = 0;  /* Length */
+
+    *bufSz = off;
     return WOLFSPDM_SUCCESS;
 }
 
@@ -151,20 +187,12 @@ int wolfSPDM_BuildKeyExchange(WOLFSPDM_CTX* ctx, byte* buf, word32* bufSz)
     byte pubKeyY[WOLFSPDM_ECC_KEY_SIZE];
     word32 pubKeyXSz = sizeof(pubKeyX);
     word32 pubKeyYSz = sizeof(pubKeyY);
+#ifdef WOLFSPDM_HAVE_MLKEM
+    word32 ekSz = 0;
+#endif
     int rc;
 
     SPDM_CHECK_BUILD_ARGS(ctx, buf, bufSz, 180);
-
-    rc = wolfSPDM_GenerateEphemeralKey(ctx);
-    if (rc != WOLFSPDM_SUCCESS) {
-        return rc;
-    }
-
-    rc = wolfSPDM_ExportEphemeralPubKey(ctx, pubKeyX, &pubKeyXSz,
-        pubKeyY, &pubKeyYSz);
-    if (rc != WOLFSPDM_SUCCESS) {
-        return rc;
-    }
 
     XMEMSET(buf, 0, *bufSz);
 
@@ -192,11 +220,35 @@ int wolfSPDM_BuildKeyExchange(WOLFSPDM_CTX* ctx, byte* buf, word32* bufSz)
     }
     offset += WOLFSPDM_RANDOM_SIZE;
 
-    /* ExchangeData: X || Y */
-    XMEMCPY(&buf[offset], pubKeyX, WOLFSPDM_ECC_KEY_SIZE);
-    offset += WOLFSPDM_ECC_KEY_SIZE;
-    XMEMCPY(&buf[offset], pubKeyY, WOLFSPDM_ECC_KEY_SIZE);
-    offset += WOLFSPDM_ECC_KEY_SIZE;
+    /* ExchangeData: the negotiated method's public value (DSP0274 1.4 Table 77).
+     * ML-KEM sends the encapsulation key ek; ECDHE sends X || Y. */
+    rc = WOLFSPDM_SUCCESS;
+#ifdef WOLFSPDM_HAVE_MLKEM
+    if (ctx->kexType == WOLFSPDM_KEX_MLKEM) {
+        ekSz = *bufSz - offset;
+        rc = wolfSPDM_GenerateMlKemKey(ctx, &buf[offset], &ekSz);
+        if (rc == WOLFSPDM_SUCCESS) {
+            offset += ekSz;
+        }
+    }
+    else
+#endif
+    if (ctx->kexType == WOLFSPDM_KEX_ECDHE) {
+        rc = wolfSPDM_GenerateEphemeralKey(ctx);
+        if (rc == WOLFSPDM_SUCCESS) {
+            rc = wolfSPDM_ExportEphemeralPubKey(ctx, pubKeyX, &pubKeyXSz,
+                pubKeyY, &pubKeyYSz);
+        }
+        if (rc == WOLFSPDM_SUCCESS) {
+            XMEMCPY(&buf[offset], pubKeyX, WOLFSPDM_ECC_KEY_SIZE);
+            offset += WOLFSPDM_ECC_KEY_SIZE;
+            XMEMCPY(&buf[offset], pubKeyY, WOLFSPDM_ECC_KEY_SIZE);
+            offset += WOLFSPDM_ECC_KEY_SIZE;
+        }
+    }
+    if (rc != WOLFSPDM_SUCCESS) {
+        return rc;
+    }
 
     /* OpaqueData for secured message version negotiation. DSP0277 v1.2 is
      * the current spec, defining secured-message versions 1.0, 1.1, 1.2.
@@ -600,6 +652,7 @@ int wolfSPDM_ParseAlgorithms(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufSz)
     int dheOk = 0;
     int aeadOk = 0;
     int ksOk = 0;
+    int kemOk = 0;
 
     SPDM_CHECK_PARSE_OR_ERROR_ARGS(ctx, buf, bufSz, 36);
     SPDM_CHECK_RESPONSE(ctx, buf, bufSz, SPDM_ALGORITHMS, WOLFSPDM_E_ALGO_MISMATCH);
@@ -733,13 +786,35 @@ int wolfSPDM_ParseAlgorithms(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufSz)
         word32 extLen = ((word32)(algCount & 0x0F)) * 4;
         switch (algType) {
             case SPDM_ALG_TYPE_DHE:
-                if (algSel != SPDM_DHE_ALGO_SECP384R1) {
+                /* algSel == 0 means the responder did not pick a DHE group
+                 * (it selected a KEM instead); only a non-zero value must be
+                 * the supported group. */
+                if (algSel == SPDM_DHE_ALGO_SECP384R1) {
+                    dheOk = 1;
+                }
+                else if (algSel != 0) {
                     wolfSPDM_DebugPrint(ctx,
                         "ALGORITHMS: DHE not SECP_384_R1 (0x%04x)\n", algSel);
                     return WOLFSPDM_E_ALGO_MISMATCH;
                 }
-                dheOk = 1;
                 break;
+#ifdef WOLFSPDM_HAVE_MLKEM
+            case SPDM_ALG_TYPE_KEM:
+                /* DSP0274 1.4 Table 24: the responder selected one ML-KEM set
+                 * (or 0 if it picked DHE instead). */
+                if (algSel == SPDM_KEM_ALGO_ML_KEM_512 ||
+                    algSel == SPDM_KEM_ALGO_ML_KEM_768 ||
+                    algSel == SPDM_KEM_ALGO_ML_KEM_1024) {
+                    kemOk = 1;
+                    ctx->kemAlgSel = algSel;
+                }
+                else if (algSel != 0) {
+                    wolfSPDM_DebugPrint(ctx,
+                        "ALGORITHMS: unsupported KEM (0x%04x)\n", algSel);
+                    return WOLFSPDM_E_ALGO_MISMATCH;
+                }
+                break;
+#endif
             case SPDM_ALG_TYPE_AEAD:
                 if (algSel != SPDM_AEAD_ALGO_AES_256_GCM) {
                     wolfSPDM_DebugPrint(ctx,
@@ -760,12 +835,21 @@ int wolfSPDM_ParseAlgorithms(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufSz)
         }
         off += 4 + extLen;
     }
-    if (!dheOk || !aeadOk || !ksOk) {
+    if (!aeadOk || !ksOk) {
         wolfSPDM_DebugPrint(ctx,
-            "ALGORITHMS: missing required AlgStruct(s) dhe=%d aead=%d ks=%d\n",
-            dheOk, aeadOk, ksOk);
+            "ALGORITHMS: missing required AlgStruct(s) aead=%d ks=%d\n",
+            aeadOk, ksOk);
         return WOLFSPDM_E_ALGO_MISMATCH;
     }
+    /* Exactly one key-exchange method: a DHE group or a KEM, never both and
+     * never neither (DSP0274 1.4: no hybrid). */
+    if (dheOk + kemOk != 1) {
+        wolfSPDM_DebugPrint(ctx,
+            "ALGORITHMS: key-exchange must be exactly one dhe=%d kem=%d\n",
+            dheOk, kemOk);
+        return WOLFSPDM_E_ALGO_MISMATCH;
+    }
+    ctx->kexType = kemOk ? WOLFSPDM_KEX_MLKEM : WOLFSPDM_KEX_ECDHE;
 
     wolfSPDM_DebugPrint(ctx, "ALGORITHMS: BaseAsym=0x%08x BaseHash=0x%08x\n",
         baseAsymAlgo, baseHashAlgo);
@@ -834,10 +918,26 @@ int wolfSPDM_ParseCertificate(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufSz,
     return WOLFSPDM_SUCCESS;
 }
 
+#ifdef WOLFSPDM_HAVE_MLKEM
+/* Ciphertext size of the negotiated ML-KEM set (the KEY_EXCHANGE_RSP
+ * ExchangeData length). The ephemeral key is live between request and
+ * response, so query it directly. Returns 0 on failure. */
+static word32 wolfSPDM_GetKemCtSize(WOLFSPDM_CTX* ctx)
+{
+    word32 ctSz = 0;
+    if (wc_MlKemKey_CipherTextSize(&ctx->ephemeralKey.mlkem, &ctSz) != 0) {
+        return 0;
+    }
+    return ctSz;
+}
+#endif
+
 int wolfSPDM_ParseKeyExchangeRsp(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufSz)
 {
     static const char sigCtx[] = "responder-key_exchange_rsp signing";
     word16 opaqueLen;
+    word32 exDataLen;
+    word32 opaqueLenOff;
     word32 sigOffset;
     word32 keRspPartialLen;
     byte peerPubKeyX[WOLFSPDM_ECC_KEY_SIZE];
@@ -872,9 +972,24 @@ int wolfSPDM_ParseKeyExchangeRsp(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufS
     }
 
     /* Compute and validate the layout BEFORE committing any ctx fields so
-     * a truncated response doesn't leak partial sessionId/peer-key state. */
-    opaqueLen = SPDM_Get16LE(&buf[136]);
-    sigOffset = 138 + opaqueLen;
+     * a truncated response doesn't leak partial sessionId/peer-key state.
+     * ExchangeData (offset 40) is ECDHE X||Y (96) or the ML-KEM ciphertext c;
+     * OpaqueData/signature/ResponderVerifyData follow it. */
+    exDataLen = WOLFSPDM_ECC_POINT_SIZE;
+#ifdef WOLFSPDM_HAVE_MLKEM
+    if (ctx->kexType == WOLFSPDM_KEX_MLKEM) {
+        exDataLen = wolfSPDM_GetKemCtSize(ctx);
+        if (exDataLen == 0 || exDataLen > WOLFSPDM_MAX_KEM_CT_SIZE) {
+            return WOLFSPDM_E_CRYPTO_FAIL;
+        }
+    }
+#endif
+    opaqueLenOff = 40 + exDataLen;
+    if (bufSz < opaqueLenOff + 2u) {
+        return WOLFSPDM_E_BUFFER_SMALL;
+    }
+    opaqueLen = SPDM_Get16LE(&buf[opaqueLenOff]);
+    sigOffset = opaqueLenOff + 2u + opaqueLen;
     keRspPartialLen = sigOffset;
 
     if (bufSz < sigOffset + sigSize + WOLFSPDM_HASH_SIZE) {
@@ -927,8 +1042,18 @@ int wolfSPDM_ParseKeyExchangeRsp(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufS
         goto cleanup;
     }
 
-    /* Compute ECDH shared secret */
-    rc = wolfSPDM_ComputeSharedSecret(ctx, peerPubKeyX, peerPubKeyY);
+    /* Derive the key-exchange shared secret: ML-KEM decapsulation of the
+     * responder's ciphertext c (ExchangeData), or ECDH from the peer point. */
+    rc = WOLFSPDM_SUCCESS;
+#ifdef WOLFSPDM_HAVE_MLKEM
+    if (ctx->kexType == WOLFSPDM_KEX_MLKEM) {
+        rc = wolfSPDM_MlKemDecapsulate(ctx, &buf[40], exDataLen);
+    }
+    else
+#endif
+    if (ctx->kexType == WOLFSPDM_KEX_ECDHE) {
+        rc = wolfSPDM_ComputeSharedSecret(ctx, peerPubKeyX, peerPubKeyY);
+    }
     if (rc != WOLFSPDM_SUCCESS) {
         goto cleanup;
     }

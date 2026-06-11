@@ -236,7 +236,8 @@ static void usage(const char* argv0)
 {
     fprintf(stderr,
         "Usage: %s {--emu|--meas|--challenge|--heartbeat|--key-update}\n"
-        "          [--no-sig] [--ver 1.2|1.3|1.4] [--debug]\n"
+        "          [--no-sig] [--ver 1.2|1.3|1.4]\n"
+        "          [--kex ecdhe|mlkem512|mlkem768|mlkem1024] [--debug]\n"
         "\n"
         "Env:\n"
         "  SPDM_EMU_PATH      path to spdm-emu build/bin/ (used for trusted CA\n"
@@ -469,6 +470,7 @@ int main(int argc, char* argv[])
         { "heartbeat",  no_argument,       0, 'b' },
         { "key-update", no_argument,       0, 'k' },
         { "ver",        required_argument, 0, 'v' },
+        { "kex",        required_argument, 0, 'K' },
         { "debug",      no_argument,       0, 'd' },
         { "help",       no_argument,       0, 'h' },
         { 0, 0, 0, 0 }
@@ -477,6 +479,8 @@ int main(int argc, char* argv[])
     int withSig = 1;
     int debug = 0;
     byte maxVer = 0;
+    int kexEcdheOnly = 0;
+    word16 kexKemOnly = 0;
     int opt;
     int rc;
     WOLFSPDM_CTX* ctx = (WOLFSPDM_CTX*)g_ctxBuf;
@@ -495,6 +499,25 @@ int main(int argc, char* argv[])
                 if (maxVer == 0) {
                     fprintf(stderr, "Invalid --ver %s (expected 1.2/1.3/1.4)\n",
                         optarg);
+                    return 1;
+                }
+                break;
+            case 'K':
+                if (strcmp(optarg, "ecdhe") == 0) {
+                    kexEcdheOnly = 1;
+                }
+                else if (strcmp(optarg, "mlkem512") == 0) {
+                    kexKemOnly = SPDM_KEM_ALGO_ML_KEM_512;
+                }
+                else if (strcmp(optarg, "mlkem768") == 0) {
+                    kexKemOnly = SPDM_KEM_ALGO_ML_KEM_768;
+                }
+                else if (strcmp(optarg, "mlkem1024") == 0) {
+                    kexKemOnly = SPDM_KEM_ALGO_ML_KEM_1024;
+                }
+                else {
+                    fprintf(stderr, "Invalid --kex %s (expected ecdhe/"
+                        "mlkem512/mlkem768/mlkem1024)\n", optarg);
                     return 1;
                 }
                 break;
@@ -540,6 +563,15 @@ int main(int argc, char* argv[])
         rc = wolfSPDM_SetMaxVersion(ctx, maxVer);
         if (rc != WOLFSPDM_SUCCESS) {
             fprintf(stderr, "wolfSPDM_SetMaxVersion: %s\n",
+                wolfSPDM_GetErrorString(rc));
+            goto done;
+        }
+    }
+
+    if (kexEcdheOnly || kexKemOnly != 0) {
+        rc = wolfSPDM_SetKeyExchangePref(ctx, kexEcdheOnly ? 1 : 0, kexKemOnly);
+        if (rc != WOLFSPDM_SUCCESS) {
+            fprintf(stderr, "wolfSPDM_SetKeyExchangePref: %s\n",
                 wolfSPDM_GetErrorString(rc));
             goto done;
         }

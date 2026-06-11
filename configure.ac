@@ -149,6 +149,59 @@ else
     mldsa_status=disabled
 fi
 
+# ML-KEM (FIPS 203) post-quantum key exchange (DSP0274 1.4). Default: auto-follow
+# the linked wolfSSL - on when it reports WOLFSSL_HAVE_MLKEM, off otherwise.
+AC_ARG_ENABLE([mlkem],
+    [AS_HELP_STRING([--disable-mlkem], [Disable ML-KEM support even if wolfSSL has it])],
+    [enable_mlkem=$enableval],
+    [enable_mlkem=auto])
+
+AC_MSG_CHECKING([whether wolfSSL provides ML-KEM])
+AC_COMPILE_IFELSE([AC_LANG_SOURCE([[
+    #include <wolfssl/options.h>
+    #include <wolfssl/wolfcrypt/settings.h>
+    #ifndef WOLFSSL_HAVE_MLKEM
+    #error "no mlkem"
+    #endif
+    int main(void) { return 0; }
+]])],
+[have_wolfssl_mlkem=yes],
+[have_wolfssl_mlkem=no])
+AC_MSG_RESULT([$have_wolfssl_mlkem])
+
+# wolfSPDM uses the wc_MlKemKey_* API (keygen, encapsulation-key encode, and
+# decapsulation). Capability-test for it rather than gating on a version number.
+have_mlkem_api=no
+if test "x$enable_mlkem" != "xno" && test "x$have_wolfssl_mlkem" = "xyes"; then
+    AC_MSG_CHECKING([for the wc_MlKemKey API])
+    AC_LINK_IFELSE([AC_LANG_PROGRAM([[
+        #include <wolfssl/options.h>
+        #include <wolfssl/wolfcrypt/settings.h>
+        #include <wolfssl/wolfcrypt/wc_mlkem.h>
+    ]], [[
+        MlKemKey k; word32 len = 0;
+        (void)wc_MlKemKey_Init(&k, 0, 0, 0);
+        (void)wc_MlKemKey_EncodePublicKey(&k, 0, 0);
+        (void)wc_MlKemKey_Decapsulate(&k, 0, 0, 0);
+        (void)wc_MlKemKey_PublicKeySize(&k, &len);
+    ]])],
+    [have_mlkem_api=yes],
+    [have_mlkem_api=no])
+    AC_MSG_RESULT([$have_mlkem_api])
+fi
+
+if test "x$enable_mlkem" = "xno"; then
+    AC_DEFINE([WOLFSPDM_NO_MLKEM], [1], [Disable ML-KEM support])
+    mlkem_status=disabled
+elif test "x$have_mlkem_api" = "xyes"; then
+    mlkem_status=enabled
+elif test "x$enable_mlkem" = "xyes"; then
+    AC_MSG_ERROR([--enable-mlkem requires a wolfSSL with the wc_MlKemKey API, built with --enable-mlkem. Use --disable-mlkem or update wolfSSL.])
+else
+    AC_DEFINE([WOLFSPDM_NO_MLKEM], [1], [Disable ML-KEM support])
+    mlkem_status=disabled
+fi
+
 # Output files
 AC_CONFIG_FILES([Makefile wolfspdm.pc])
 AC_OUTPUT
@@ -160,5 +213,6 @@ echo "  Debug:       $enable_debug"
 echo "  Dynamic mem: $enable_dynamic_mem"
 echo "  Chunking:    $chunking_status"
 echo "  ML-DSA:      $mldsa_status"
+echo "  ML-KEM:      $mlkem_status"
 echo "  wolfSSL:     ${WOLFSSL_DIR:-system}"
 echo ""

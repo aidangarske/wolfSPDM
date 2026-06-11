@@ -77,20 +77,22 @@ int wolfSPDM_GenerateEphemeralKey(WOLFSPDM_CTX* ctx)
 
     /* Free existing key if any */
     if (ctx->flags.ephemeralKeyInit) {
-        wc_ecc_free(&ctx->ephemeralKey);
+        wolfSPDM_FreeEphemeralKey(ctx);
         ctx->flags.ephemeralKeyInit = 0;
     }
+    ctx->kexType = WOLFSPDM_KEX_ECDHE;
 
     /* Initialize new key */
-    rc = wc_ecc_init(&ctx->ephemeralKey);
+    rc = wc_ecc_init(&ctx->ephemeralKey.ecc);
     if (rc != 0) {
         return WOLFSPDM_E_CRYPTO_FAIL;
     }
 
     /* Generate P-384 key pair */
-    rc = wc_ecc_make_key(&ctx->rng, WOLFSPDM_ECC_KEY_SIZE, &ctx->ephemeralKey);
+    rc = wc_ecc_make_key(&ctx->rng, WOLFSPDM_ECC_KEY_SIZE,
+        &ctx->ephemeralKey.ecc);
     if (rc != 0) {
-        wc_ecc_free(&ctx->ephemeralKey);
+        wc_ecc_free(&ctx->ephemeralKey.ecc);
         return WOLFSPDM_E_CRYPTO_FAIL;
     }
 
@@ -120,7 +122,7 @@ int wolfSPDM_ExportEphemeralPubKey(WOLFSPDM_CTX* ctx,
         return WOLFSPDM_E_BUFFER_SMALL;
     }
 
-    rc = wc_ecc_export_public_raw(&ctx->ephemeralKey,
+    rc = wc_ecc_export_public_raw(&ctx->ephemeralKey.ecc,
         pubKeyX, pubKeyXSz, pubKeyY, pubKeyYSz);
     if (rc != 0) {
         return WOLFSPDM_E_CRYPTO_FAIL;
@@ -181,7 +183,7 @@ int wolfSPDM_ComputeSharedSecret(WOLFSPDM_CTX* ctx,
 
     /* Compute ECDH shared secret */
     ctx->sharedSecretSz = sizeof(ctx->sharedSecret);
-    rc = wc_ecc_shared_secret(&ctx->ephemeralKey, &peerKey,
+    rc = wc_ecc_shared_secret(&ctx->ephemeralKey.ecc, &peerKey,
         ctx->sharedSecret, &ctx->sharedSecretSz);
     if (rc != 0) {
         wolfSPDM_DebugPrint(ctx, "ECDH shared_secret failed: %d\n", rc);
@@ -219,3 +221,102 @@ cleanup:
 
     return (rc == 0) ? WOLFSPDM_SUCCESS : WOLFSPDM_E_CRYPTO_FAIL;
 }
+
+#ifdef WOLFSPDM_HAVE_MLKEM
+/* Map the negotiated SPDM KEM selection to the wolfSSL ML-KEM parameter set. */
+static int wolfSPDM_MlKemType(word16 kemAlgSel, int* type)
+{
+    switch (kemAlgSel) {
+        case SPDM_KEM_ALGO_ML_KEM_512:  *type = WC_ML_KEM_512;  break;
+        case SPDM_KEM_ALGO_ML_KEM_768:  *type = WC_ML_KEM_768;  break;
+        case SPDM_KEM_ALGO_ML_KEM_1024: *type = WC_ML_KEM_1024; break;
+        default: return WOLFSPDM_E_ALGO_MISMATCH;
+    }
+    return WOLFSPDM_SUCCESS;
+}
+
+/* Generate the ephemeral ML-KEM key pair for KEY_EXCHANGE and export the
+ * encapsulation key ek into ekOut. The decapsulation key dk stays in
+ * ctx->ephemeralKey.mlkem for wolfSPDM_MlKemDecapsulate. */
+int wolfSPDM_GenerateMlKemKey(WOLFSPDM_CTX* ctx, byte* ekOut, word32* ekOutSz)
+{
+    int type;
+    word32 ekSz;
+    int rc;
+
+    if (ctx == NULL || ekOut == NULL || ekOutSz == NULL) {
+        return WOLFSPDM_E_INVALID_ARG;
+    }
+    if (!ctx->flags.rngInitialized) {
+        return WOLFSPDM_E_BAD_STATE;
+    }
+    rc = wolfSPDM_MlKemType(ctx->kemAlgSel, &type);
+    if (rc != WOLFSPDM_SUCCESS) {
+        return rc;
+    }
+
+    if (ctx->flags.ephemeralKeyInit) {
+        wolfSPDM_FreeEphemeralKey(ctx);
+        ctx->flags.ephemeralKeyInit = 0;
+    }
+    ctx->kexType = WOLFSPDM_KEX_MLKEM;
+
+    rc = wc_MlKemKey_Init(&ctx->ephemeralKey.mlkem, type, NULL, INVALID_DEVID);
+    if (rc != 0) {
+        return WOLFSPDM_E_CRYPTO_FAIL;
+    }
+    rc = wc_MlKemKey_MakeKey(&ctx->ephemeralKey.mlkem, &ctx->rng);
+    if (rc != 0) {
+        wc_MlKemKey_Free(&ctx->ephemeralKey.mlkem);
+        return WOLFSPDM_E_CRYPTO_FAIL;
+    }
+    ctx->flags.ephemeralKeyInit = 1;
+
+    rc = wc_MlKemKey_PublicKeySize(&ctx->ephemeralKey.mlkem, &ekSz);
+    if (rc != 0) {
+        return WOLFSPDM_E_CRYPTO_FAIL;
+    }
+    if (ekSz > *ekOutSz) {
+        return WOLFSPDM_E_BUFFER_SMALL;
+    }
+    rc = wc_MlKemKey_EncodePublicKey(&ctx->ephemeralKey.mlkem, ekOut, ekSz);
+    if (rc != 0) {
+        return WOLFSPDM_E_CRYPTO_FAIL;
+    }
+    *ekOutSz = ekSz;
+
+    wolfSPDM_DebugPrint(ctx, "Generated ML-KEM ephemeral key (ek %u bytes)\n",
+        ekSz);
+    return WOLFSPDM_SUCCESS;
+}
+
+/* Decapsulate the responder's ciphertext c into ctx->sharedSecret (K'). */
+int wolfSPDM_MlKemDecapsulate(WOLFSPDM_CTX* ctx, const byte* ct, word32 ctSz)
+{
+    word32 ssSz;
+    int rc;
+
+    if (ctx == NULL || ct == NULL) {
+        return WOLFSPDM_E_INVALID_ARG;
+    }
+    if (!ctx->flags.ephemeralKeyInit ||
+        ctx->kexType != WOLFSPDM_KEX_MLKEM) {
+        return WOLFSPDM_E_BAD_STATE;
+    }
+
+    rc = wc_MlKemKey_SharedSecretSize(&ctx->ephemeralKey.mlkem, &ssSz);
+    if (rc != 0 || ssSz > sizeof(ctx->sharedSecret)) {
+        return WOLFSPDM_E_CRYPTO_FAIL;
+    }
+    rc = wc_MlKemKey_Decapsulate(&ctx->ephemeralKey.mlkem, ctx->sharedSecret,
+        ct, ctSz);
+    if (rc != 0) {
+        wolfSPDM_DebugPrint(ctx, "ML-KEM decapsulate failed: %d\n", rc);
+        return WOLFSPDM_E_CRYPTO_FAIL;
+    }
+    ctx->sharedSecretSz = ssSz;
+
+    wolfSPDM_DebugPrint(ctx, "ML-KEM shared secret derived (%u bytes)\n", ssSz);
+    return WOLFSPDM_SUCCESS;
+}
+#endif /* WOLFSPDM_HAVE_MLKEM */
