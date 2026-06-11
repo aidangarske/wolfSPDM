@@ -2,7 +2,7 @@ name: Memory Check
 
 on:
   push:
-    branches: [ 'master', 'main', 'release/**' ]
+    branches: [ 'main', 'release/**' ]
   pull_request:
     branches: [ '*' ]
   repository_dispatch:
