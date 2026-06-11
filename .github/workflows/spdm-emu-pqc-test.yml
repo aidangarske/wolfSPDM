@@ -121,10 +121,10 @@ jobs:
       #     (KEY_EXCHANGE/CHALLENGE) and secured (MEASUREMENTS) paths.
       - name: ML-DSA 44/65/87 session + measurements + challenge
         run: |
-          set -e
           export LD_LIBRARY_PATH=$HOME/wolfspdm-install/lib:$HOME/wolfssl-install/lib
           export SPDM_EMU_PATH=$HOME/spdm-emu/build/bin
           DEMO=./examples/spdm_demo
+          FAILURES=""
 
           # Wait until the responder is accepting connections on port 2323.
           wait_for_port() {
@@ -140,6 +140,8 @@ jobs:
           # The OpenSSL-backed ML-DSA responder is slower to become ready than
           # the mbedtls/ECDSA one, and it stops after a failed connection, so
           # retry the whole case (restarting the responder) a few times.
+          # Records (does NOT exit on) failures so every ML-DSA size and flow is
+          # exercised and reported, not masked by the first failure.
           run_case() {
             local alg="$1" certdir="$2" label="$3"; shift 3
             export SPDM_EMU_CERT_DIR="$certdir"
@@ -168,9 +170,10 @@ jobs:
             echo "::endgroup::"
             if [ $rc -ne 0 ]; then
               echo "::error::$alg $label failed after retries (rc=$rc)"
-              exit $rc
+              FAILURES="$FAILURES $alg/$label"
+            else
+              echo "$alg $label: OK"
             fi
-            echo "$alg $label: OK"
           }
 
           for spec in "ML_DSA_44 mldsa44" "ML_DSA_65 mldsa65" "ML_DSA_87 mldsa87"; do
@@ -180,6 +183,12 @@ jobs:
             run_case "$alg" "$dir" meas      --meas
             run_case "$alg" "$dir" challenge --challenge
           done
+
+          if [ -n "$FAILURES" ]; then
+            echo "::error::ML-DSA interop failures:$FAILURES"
+            exit 1
+          fi
+          echo "All ML-DSA 44/65/87 interop cases passed."
 
       - name: Upload logs on failure
         if: failure()

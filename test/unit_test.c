@@ -658,12 +658,14 @@ static int test_challenge_auth_mldsa_sigsize(void)
 #endif /* WOLFSPDM_HAVE_MLDSA */
 
 #ifdef WOLFSPDM_HAVE_CHUNK
-#define CHUNK_TEST_TOTAL 350
-#define CHUNK_TEST_PER   100
-static byte g_chunkLarge[CHUNK_TEST_TOTAL];
+#define CHUNK_TEST_MAX 4627            /* ML-DSA-87 SigLen — largest we reassemble */
+static byte g_chunkLarge[CHUNK_TEST_MAX];
+static word32 g_chunkTotal;
+static word32 g_chunkPer;
 
 /* Mock I/O: answer each CHUNK_GET(seq) with the matching synthetic
- * CHUNK_RESPONSE chunk of g_chunkLarge (1.4 u32 layout). */
+ * CHUNK_RESPONSE chunk of g_chunkLarge (1.4 u32 layout), splitting g_chunkTotal
+ * bytes into g_chunkPer-sized chunks. */
 static int chunk_mock_io(WOLFSPDM_CTX* ctx, const byte* tx, word32 txSz,
     byte* rx, word32* rxSz, void* user)
 {
@@ -675,19 +677,19 @@ static int chunk_mock_io(WOLFSPDM_CTX* ctx, const byte* tx, word32 txSz,
     }
     handle = tx[3];
     seq = SPDM_Get32LE(&tx[4]);
-    off = seq * CHUNK_TEST_PER;
-    csz = CHUNK_TEST_TOTAL - off;
-    if (csz > CHUNK_TEST_PER) {
-        csz = CHUNK_TEST_PER;
+    off = seq * g_chunkPer;
+    csz = g_chunkTotal - off;
+    if (csz > g_chunkPer) {
+        csz = g_chunkPer;
     }
     rx[0] = SPDM_VERSION_14;
     rx[1] = SPDM_CHUNK_RESPONSE;
-    rx[2] = (off + csz >= CHUNK_TEST_TOTAL) ? SPDM_CHUNK_LAST_CHUNK : 0;
+    rx[2] = (off + csz >= g_chunkTotal) ? SPDM_CHUNK_LAST_CHUNK : 0;
     rx[3] = handle;
     SPDM_Set32LE(&rx[4], seq);
     SPDM_Set32LE(&rx[8], csz);
     if (seq == 0) {
-        SPDM_Set32LE(&rx[12], CHUNK_TEST_TOTAL);
+        SPDM_Set32LE(&rx[12], g_chunkTotal);
         dataOff = 16;
     }
     else {
@@ -698,21 +700,39 @@ static int chunk_mock_io(WOLFSPDM_CTX* ctx, const byte* tx, word32 txSz,
     return 0;
 }
 
-static int test_chunk_reassemble(void)
+/* Reassemble a `total`-byte message split into `per`-byte chunks and verify the
+ * bytes round-trip. Returns 0 on pass. */
+static int chunk_reassemble_one(WOLFSPDM_CTX* ctx, word32 total, word32 per)
 {
-    byte out[512];
-    byte cg[8];
-    word32 cgSz = sizeof(cg);
+    byte out[CHUNK_TEST_MAX];
     word32 outSz = 0;
     word32 i;
     int rc;
+
+    g_chunkTotal = total;
+    g_chunkPer = per;
+    for (i = 0; i < total; i++) {
+        g_chunkLarge[i] = (byte)((i * 7u + 1u) & 0xFF);
+    }
+    rc = wolfSPDM_ReassembleLargeResponse(ctx, 0, 0x42, out, sizeof(out), &outSz);
+    if (rc != WOLFSPDM_SUCCESS || outSz != total ||
+        XMEMCMP(out, g_chunkLarge, total) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
+static int test_chunk_reassemble(void)
+{
+    byte cg[8];
+    byte small[64];
+    word32 cgSz = sizeof(cg);
+    word32 outSz = 0;
     TEST_CTX_SETUP();
 
     printf("test_chunk_reassemble...\n");
     ctx->spdmVersion = SPDM_VERSION_14;
-    for (i = 0; i < CHUNK_TEST_TOTAL; i++) {
-        g_chunkLarge[i] = (byte)(i & 0xFF);
-    }
+    ASSERT_SUCCESS(wolfSPDM_SetIO(ctx, chunk_mock_io, NULL));
 
     /* CHUNK_GET wire format (1.4): 8 bytes, code 0x86, Param2=handle, u32 seq. */
     ASSERT_SUCCESS(wolfSPDM_BuildChunkGet(ctx, cg, &cgSz, 0x42, 3));
@@ -721,17 +741,22 @@ static int test_chunk_reassemble(void)
     ASSERT_EQ(cg[3], 0x42, "Param2 = Handle");
     ASSERT_EQ(SPDM_Get32LE(&cg[4]), 3, "ChunkSeqNo u32");
 
-    /* Reassemble the 350-byte message over 4 chunks (100/100/100/50). */
-    ASSERT_SUCCESS(wolfSPDM_SetIO(ctx, chunk_mock_io, NULL));
-    rc = wolfSPDM_ReassembleLargeResponse(ctx, 0, 0x42, out, sizeof(out), &outSz);
-    ASSERT_SUCCESS(rc);
-    ASSERT_EQ(outSz, CHUNK_TEST_TOTAL, "reassembled size");
-    ASSERT_EQ(XMEMCMP(out, g_chunkLarge, CHUNK_TEST_TOTAL), 0,
-        "reassembled bytes match");
+    /* Reassemble across realistic sizes (incl. ML-DSA 44/65/87 SigLens) and
+     * varied chunk sizes — exercises single-chunk, many-chunk, and a final
+     * short chunk. */
+    ASSERT_EQ(chunk_reassemble_one(ctx, 350, 100), 0, "350 B / 100");
+    ASSERT_EQ(chunk_reassemble_one(ctx, 100, 100), 0, "single chunk");
+    ASSERT_EQ(chunk_reassemble_one(ctx, 2420, 1000), 0, "ML-DSA-44 SigLen");
+    ASSERT_EQ(chunk_reassemble_one(ctx, 3309, 1000), 0, "ML-DSA-65 SigLen");
+    ASSERT_EQ(chunk_reassemble_one(ctx, 4627, 1000), 0, "ML-DSA-87 SigLen");
+    ASSERT_EQ(chunk_reassemble_one(ctx, 4627, 512), 0, "ML-DSA-87, small MTU");
 
-    /* Negative: LargeMessageSize exceeds the output buffer. */
-    ASSERT_EQ(wolfSPDM_ReassembleLargeResponse(ctx, 0, 0x42, out, 100, &outSz),
-        WOLFSPDM_E_BUFFER_SMALL, "oversized message rejected");
+    /* Negative: LargeMessageSize (4627) exceeds the output buffer. */
+    g_chunkTotal = CHUNK_TEST_MAX;
+    g_chunkPer = 512;
+    ASSERT_EQ(wolfSPDM_ReassembleLargeResponse(ctx, 0, 0x42, small,
+        sizeof(small), &outSz), WOLFSPDM_E_BUFFER_SMALL,
+        "oversized message rejected");
 
     TEST_CTX_FREE();
     TEST_PASS();
