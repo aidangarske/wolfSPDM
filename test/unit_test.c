@@ -795,6 +795,79 @@ static int test_mlkem_decapsulate(void)
     TEST_CTX_FREE();
     TEST_PASS();
 }
+
+/* Reconnect on a reused context switching key-exchange method must free the
+ * prior ephemeral key while ctx->kexType still names its union member (no
+ * type-confused free). Run under valgrind in CI to catch a mismatched free. */
+static int test_kex_reconnect_method_switch(void)
+{
+    byte ek[WOLFSPDM_MLKEM768_EK_SIZE];
+    byte rsp[72];
+    word32 ekSz = sizeof(ek);
+    word32 len;
+    TEST_CTX_SETUP();
+
+    printf("test_kex_reconnect_method_switch...\n");
+    ctx->spdmVersion = SPDM_VERSION_14;
+
+    /* Round 1 leaves a live ML-KEM ephemeral key. */
+    ctx->kemAlgSel = SPDM_KEM_ALGO_ML_KEM_768;
+    ASSERT_SUCCESS(wolfSPDM_GenerateMlKemKey(ctx, ek, &ekSz));
+    ASSERT_EQ(ctx->flags.ephemeralKeyInit, 1, "ML-KEM key live");
+    ASSERT_EQ(ctx->kexType, WOLFSPDM_KEX_MLKEM, "kexType MLKEM");
+
+    /* Reconnect negotiates ECDHE: ParseAlgorithms frees the live ML-KEM key
+     * (still matching kexType) before flipping to ECDHE. */
+    len = build_algorithms_14_kem(rsp, SPDM_DHE_ALGO_SECP384R1, 0);
+    ASSERT_SUCCESS(wolfSPDM_ParseAlgorithms(ctx, rsp, len));
+    ASSERT_EQ(ctx->kexType, WOLFSPDM_KEX_ECDHE, "switched to ECDHE");
+    ASSERT_EQ(ctx->flags.ephemeralKeyInit, 0, "stale ML-KEM key freed");
+
+    /* And the reverse: a live ECDHE key, then a reconnect negotiating ML-KEM. */
+    ASSERT_SUCCESS(wolfSPDM_GenerateEphemeralKey(ctx));
+    ASSERT_EQ(ctx->flags.ephemeralKeyInit, 1, "ECDHE key live");
+    len = build_algorithms_14_kem(rsp, 0, SPDM_KEM_ALGO_ML_KEM_768);
+    ASSERT_SUCCESS(wolfSPDM_ParseAlgorithms(ctx, rsp, len));
+    ASSERT_EQ(ctx->kexType, WOLFSPDM_KEX_MLKEM, "switched to ML-KEM");
+    ASSERT_EQ(ctx->flags.ephemeralKeyInit, 0, "stale ECDHE key freed");
+
+    TEST_CTX_FREE();
+    TEST_PASS();
+}
+
+/* KEY_EXCHANGE with ML-KEM places the encapsulation key ek as ExchangeData at
+ * offset 40; confirm it decodes as a valid ML-KEM-768 public key. */
+static int test_build_key_exchange_mlkem(void)
+{
+    byte buf[WOLFSPDM_KEX_REQ_BUF];
+    word32 bufSz = sizeof(buf);
+    MlKemKey check;
+    int checkInit = 0;
+    TEST_CTX_SETUP();
+
+    printf("test_build_key_exchange_mlkem...\n");
+    ctx->spdmVersion = SPDM_VERSION_14;
+    ctx->kexType = WOLFSPDM_KEX_MLKEM;
+    ctx->kemAlgSel = SPDM_KEM_ALGO_ML_KEM_768;
+
+    ASSERT_SUCCESS(wolfSPDM_BuildKeyExchange(ctx, buf, &bufSz));
+    ASSERT_EQ(buf[1], SPDM_KEY_EXCHANGE, "KEY_EXCHANGE code");
+    /* offset 40 = 4 hdr + 2 sessionId + 2 policy/rsvd + 32 random. */
+    ASSERT_EQ(wc_MlKemKey_Init(&check, WC_ML_KEM_768, NULL, INVALID_DEVID), 0,
+        "MlKemKey_Init");
+    checkInit = 1;
+    ASSERT_EQ(wc_MlKemKey_DecodePublicKey(&check, &buf[40],
+        WOLFSPDM_MLKEM768_EK_SIZE), 0, "ek decodes at offset 40");
+    /* 40 fixed + 1184 ek + 22 OpaqueData block. */
+    ASSERT_EQ(bufSz, 40u + WOLFSPDM_MLKEM768_EK_SIZE + 22u,
+        "ML-KEM KEY_EXCHANGE total size");
+
+    if (checkInit) {
+        wc_MlKemKey_Free(&check);
+    }
+    TEST_CTX_FREE();
+    TEST_PASS();
+}
 #endif /* WOLFSPDM_HAVE_MLKEM */
 
 #ifdef WOLFSPDM_HAVE_CHUNK
@@ -2824,6 +2897,8 @@ int main(void)
     test_negotiate_algorithms_kem_build();
     test_parse_algorithms_kem_select();
     test_mlkem_decapsulate();
+    test_kex_reconnect_method_switch();
+    test_build_key_exchange_mlkem();
 #endif
 #ifdef WOLFSPDM_HAVE_CHUNK
     test_chunk_reassemble();

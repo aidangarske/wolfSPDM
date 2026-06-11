@@ -1,11 +1,12 @@
-name: SPDM Emulator PQC (ML-DSA) Test
+name: SPDM Emulator PQC Test
 
-# Post-quantum interop, mirroring the classical SPDM Emulator Integration Test
-# matrix (ubuntu 22.04/24.04 x64 + 24.04 aarch64, each with static and dynamic
-# memory). The wc_MlDsaKey context API wolfSPDM verifies with lands
-# post-v5.9.1-stable, so this job pins wolfSSL master. libspdm's ML-DSA is only
-# in its OpenSSL backend (the mbedtls backend stubs it out), so spdm-emu is
-# built with CRYPTO=openssl.
+# Post-quantum interop (ML-DSA signing + ML-KEM key exchange, and a full-PQ
+# combination), mirroring the classical SPDM Emulator Integration Test matrix
+# (ubuntu 22.04/24.04 x64 + 24.04 aarch64, each with static and dynamic memory).
+# The wc_MlDsaKey context API wolfSPDM verifies with lands post-v5.9.1-stable,
+# so this job pins wolfSSL master. libspdm's ML-DSA/ML-KEM are only in its
+# OpenSSL backend (the mbedtls backend stubs them out), so spdm-emu is built
+# with CRYPTO=openssl.
 
 on:
   push:
@@ -85,7 +86,7 @@ jobs:
           make -j"$(nproc)"
           make install
 
-      - name: Run unit tests (includes ML-DSA verify)
+      - name: Run unit tests (includes ML-DSA verify + ML-KEM decap)
         run: make check
         env:
           LD_LIBRARY_PATH: ${{ github.workspace }}/.libs:${{ github.workspace }}/src/.libs:${{ env.HOME }}/wolfssl-install/lib

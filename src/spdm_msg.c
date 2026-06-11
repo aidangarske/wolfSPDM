@@ -79,14 +79,14 @@ int wolfSPDM_BuildNegotiateAlgorithms(WOLFSPDM_CTX* ctx, byte* buf, word32* bufS
     /* Fixed header (32 bytes) + up to 5 AlgStructs (4 bytes each) = 52. */
     SPDM_CHECK_BUILD_ARGS(ctx, buf, bufSz, 52);
 
-    advDhe = (ctx->kexAdvDhe != 0);
 #ifdef WOLFSPDM_HAVE_MLKEM
+    advDhe = (ctx->kexAdvDhe != 0);
     advKem = (ctx->spdmVersion >= SPDM_VERSION_14 && ctx->kexAdvKem != 0);
     if (!advDhe && !advKem) {
         advDhe = 1;  /* never advertise zero key-exchange methods */
     }
 #else
-    advDhe = 1;
+    advDhe = 1;  /* DHE is the only key-exchange method without ML-KEM */
 #endif
 
     XMEMSET(buf, 0, 52);
@@ -704,6 +704,16 @@ int wolfSPDM_ParseAlgorithms(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufSz)
         ctx->flags.hasResponderPubKey = 0;
     }
 
+    /* Same hazard for the ephemeral key union: a prior handshake may have left a
+     * key live whose union member is named by the OLD ctx->kexType. Free it now,
+     * before kexType is reassigned below, so the free dispatches on the matching
+     * member (otherwise a reconnect that switches DHE<->ML-KEM would type-confuse
+     * the free in wolfSPDM_FreeEphemeralKey). */
+    if (ctx->flags.ephemeralKeyInit) {
+        wolfSPDM_FreeEphemeralKey(ctx);
+        ctx->flags.ephemeralKeyInit = 0;
+    }
+
     /* DSP0274 1.4 Table 20: PqcAsymSel (offset 20). Present from 1.4; earlier
      * versions leave these bytes reserved-zero. The spec caps the combined
      * bit count of BaseAsymSel and PqcAsymSel at one, so exactly one of the
@@ -1000,10 +1010,6 @@ int wolfSPDM_ParseKeyExchangeRsp(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufS
     ctx->rspSessionId = SPDM_Get16LE(&buf[4]);
     ctx->sessionId = (word32)ctx->reqSessionId | ((word32)ctx->rspSessionId << 16);
 
-    /* Extract responder's ephemeral public key (offset 40 = 4+2+1+1+32) */
-    XMEMCPY(peerPubKeyX, &buf[40], WOLFSPDM_ECC_KEY_SIZE);
-    XMEMCPY(peerPubKeyY, &buf[88], WOLFSPDM_ECC_KEY_SIZE);
-
     signature = buf + sigOffset;
     rspVerifyData = buf + sigOffset + sigSize;
 
@@ -1052,6 +1058,9 @@ int wolfSPDM_ParseKeyExchangeRsp(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufS
     else
 #endif
     if (ctx->kexType == WOLFSPDM_KEX_ECDHE) {
+        /* ExchangeData is the responder's ephemeral point X||Y at offset 40. */
+        XMEMCPY(peerPubKeyX, &buf[40], WOLFSPDM_ECC_KEY_SIZE);
+        XMEMCPY(peerPubKeyY, &buf[88], WOLFSPDM_ECC_KEY_SIZE);
         rc = wolfSPDM_ComputeSharedSecret(ctx, peerPubKeyX, peerPubKeyY);
     }
     if (rc != WOLFSPDM_SUCCESS) {
