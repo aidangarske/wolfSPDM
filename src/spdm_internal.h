@@ -253,6 +253,12 @@ struct WOLFSPDM_CTX {
     /* Key update state - app secrets for re-derivation */
     byte   reqAppSecret[WOLFSPDM_HASH_SIZE];        /* 48 bytes */
     byte   rspAppSecret[WOLFSPDM_HASH_SIZE];        /* 48 bytes */
+
+#ifdef WOLFSPDM_HAVE_CHUNK
+    /* Single reused transport buffer for CHUNK_GET/CHUNK_RESPONSE (the MTU).
+     * Zero-allocation: one fixed buffer holds one CHUNK_RESPONSE message. */
+    byte   chunkBuf[WOLFSPDM_CHUNK_BUF_SIZE];
+#endif
 };
 
 /* Free whichever responder verify key is live (union member by asymType). */
@@ -491,10 +497,44 @@ int wolfSPDM_DecryptInternal(WOLFSPDM_CTX* ctx,
 
 /* --- Internal Utility Functions --- */
 
-/* Send message via I/O callback and receive response */
+/* Send message via I/O callback and receive response. SendReceive transparently
+ * reassembles a chunked (LargeResponse) reply; SendReceiveRaw is the bare
+ * callback used by the chunk loop and the secured transport to avoid re-entry. */
+int wolfSPDM_SendReceiveRaw(WOLFSPDM_CTX* ctx,
+    const byte* txBuf, word32 txSz,
+    byte* rxBuf, word32* rxSz);
 int wolfSPDM_SendReceive(WOLFSPDM_CTX* ctx,
     const byte* txBuf, word32 txSz,
     byte* rxBuf, word32* rxSz);
+
+#ifdef WOLFSPDM_HAVE_CHUNK
+/* True if buf is an ERROR(LargeResponse); writes the 1-byte Handle. */
+static WC_INLINE int wolfSPDM_IsLargeResponse(const byte* buf, word32 bufSz,
+    byte* handle)
+{
+    if (buf == NULL || bufSz < 5) {
+        return 0;
+    }
+    if (buf[1] == SPDM_ERROR && buf[2] == SPDM_ERROR_LARGE_RESPONSE) {
+        if (handle != NULL) {
+            *handle = buf[4];  /* ExtendedErrorData byte 0 = Handle (Table 68) */
+        }
+        return 1;
+    }
+    return 0;
+}
+
+/* Build a CHUNK_GET request for (handle, seqNo). */
+int wolfSPDM_BuildChunkGet(WOLFSPDM_CTX* ctx, byte* buf, word32* bufSz,
+    byte handle, word32 seqNo);
+
+/* Reassemble a large response the responder split. The triggering
+ * ERROR(LargeResponse) was already received; this drives the CHUNK_GET loop and
+ * fills outBuf with the logical message. secured selects the encrypted
+ * (session) transport. */
+int wolfSPDM_ReassembleLargeResponse(WOLFSPDM_CTX* ctx, int secured,
+    byte handle, byte* outBuf, word32 outBufSz, word32* outSz);
+#endif /* WOLFSPDM_HAVE_CHUNK */
 
 /* Debug print (if enabled) */
 void wolfSPDM_DebugPrint(WOLFSPDM_CTX* ctx, const char* fmt, ...)

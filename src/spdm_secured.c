@@ -353,6 +353,10 @@ int wolfSPDM_SecuredExchange(WOLFSPDM_CTX* ctx,
     byte rxBuf[WOLFSPDM_MAX_MSG_SIZE + 48];
     word32 encSz = sizeof(encBuf);
     word32 rxSz = sizeof(rxBuf);
+#if defined(WOLFSPDM_HAVE_CHUNK) && !defined(WOLFSPDM_CHUNK_NO_SECURED)
+    word32 cap = (rspSz != NULL) ? *rspSz : 0;
+    byte handle = 0;
+#endif
     int rc;
 
     if (ctx == NULL || cmdPlain == NULL || rspPlain == NULL || rspSz == NULL) {
@@ -370,12 +374,27 @@ int wolfSPDM_SecuredExchange(WOLFSPDM_CTX* ctx,
         return rc;
     }
 
-    rc = wolfSPDM_SendReceive(ctx, encBuf, encSz, rxBuf, &rxSz);
+    /* Raw transport here: the cleartext chunk hook in wolfSPDM_SendReceive must
+     * not run on the encrypted record. Chunking of the decrypted plaintext is
+     * handled below. */
+    rc = wolfSPDM_SendReceiveRaw(ctx, encBuf, encSz, rxBuf, &rxSz);
     if (rc != WOLFSPDM_SUCCESS) {
         return rc;
     }
 
-    return wolfSPDM_DecryptInternal(ctx, rxBuf, rxSz, rspPlain, rspSz);
+    rc = wolfSPDM_DecryptInternal(ctx, rxBuf, rxSz, rspPlain, rspSz);
+
+#if defined(WOLFSPDM_HAVE_CHUNK) && !defined(WOLFSPDM_CHUNK_NO_SECURED)
+    /* Reassemble a secured response the responder chunked (only when CHUNK_CAP
+     * was negotiated). */
+    if (rc == WOLFSPDM_SUCCESS &&
+        (ctx->rspCaps & SPDM_CAP_CHUNK_CAP) != 0 &&
+        wolfSPDM_IsLargeResponse(rspPlain, *rspSz, &handle)) {
+        rc = wolfSPDM_ReassembleLargeResponse(ctx, 1, handle, rspPlain, cap,
+            rspSz);
+    }
+#endif
+    return rc;
 }
 
 /* --- Application Data Transfer --- */

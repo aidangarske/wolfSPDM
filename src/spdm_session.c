@@ -345,13 +345,15 @@ int wolfSPDM_Finish(WOLFSPDM_CTX* ctx)
     }
 
     /* FINISH must be sent encrypted (HANDSHAKE_IN_THE_CLEAR not negotiated) */
+    /* FINISH is encrypted; use the raw transport so the cleartext chunk hook
+     * in wolfSPDM_SendReceive does not inspect the encrypted record. */
     rc = wolfSPDM_EncryptInternal(ctx, finishBuf, finishSz, encBuf, &encSz);
     if (rc != WOLFSPDM_SUCCESS) {
         wolfSPDM_DebugPrint(ctx, "FINISH encrypt failed: %d\n", rc);
         goto cleanup;
     }
 
-    rc = wolfSPDM_SendReceive(ctx, encBuf, encSz, rxBuf, &rxSz);
+    rc = wolfSPDM_SendReceiveRaw(ctx, encBuf, encSz, rxBuf, &rxSz);
     if (rc != WOLFSPDM_SUCCESS) {
         wolfSPDM_DebugPrint(ctx, "FINISH SendReceive failed: %d\n", rc);
         goto cleanup;
@@ -694,7 +696,7 @@ int wolfSPDM_KeyUpdate(WOLFSPDM_CTX* ctx, int updateAll)
     }
 
     /* Send and receive raw (don't decrypt yet) */
-    rc = wolfSPDM_SendReceive(ctx, encBuf, encSz, rawRxBuf, &rawRxSz);
+    rc = wolfSPDM_SendReceiveRaw(ctx, encBuf, encSz, rawRxBuf, &rawRxSz);
     if (rc != WOLFSPDM_SUCCESS) {
         wolfSPDM_DebugPrint(ctx, "KEY_UPDATE: SendReceive failed: %d\n", rc);
         goto kupd_cleanup;

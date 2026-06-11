@@ -115,18 +115,16 @@ jobs:
           make -j"$(nproc)" spdm_responder_emu
 
       # --- ML-DSA interop: responder offers only ML-DSA, requester verifies.
-      #     spdm-emu DataTransferSize is 0x1200 (4608 B): ML-DSA-44 (sig 2420)
-      #     and ML-DSA-65 (3309) responses fit one message, so they complete
-      #     without chunking. ML-DSA-87 (sig 4627) exceeds it and the responder
-      #     chunks the response, which needs the SPDM 1.2 chunking engine
-      #     (follow-on work) -- so 87 is covered by unit tests / cert parsing,
-      #     not this over-the-wire job.
-      - name: ML-DSA 44/65 session + measurements + challenge
+      #     ML-DSA-44/65 fit spdm-emu's DataTransferSize (4608 B) in one message;
+      #     ML-DSA-87 (sig 4627 B) exceeds it and the responder chunks the
+      #     response, exercising CHUNK_GET reassembly on both the cleartext
+      #     (KEY_EXCHANGE/CHALLENGE) and secured (MEASUREMENTS) paths.
+      - name: ML-DSA 44/65/87 session + measurements + challenge
         run: |
-          set -e
           export LD_LIBRARY_PATH=$HOME/wolfspdm-install/lib:$HOME/wolfssl-install/lib
           export SPDM_EMU_PATH=$HOME/spdm-emu/build/bin
           DEMO=./examples/spdm_demo
+          FAILURES=""
 
           # Wait until the responder is accepting connections on port 2323.
           wait_for_port() {
@@ -142,6 +140,8 @@ jobs:
           # The OpenSSL-backed ML-DSA responder is slower to become ready than
           # the mbedtls/ECDSA one, and it stops after a failed connection, so
           # retry the whole case (restarting the responder) a few times.
+          # Records (does NOT exit on) failures so every ML-DSA size and flow is
+          # exercised and reported, not masked by the first failure.
           run_case() {
             local alg="$1" certdir="$2" label="$3"; shift 3
             export SPDM_EMU_CERT_DIR="$certdir"
@@ -170,18 +170,25 @@ jobs:
             echo "::endgroup::"
             if [ $rc -ne 0 ]; then
               echo "::error::$alg $label failed after retries (rc=$rc)"
-              exit $rc
+              FAILURES="$FAILURES $alg/$label"
+            else
+              echo "$alg $label: OK"
             fi
-            echo "$alg $label: OK"
           }
 
-          for spec in "ML_DSA_44 mldsa44" "ML_DSA_65 mldsa65"; do
+          for spec in "ML_DSA_44 mldsa44" "ML_DSA_65 mldsa65" "ML_DSA_87 mldsa87"; do
             set -- $spec
             alg="$1"; dir="$2"
             run_case "$alg" "$dir" session   --emu
             run_case "$alg" "$dir" meas      --meas
             run_case "$alg" "$dir" challenge --challenge
           done
+
+          if [ -n "$FAILURES" ]; then
+            echo "::error::ML-DSA interop failures:$FAILURES"
+            exit 1
+          fi
+          echo "All ML-DSA 44/65/87 interop cases passed."
 
       - name: Upload logs on failure
         if: failure()

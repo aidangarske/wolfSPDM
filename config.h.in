@@ -71,6 +71,9 @@
 /* Enable dynamic memory allocation */
 #undef WOLFSPDM_DYNAMIC_MEMORY
 
+/* Disable SPDM message chunking */
+#undef WOLFSPDM_NO_CHUNK
+
 /* Disable ML-DSA support */
 #undef WOLFSPDM_NO_MLDSA
 

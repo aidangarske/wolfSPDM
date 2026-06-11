@@ -52,9 +52,15 @@ int wolfSPDM_BuildGetCapabilities(WOLFSPDM_CTX* ctx, byte* buf, word32* bufSz)
     /* Requester flags (4 bytes LE) */
     SPDM_Set32LE(&buf[8], ctx->reqCaps);
 
-    /* DataTransferSize (4 LE) */
+    /* DataTransferSize (4 LE): with chunking we advertise the MTU so the
+     * responder splits anything larger (which we reassemble); without it we
+     * advertise the full message size. */
+#ifdef WOLFSPDM_HAVE_CHUNK
+    SPDM_Set32LE(&buf[12], WOLFSPDM_CHUNK_BUF_SIZE);
+#else
     SPDM_Set32LE(&buf[12], WOLFSPDM_MAX_MSG_SIZE);
-    /* MaxSPDMmsgSize (4 LE) */
+#endif
+    /* MaxSPDMmsgSize (4 LE): largest logical (reassembled) message we accept */
     SPDM_Set32LE(&buf[16], WOLFSPDM_MAX_MSG_SIZE);
 
     *bufSz = 20;

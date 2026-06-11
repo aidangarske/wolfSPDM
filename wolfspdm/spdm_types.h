@@ -89,6 +89,8 @@ extern "C" {
 #ifndef SPDM_END_SESSION
 #define SPDM_END_SESSION            0xEA
 #endif
+#define SPDM_CHUNK_SEND             0x85    /* Large request chunking (unused) */
+#define SPDM_CHUNK_GET              0x86    /* Large response chunking (CHUNK_GET) */
 #define SPDM_VENDOR_DEFINED         0xFF
 
 /* SPDM Response Codes (sent by responder) */
@@ -108,8 +110,13 @@ extern "C" {
 #ifndef SPDM_END_SESSION_ACK
 #define SPDM_END_SESSION_ACK        0x6A
 #endif
+#define SPDM_CHUNK_SEND_ACK         0x05    /* CHUNK_SEND response (unused) */
+#define SPDM_CHUNK_RESPONSE         0x06    /* CHUNK_GET response (DSP0274 10.27.2) */
 #define SPDM_VENDOR_DEFINED_RSP     0x7E
 #define SPDM_ERROR                  0x7F
+
+/* CHUNK_RESPONSE Param1 (Response Attributes) bit (DSP0274 Table 102) */
+#define SPDM_CHUNK_LAST_CHUNK       0x01    /* This chunk is the last one */
 
 /* SPDM Error Codes (in Param1 of ERROR response) */
 #define SPDM_ERROR_INVALID_REQUEST      0x01
@@ -221,6 +228,32 @@ extern "C" {
 #define SPDM_CAP_KEY_UPD_CAP        0x00004000  /* Key update support */
 #define SPDM_CAP_HANDSHAKE_ITC      0x00008000  /* Handshake in the clear */
 #define SPDM_CAP_PUB_KEY_ID_CAP     0x00010000  /* Public key ID */
+#define SPDM_CAP_CHUNK_CAP          0x00020000  /* Large SPDM message chunking */
+
+/* Chunking (DSP0274 Sec. 10.27): CHUNK_GET reassembly of large responses.
+ * Pure-wolfSPDM (no wolfSSL dependency), default on; WOLFSPDM_NO_CHUNK (or
+ * --disable-chunking) compiles it out entirely. */
+#if !defined(WOLFSPDM_NO_CHUNK) && !defined(WOLFSPDM_HAVE_CHUNK)
+    #define WOLFSPDM_HAVE_CHUNK
+#endif
+#ifdef WOLFSPDM_HAVE_CHUNK
+/* MTU: advertised DataTransferSize and size of the single reused transport
+ * buffer. Lower it for constrained devices (smaller buffer, more round-trips). */
+#ifndef WOLFSPDM_CHUNK_BUF_SIZE
+#define WOLFSPDM_CHUNK_BUF_SIZE     4096
+#endif
+/* Must hold a CHUNK_RESPONSE header (16 B) plus useful payload. */
+#if WOLFSPDM_CHUNK_BUF_SIZE < 64
+#error "WOLFSPDM_CHUNK_BUF_SIZE must be at least 64"
+#endif
+/* Reassembly loop guard (max chunks per large message). */
+#ifndef WOLFSPDM_CHUNK_MAX_CHUNKS
+#define WOLFSPDM_CHUNK_MAX_CHUNKS   64
+#endif
+#define WOLFSPDM_CHUNK_CAP_BIT      SPDM_CAP_CHUNK_CAP
+#else
+#define WOLFSPDM_CHUNK_CAP_BIT      0
+#endif
 
 /* Default requester capabilities for Algorithm Set B session */
 /* DSP0274 Table 11: CERT_CAP and CHAL_CAP are responder-only bits.
@@ -228,20 +261,27 @@ extern "C" {
  * those bits are intentionally absent from the default. */
 #define WOLFSPDM_DEFAULT_REQ_CAPS   (SPDM_CAP_ENCRYPT_CAP | SPDM_CAP_MAC_CAP | \
                                      SPDM_CAP_KEY_EX_CAP | SPDM_CAP_HBEAT_CAP | \
-                                     SPDM_CAP_KEY_UPD_CAP)
+                                     SPDM_CAP_KEY_UPD_CAP | WOLFSPDM_CHUNK_CAP_BIT)
 
 /* --- Buffer/Message Size Limits --- */
 
 /* ML-DSA payloads (multi-KB sigs, pubkeys, cert chains) need larger buffers
  * than Algorithm Set B. Defaults grow when ML-DSA is built in so ML-DSA-65
  * fits a single message; all three are overridable with -D. ML-DSA-87 and
- * very large chains rely on the (future) chunking engine. */
+ * very large chains rely on the chunking engine. */
 #ifndef WOLFSPDM_MAX_MSG_SIZE
 #ifdef WOLFSPDM_HAVE_MLDSA
 #define WOLFSPDM_MAX_MSG_SIZE       8192    /* Maximum SPDM message size */
 #else
 #define WOLFSPDM_MAX_MSG_SIZE       4096
 #endif
+#endif
+/* The secured chunk path decrypts each CHUNK_RESPONSE through a
+ * WOLFSPDM_MAX_MSG_SIZE-bounded stage buffer, so a chunk's plaintext (up to the
+ * advertised MTU) cannot exceed it. */
+#if defined(WOLFSPDM_HAVE_CHUNK) && !defined(WOLFSPDM_CHUNK_NO_SECURED) && \
+    (WOLFSPDM_CHUNK_BUF_SIZE > WOLFSPDM_MAX_MSG_SIZE)
+#error "WOLFSPDM_CHUNK_BUF_SIZE must be <= WOLFSPDM_MAX_MSG_SIZE for the secured chunk path"
 #endif
 #ifndef WOLFSPDM_MAX_CERT_CHAIN
 #ifdef WOLFSPDM_HAVE_MLDSA

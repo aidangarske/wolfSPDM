@@ -5,8 +5,9 @@ SPDM 1.4 (DMTF DSP0274 1.4.0) adds post-quantum cryptography: **ML-DSA**
 implements the requester side of **ML-DSA signature verification**, dual-stacked
 alongside the classical ECDSA P-384 profile.
 
-ML-KEM hybrid key exchange and SPDM 1.2 message chunking (for the largest PQC
-payloads) are tracked as follow-on work.
+All three parameter sets work over the wire: ML-DSA-87's larger responses are
+reassembled with **SPDM 1.2 message chunking** ([[Message Chunking]]). ML-KEM
+hybrid key exchange is tracked as follow-on work.
 
 ## How negotiation works
 
@@ -71,11 +72,10 @@ on-stack receive buffers in ML-DSA builds — `wolfSPDM_GetMeasurements` uses
 `WOLFSPDM_MAX_MSG_SIZE` (8 KB) and `wolfSPDM_KeyExchange` /
 `wolfSPDM_Challenge` use `WOLFSPDM_SIG_RSP_BUF` (~5.3 KB) — so size embedded
 thread/task stacks accordingly. ML-DSA-44 and ML-DSA-65 responses fit a single
-SPDM message at the common DataTransferSize (spdm-emu uses 4608 B), so they
-complete over the wire today. ML-DSA-87 responses (sig 4627 B) exceed that and
-the responder chunks them, which needs the SPDM 1.2 chunking engine (follow-on
-work) — ML-DSA-87 negotiation, certificate parsing, and signature verification
-are exercised by the unit tests in the meantime.
+SPDM message at the common DataTransferSize (spdm-emu uses 4608 B). ML-DSA-87
+responses (sig 4627 B) exceed that, so the responder splits them and wolfSPDM
+reassembles via CHUNK_GET — see [[Message Chunking]] for the engine and its
+compile-time knobs.
 
 ## References
 

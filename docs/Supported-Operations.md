@@ -46,6 +46,10 @@ field (dual-stack alongside ECDSA P-384). The responder selects exactly one
 signature algorithm; wolfSPDM verifies whichever was negotiated. See
 [[Post-Quantum ML-DSA]].
 
+Large responses (e.g. an ML-DSA-87 signature that exceeds the negotiated
+`DataTransferSize`) are reassembled with **SPDM 1.2 message chunking**
+(`CHUNK_GET`); see [[Message Chunking]].
+
 ## Notable implementation scope
 
 - Requester-only implementation (no responder role)

@@ -501,7 +501,7 @@ int wolfSPDM_Disconnect(WOLFSPDM_CTX* ctx)
 
 /* --- I/O Helper --- */
 
-int wolfSPDM_SendReceive(WOLFSPDM_CTX* ctx,
+int wolfSPDM_SendReceiveRaw(WOLFSPDM_CTX* ctx,
     const byte* txBuf, word32 txSz,
     byte* rxBuf, word32* rxSz)
 {
@@ -517,6 +517,30 @@ int wolfSPDM_SendReceive(WOLFSPDM_CTX* ctx,
     }
 
     return WOLFSPDM_SUCCESS;
+}
+
+int wolfSPDM_SendReceive(WOLFSPDM_CTX* ctx,
+    const byte* txBuf, word32 txSz,
+    byte* rxBuf, word32* rxSz)
+{
+#ifdef WOLFSPDM_HAVE_CHUNK
+    word32 cap = (rxSz != NULL) ? *rxSz : 0;
+    byte handle = 0;
+#endif
+    int rc = wolfSPDM_SendReceiveRaw(ctx, txBuf, txSz, rxBuf, rxSz);
+
+#ifdef WOLFSPDM_HAVE_CHUNK
+    /* Transparently reassemble a cleartext response the responder chunked
+     * (ERROR(LargeResponse)); the caller then parses the logical message. Only
+     * when the responder actually negotiated CHUNK_CAP, so a non-conformant
+     * LargeResponse fails fast rather than driving a doomed CHUNK_GET loop. */
+    if (rc == WOLFSPDM_SUCCESS && rxSz != NULL &&
+        (ctx->rspCaps & SPDM_CAP_CHUNK_CAP) != 0 &&
+        wolfSPDM_IsLargeResponse(rxBuf, *rxSz, &handle)) {
+        rc = wolfSPDM_ReassembleLargeResponse(ctx, 0, handle, rxBuf, cap, rxSz);
+    }
+#endif
+    return rc;
 }
 
 /* --- Debug Utilities --- */
@@ -638,6 +662,7 @@ const char* wolfSPDM_GetErrorString(int error)
         case WOLFSPDM_E_CERT_PARSE:      return "Failed to parse responder certificate";
         case WOLFSPDM_E_CHALLENGE:       return "Challenge authentication failed";
         case WOLFSPDM_E_KEY_UPDATE:      return "Key update failed";
+        case WOLFSPDM_E_CHUNK:           return "Large-response chunking failed";
         default:                          return "Unknown error";
     }
 }
