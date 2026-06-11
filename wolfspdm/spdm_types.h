@@ -47,6 +47,19 @@ extern "C" {
     #include <wolfssl/wolfcrypt/types.h>
 #endif
 
+/* ML-DSA (FIPS 204) support follows wolfSSL: auto-on when the linked wolfSSL
+ * reports WOLFSSL_HAVE_MLDSA. Define WOLFSPDM_NO_MLDSA to force it off.
+ * wolfSPDM's configure capability-tests for the wc_MlDsaKey context API and
+ * defines WOLFSPDM_NO_MLDSA when only the legacy ML-DSA interface is present.
+ * Non-autoconf consumers (e.g. wolfTPM embedding) linking a pre-context-API
+ * wolfSSL that still reports WOLFSSL_HAVE_MLDSA must define WOLFSPDM_NO_MLDSA
+ * themselves to avoid a compile break. */
+#if defined(WOLFSSL_HAVE_MLDSA) && !defined(WOLFSPDM_NO_MLDSA)
+    #ifndef WOLFSPDM_HAVE_MLDSA
+        #define WOLFSPDM_HAVE_MLDSA
+    #endif
+#endif
+
 /* --- SPDM Protocol Constants (DMTF DSP0274 / DSP0277) --- */
 
 /* SPDM Version Numbers */
@@ -127,6 +140,13 @@ extern "C" {
 /* Asymmetric Signature Algorithms */
 #define SPDM_ASYM_ALGO_ECDSA_P384   0x00000080  /* ECDSA-ECC_NIST_P384 */
 
+/* PQC Asymmetric Signature Algorithms (DSP0274 1.4 Table 19 PqcAsymAlgo /
+ * Table 20 PqcAsymSel). Byte 0 bit mask; one selected, mutually exclusive
+ * with BaseAsymSel. */
+#define SPDM_PQC_ASYM_ALGO_ML_DSA_44 0x00000001  /* ML-DSA-44, SigLen 2420 */
+#define SPDM_PQC_ASYM_ALGO_ML_DSA_65 0x00000002  /* ML-DSA-65, SigLen 3309 */
+#define SPDM_PQC_ASYM_ALGO_ML_DSA_87 0x00000004  /* ML-DSA-87, SigLen 4627 */
+
 /* DHE (Diffie-Hellman Ephemeral) Algorithms */
 #define SPDM_DHE_ALGO_SECP384R1     0x0010      /* secp384r1 */
 
@@ -141,6 +161,12 @@ extern "C" {
 #define SPDM_ALG_TYPE_AEAD          3
 #define SPDM_ALG_TYPE_REQ_BASE_ASYM 4
 #define SPDM_ALG_TYPE_KEY_SCHEDULE  5
+#define SPDM_ALG_TYPE_REQ_PQC_ASYM  6  /* DSP0274 1.4 Table 21 ReqPqcAsymAlg */
+#define SPDM_ALG_TYPE_KEM           7  /* DSP0274 1.4 KEM (ML-KEM) */
+
+/* Which asymmetric family the responder selected (ctx->asymType) */
+#define WOLFSPDM_ASYM_ECDSA         0  /* BaseAsymSel = ECDSA P-384 */
+#define WOLFSPDM_ASYM_MLDSA         1  /* PqcAsymSel  = ML-DSA */
 
 /* Algorithm Set B Fixed Parameters */
 #define WOLFSPDM_HASH_SIZE          48  /* SHA-384 output size */
@@ -151,6 +177,30 @@ extern "C" {
 #define WOLFSPDM_AEAD_IV_SIZE       12  /* AES-GCM IV size */
 #define WOLFSPDM_AEAD_TAG_SIZE      16  /* AES-GCM tag size */
 #define WOLFSPDM_HMAC_SIZE          48  /* HMAC-SHA384 output size */
+
+#ifdef WOLFSPDM_HAVE_MLDSA
+/* ML-DSA signature sizes (DSP0274 1.4 Table 19; FIPS 204). The largest sig we
+ * may need to verify bounds receive/transcript buffers below. */
+#define WOLFSPDM_MLDSA44_SIG_SIZE   2420
+#define WOLFSPDM_MLDSA65_SIG_SIZE   3309
+#define WOLFSPDM_MLDSA87_SIG_SIZE   4627
+#define WOLFSPDM_MAX_SIG_SIZE       WOLFSPDM_MLDSA87_SIG_SIZE
+#else
+#define WOLFSPDM_MAX_SIG_SIZE       WOLFSPDM_ECC_SIG_SIZE
+#endif
+
+/* Receive-buffer size for the signature-bearing responses (KEY_EXCHANGE_RSP,
+ * CHALLENGE_AUTH). Sized for fixed fields + a small OpaqueData block + the
+ * negotiated SigLen + HMAC, NOT the full advertised DataTransferSize: like the
+ * pre-ML-DSA design (4096 advertised vs a 384-byte buffer), this assumes real
+ * responders keep OpaqueData in these two responses small. These are on-stack
+ * buffers in wolfSPDM_KeyExchange / wolfSPDM_Challenge, so the ML-DSA value
+ * (~5.3 KB) is the per-call stack cost on constrained targets. */
+#ifdef WOLFSPDM_HAVE_MLDSA
+#define WOLFSPDM_SIG_RSP_BUF        (640 + WOLFSPDM_MAX_SIG_SIZE)
+#else
+#define WOLFSPDM_SIG_RSP_BUF        512
+#endif
 
 /* --- Capability Flags (per DSP0274) --- */
 
@@ -182,9 +232,42 @@ extern "C" {
 
 /* --- Buffer/Message Size Limits --- */
 
-#define WOLFSPDM_MAX_MSG_SIZE       4096    /* Maximum SPDM message size */
-#define WOLFSPDM_MAX_CERT_CHAIN     4096    /* Maximum certificate chain size */
-#define WOLFSPDM_MAX_TRANSCRIPT     4096    /* Maximum transcript buffer */
+/* ML-DSA payloads (multi-KB sigs, pubkeys, cert chains) need larger buffers
+ * than Algorithm Set B. Defaults grow when ML-DSA is built in so ML-DSA-65
+ * fits a single message; all three are overridable with -D. ML-DSA-87 and
+ * very large chains rely on the (future) chunking engine. */
+#ifndef WOLFSPDM_MAX_MSG_SIZE
+#ifdef WOLFSPDM_HAVE_MLDSA
+#define WOLFSPDM_MAX_MSG_SIZE       8192    /* Maximum SPDM message size */
+#else
+#define WOLFSPDM_MAX_MSG_SIZE       4096
+#endif
+#endif
+#ifndef WOLFSPDM_MAX_CERT_CHAIN
+#ifdef WOLFSPDM_HAVE_MLDSA
+/* A full ML-DSA-65 responder cert chain (spdm-emu) is ~16.8 KB; ML-DSA-87 and
+ * alias chains run larger. 24 KB fits the common chains in one buffer. */
+#define WOLFSPDM_MAX_CERT_CHAIN     24576   /* Maximum certificate chain size */
+#else
+#define WOLFSPDM_MAX_CERT_CHAIN     4096
+#endif
+#endif
+/* trustedCAs holds a single root CA cert, not a full chain, so it stays small
+ * even when ML-DSA grows the chain buffer. */
+#ifndef WOLFSPDM_MAX_TRUSTED_CA
+#ifdef WOLFSPDM_HAVE_MLDSA
+#define WOLFSPDM_MAX_TRUSTED_CA     8192
+#else
+#define WOLFSPDM_MAX_TRUSTED_CA     4096
+#endif
+#endif
+#ifndef WOLFSPDM_MAX_TRANSCRIPT
+#ifdef WOLFSPDM_HAVE_MLDSA
+#define WOLFSPDM_MAX_TRANSCRIPT     16384   /* Maximum transcript buffer */
+#else
+#define WOLFSPDM_MAX_TRANSCRIPT     4096
+#endif
+#endif
 #define WOLFSPDM_RANDOM_SIZE        32      /* Random data in KEY_EXCHANGE */
 
 /* --- MCTP Transport Constants (for TCP/socket transport) --- */

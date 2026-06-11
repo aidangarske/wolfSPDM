@@ -138,7 +138,7 @@ void wolfSPDM_Free(WOLFSPDM_CTX* ctx)
 
     /* Free responder public key (used for measurement/challenge verification) */
     if (ctx->flags.hasResponderPubKey) {
-        wc_ecc_free(&ctx->responderPubKey);
+        wolfSPDM_FreeResponderPubKey(ctx);
     }
 
 #ifndef NO_WOLFSPDM_CHALLENGE
@@ -210,7 +210,7 @@ int wolfSPDM_SetTrustedCAs(WOLFSPDM_CTX* ctx, const byte* derCerts,
         return WOLFSPDM_E_INVALID_ARG;
     }
 
-    if (derCertsSz > WOLFSPDM_MAX_CERT_CHAIN) {
+    if (derCertsSz > WOLFSPDM_MAX_TRUSTED_CA) {
         return WOLFSPDM_E_BUFFER_SMALL;
     }
 
@@ -335,7 +335,7 @@ static int wolfSPDM_ConnectStandard(WOLFSPDM_CTX* ctx)
      * clear sessionId / seqNums so a partial prior attempt can't leak
      * state into the new handshake. */
     if (ctx->flags.hasResponderPubKey) {
-        wc_ecc_free(&ctx->responderPubKey);
+        wolfSPDM_FreeResponderPubKey(ctx);
         ctx->flags.hasResponderPubKey = 0;
     }
     /* Wipe derived key material from any prior session before starting a
@@ -467,7 +467,7 @@ int wolfSPDM_Disconnect(WOLFSPDM_CTX* ctx)
      * responder's certificate chain - otherwise KEY_EXCHANGE_RSP signature
      * verification on the reconnect would run against the old key. */
     if (ctx->flags.hasResponderPubKey) {
-        wc_ecc_free(&ctx->responderPubKey);
+        wolfSPDM_FreeResponderPubKey(ctx);
         ctx->flags.hasResponderPubKey = 0;
     }
     /* Wipe every long-lived session secret so disconnected contexts cannot

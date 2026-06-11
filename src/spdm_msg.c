@@ -79,6 +79,18 @@ int wolfSPDM_BuildNegotiateAlgorithms(WOLFSPDM_CTX* ctx, byte* buf, word32* bufS
     /* BaseHashAlgo: SHA-384 (bit 1) */
     buf[12] = 0x02; buf[13] = 0x00; buf[14] = 0x00; buf[15] = 0x00;
 
+#ifdef WOLFSPDM_HAVE_MLDSA
+    /* DSP0274 1.4 Table 19: PqcAsymAlgo (8-byte field at offset 16). Advertise
+     * ML-DSA-44/65/87 alongside ECDSA (dual-stack); the responder selects
+     * exactly one across BaseAsymAlgo and PqcAsymAlgo. Bytes 16-31 are
+     * reserved-zero before 1.4, so only emit the selection there. */
+    if (ctx->spdmVersion >= SPDM_VERSION_14) {
+        buf[16] = (byte)(SPDM_PQC_ASYM_ALGO_ML_DSA_44 |
+                         SPDM_PQC_ASYM_ALGO_ML_DSA_65 |
+                         SPDM_PQC_ASYM_ALGO_ML_DSA_87);
+    }
+#endif
+
     /* Struct tables start at offset 32 */
     /* DHE: SECP_384_R1 */
     buf[32] = 0x02; buf[33] = 0x20; buf[34] = 0x10; buf[35] = 0x00;
@@ -205,57 +217,93 @@ int wolfSPDM_BuildKeyExchange(WOLFSPDM_CTX* ctx, byte* buf, word32* bufSz)
 
 /* --- Shared Signing Helpers --- */
 
-/* Build SPDM 1.2+ signed hash per DSP0274:
- * M = combined_spdm_prefix || zero_pad || context_str || inputDigest
- * outputDigest = Hash(M)
- *
- * combined_spdm_prefix = "dmtf-spdm-v1.X.*" x4 = 64 bytes
- * zero_pad = (36 - contextStrLen) bytes of 0x00
- * context_str = signing context string (variable length, max 36) */
-static int wolfSPDM_BuildSignedHash(byte spdmVersion,
-    const char* contextStr, word32 contextStrLen,
-    const byte* inputDigest, byte* outputDigest)
+/* Size of the negotiated signature field (DSP0274 1.4 Table 19 SigLen). */
+static word32 wolfSPDM_GetSigSize(const WOLFSPDM_CTX* ctx)
 {
-    byte signMsg[200]; /* 64 + 36 + 48 = 148 bytes max */
+#ifdef WOLFSPDM_HAVE_MLDSA
+    if (ctx->asymType == WOLFSPDM_ASYM_MLDSA) {
+        if (ctx->pqcAsymSel == SPDM_PQC_ASYM_ALGO_ML_DSA_44) {
+            return WOLFSPDM_MLDSA44_SIG_SIZE;
+        }
+        if (ctx->pqcAsymSel == SPDM_PQC_ASYM_ALGO_ML_DSA_87) {
+            return WOLFSPDM_MLDSA87_SIG_SIZE;
+        }
+        return WOLFSPDM_MLDSA65_SIG_SIZE;
+    }
+#else
+    (void)ctx;
+#endif
+    return WOLFSPDM_ECC_SIG_SIZE;
+}
+
+/* Assemble the SPDM 1.2+ data_to_be_signed message M per DSP0274 Sec. 15:
+ * M = combined_spdm_prefix || message_hash
+ *   combined_spdm_prefix = "dmtf-spdm-v1.X.*" x4 (64) || zero_pad || spdm_context
+ *                          (100 bytes total)
+ *   message_hash = inputDigest (Hash of data_to_be_signed, 48 bytes SHA-384)
+ * contextStr already carries the "responder-"/"requester-" spdm_context prefix.
+ * outMsg must hold >= 148 bytes. */
+static int wolfSPDM_BuildSignedMsg(byte spdmVersion,
+    const char* contextStr, word32 contextStrLen,
+    const byte* inputDigest, byte* outMsg, word32* outMsgLen)
+{
     word32 signMsgLen = 0;
     word32 zeroPadLen;
     byte majorVer, minorVer;
-    int i, rc;
+    int i;
 
     /* Reject overlong context strings before computing zeroPadLen (which
      * is 36 - contextStrLen and would underflow). */
-    if (contextStr == NULL || contextStrLen > 36) {
+    if (contextStr == NULL || contextStrLen > 36 ||
+        outMsg == NULL || outMsgLen == NULL) {
         return WOLFSPDM_E_INVALID_ARG;
     }
 
     majorVer = (byte)('0' + ((spdmVersion >> 4) & 0xF));
     minorVer = (byte)('0' + (spdmVersion & 0xF));
 
-    /* combined_spdm_prefix: "dmtf-spdm-v1.X.*" x4 = 64 bytes */
+    /* spdm_prefix: "dmtf-spdm-v1.X.*" x4 = 64 bytes */
     for (i = 0; i < 4; i++) {
-        XMEMCPY(&signMsg[signMsgLen], "dmtf-spdm-v1.2.*", 16);
-        signMsg[signMsgLen + 11] = majorVer;
-        signMsg[signMsgLen + 13] = minorVer;
-        signMsg[signMsgLen + 15] = '*';
+        XMEMCPY(&outMsg[signMsgLen], "dmtf-spdm-v1.2.*", 16);
+        outMsg[signMsgLen + 11] = majorVer;
+        outMsg[signMsgLen + 13] = minorVer;
+        outMsg[signMsgLen + 15] = '*';
         signMsgLen += 16;
     }
 
-    /* Zero padding: 36 - contextStrLen bytes */
+    /* Zero padding: 36 - contextStrLen bytes (combined prefix is 100 bytes) */
     zeroPadLen = 36 - contextStrLen;
-    XMEMSET(&signMsg[signMsgLen], 0x00, zeroPadLen);
+    XMEMSET(&outMsg[signMsgLen], 0x00, zeroPadLen);
     signMsgLen += zeroPadLen;
 
-    /* Signing context string */
-    XMEMCPY(&signMsg[signMsgLen], contextStr, contextStrLen);
+    /* spdm_context string */
+    XMEMCPY(&outMsg[signMsgLen], contextStr, contextStrLen);
     signMsgLen += contextStrLen;
 
-    /* Input digest */
-    XMEMCPY(&signMsg[signMsgLen], inputDigest, WOLFSPDM_HASH_SIZE);
+    /* message_hash */
+    XMEMCPY(&outMsg[signMsgLen], inputDigest, WOLFSPDM_HASH_SIZE);
     signMsgLen += WOLFSPDM_HASH_SIZE;
 
-    /* Hash M */
-    rc = wolfSPDM_Sha384Hash(outputDigest, signMsg, signMsgLen,
-        NULL, 0, NULL, 0);
+    *outMsgLen = signMsgLen;
+    return WOLFSPDM_SUCCESS;
+}
+
+/* Build the pre-hashed signing input used by RSA/ECDSA: outputDigest = Hash(M).
+ * ECDSA hashes M internally, so verify_hash takes Hash(M). */
+static int wolfSPDM_BuildSignedHash(byte spdmVersion,
+    const char* contextStr, word32 contextStrLen,
+    const byte* inputDigest, byte* outputDigest)
+{
+    byte signMsg[200]; /* 64 + 36 + 48 = 148 bytes max */
+    word32 signMsgLen = 0;
+    int rc;
+
+    rc = wolfSPDM_BuildSignedMsg(spdmVersion, contextStr, contextStrLen,
+        inputDigest, signMsg, &signMsgLen);
+    if (rc == WOLFSPDM_SUCCESS) {
+        rc = wolfSPDM_Sha384Hash(outputDigest, signMsg, signMsgLen,
+            NULL, 0, NULL, 0);
+    }
     /* signMsg embeds the inputDigest (a transcript-state hash). Wipe it
      * before returning so the assembled signing input does not linger on
      * the stack frame. */
@@ -284,7 +332,7 @@ static int wolfSPDM_VerifyEccSig(WOLFSPDM_CTX* ctx,
     }
 
     rc = wc_ecc_verify_hash(derSig, derSigSz, digest, digestSz,
-        &verified, &ctx->responderPubKey);
+        &verified, &ctx->responderPubKey.ecc);
     if (rc != 0) {
         wolfSPDM_DebugPrint(ctx, "ECC verify_hash failed: %d\n", rc);
         /* Internal wolfCrypt failure (memory pressure, missing curve, etc.)
@@ -295,6 +343,70 @@ static int wolfSPDM_VerifyEccSig(WOLFSPDM_CTX* ctx,
 
     /* verified == 1 means the signature is good; 0 means tamper/wrong key. */
     return (verified == 1) ? WOLFSPDM_SUCCESS : WOLFSPDM_E_BAD_SIGNATURE;
+}
+
+/* ECDSA signing tail: hash M, then verify the raw r||s signature. */
+static int wolfSPDM_VerifyEcdsaSigned(WOLFSPDM_CTX* ctx,
+    const char* contextStr, word32 contextStrLen,
+    byte* digest, const byte* sig, word32 sigSz)
+{
+    int rc = wolfSPDM_BuildSignedHash(ctx->spdmVersion, contextStr,
+        contextStrLen, digest, digest);
+    if (rc == WOLFSPDM_SUCCESS) {
+        rc = wolfSPDM_VerifyEccSig(ctx, sig, sigSz, digest, WOLFSPDM_HASH_SIZE);
+    }
+    return rc;
+}
+
+#ifdef WOLFSPDM_HAVE_MLDSA
+/* Verify an SPDM ML-DSA signature against message_hash using the responder's
+ * ML-DSA public key. Per DSP0274 1.4 Sec. 15.5, SPDM uses Algorithm 2 (pure
+ * ML-DSA.Sign), NOT the pre-hash variant: M = combined_spdm_prefix ||
+ * message_hash, and the ML-DSA ctx parameter is spdm_context (contextStr). */
+static int wolfSPDM_VerifyMlDsaSig(WOLFSPDM_CTX* ctx,
+    const char* contextStr, word32 contextStrLen,
+    const byte* messageHash, const byte* sig, word32 sigSz)
+{
+    byte signMsg[200]; /* combined_spdm_prefix(100) + message_hash(48) = 148 */
+    word32 signMsgLen = 0;
+    int verified = 0;
+    int rc;
+
+    rc = wolfSPDM_BuildSignedMsg(ctx->spdmVersion, contextStr, contextStrLen,
+        messageHash, signMsg, &signMsgLen);
+    if (rc == WOLFSPDM_SUCCESS) {
+        rc = wc_MlDsaKey_VerifyCtx(&ctx->responderPubKey.mldsa, sig, sigSz,
+            (const byte*)contextStr, (byte)contextStrLen,
+            signMsg, signMsgLen, &verified);
+        if (rc != 0) {
+            wolfSPDM_DebugPrint(ctx, "ML-DSA VerifyCtx failed: %d\n", rc);
+            rc = WOLFSPDM_E_CRYPTO_FAIL;
+        }
+        else {
+            rc = (verified == 1) ? WOLFSPDM_SUCCESS : WOLFSPDM_E_BAD_SIGNATURE;
+        }
+    }
+    /* signMsg embeds message_hash (transcript-state). Wipe before return. */
+    wc_ForceZero(signMsg, sizeof(signMsg));
+    return rc;
+}
+#endif /* WOLFSPDM_HAVE_MLDSA */
+
+/* Verify an SPDM signature over message_hash using whichever asymmetric family
+ * the responder selected in NEGOTIATE_ALGORITHMS. digest holds message_hash;
+ * the ECDSA path overwrites it with Hash(M). Returns the raw verify rc. */
+static int wolfSPDM_VerifySig(WOLFSPDM_CTX* ctx,
+    const char* contextStr, word32 contextStrLen,
+    byte* digest, const byte* sig, word32 sigSz)
+{
+#ifdef WOLFSPDM_HAVE_MLDSA
+    if (ctx->asymType == WOLFSPDM_ASYM_MLDSA) {
+        return wolfSPDM_VerifyMlDsaSig(ctx, contextStr, contextStrLen,
+            digest, sig, sigSz);
+    }
+#endif
+    return wolfSPDM_VerifyEcdsaSigned(ctx, contextStr, contextStrLen,
+        digest, sig, sigSz);
 }
 
 int wolfSPDM_BuildFinish(WOLFSPDM_CTX* ctx, byte* buf, word32* bufSz)
@@ -471,6 +583,7 @@ int wolfSPDM_ParseAlgorithms(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufSz)
 {
     word32 baseAsymAlgo;
     word32 baseHashAlgo;
+    word32 pqcAsymSel;
     word16 declaredLen;
     byte numAlgs;
     byte extAsymCount;
@@ -523,13 +636,60 @@ int wolfSPDM_ParseAlgorithms(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufSz)
     baseAsymAlgo = SPDM_Get32LE(&buf[12]);
     baseHashAlgo = SPDM_Get32LE(&buf[16]);
 
-    /* Per DSP0274 Table 18, BaseAsymSel / BaseHashSel carry the responder's
-     * SELECTED algorithm - exactly one bit. Strict equality enforces
-     * Algorithm Set B rather than accepting any superset. */
-    if (baseAsymAlgo != SPDM_ASYM_ALGO_ECDSA_P384) {
+    /* Defensive: a second NEGOTIATE_ALGORITHMS via the fine-grained API could
+     * flip asymType while a responder key from a prior round is still live,
+     * which would later free the wrong union member. Drop any live key first
+     * so the union member always matches the asymType set below. */
+    if (ctx->flags.hasResponderPubKey) {
+        wolfSPDM_FreeResponderPubKey(ctx);
+        ctx->flags.hasResponderPubKey = 0;
+    }
+
+    /* DSP0274 1.4 Table 20: PqcAsymSel (offset 20). Present from 1.4; earlier
+     * versions leave these bytes reserved-zero. The spec caps the combined
+     * bit count of BaseAsymSel and PqcAsymSel at one, so exactly one of the
+     * two fields carries the selected signature algorithm. */
+    pqcAsymSel = 0;
+    if (ctx->spdmVersion >= SPDM_VERSION_14) {
+        pqcAsymSel = SPDM_Get32LE(&buf[20]);
+    }
+
+    if (pqcAsymSel != 0) {
+#ifdef WOLFSPDM_HAVE_MLDSA
+        if (baseAsymAlgo != 0) {
+            wolfSPDM_DebugPrint(ctx,
+                "ALGORITHMS: BaseAsymSel and PqcAsymSel both set "
+                "(0x%08x/0x%08x)\n", baseAsymAlgo, pqcAsymSel);
+            return WOLFSPDM_E_ALGO_MISMATCH;
+        }
+        if (pqcAsymSel != SPDM_PQC_ASYM_ALGO_ML_DSA_44 &&
+            pqcAsymSel != SPDM_PQC_ASYM_ALGO_ML_DSA_65 &&
+            pqcAsymSel != SPDM_PQC_ASYM_ALGO_ML_DSA_87) {
+            wolfSPDM_DebugPrint(ctx,
+                "ALGORITHMS: unsupported PqcAsymSel (0x%08x)\n", pqcAsymSel);
+            return WOLFSPDM_E_ALGO_MISMATCH;
+        }
+        ctx->asymType = WOLFSPDM_ASYM_MLDSA;
+        ctx->pqcAsymSel = pqcAsymSel;
+#else
         wolfSPDM_DebugPrint(ctx,
-            "ALGORITHMS: BaseAsymSel != ECDSA_P384 (0x%08x)\n", baseAsymAlgo);
+            "ALGORITHMS: PqcAsymSel set but ML-DSA not built in (0x%08x)\n",
+            pqcAsymSel);
         return WOLFSPDM_E_ALGO_MISMATCH;
+#endif
+    }
+    else {
+        /* Per DSP0274 Table 18, BaseAsymSel carries the responder's SELECTED
+         * algorithm - exactly one bit. Strict equality enforces Algorithm
+         * Set B rather than accepting any superset. */
+        if (baseAsymAlgo != SPDM_ASYM_ALGO_ECDSA_P384) {
+            wolfSPDM_DebugPrint(ctx,
+                "ALGORITHMS: BaseAsymSel != ECDSA_P384 (0x%08x)\n",
+                baseAsymAlgo);
+            return WOLFSPDM_E_ALGO_MISMATCH;
+        }
+        ctx->asymType = WOLFSPDM_ASYM_ECDSA;
+        ctx->pqcAsymSel = 0;
     }
     if (baseHashAlgo != SPDM_HASH_ALGO_SHA_384) {
         wolfSPDM_DebugPrint(ctx,
@@ -680,7 +840,7 @@ int wolfSPDM_ParseKeyExchangeRsp(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufS
     const byte* rspVerifyData;
     byte expectedHmac[WOLFSPDM_HASH_SIZE];
     byte th1Partial[WOLFSPDM_HASH_SIZE];
-    byte signedDigest[WOLFSPDM_HASH_SIZE];
+    word32 sigSize;
     int rc;
 
     SPDM_CHECK_PARSE_OR_ERROR_ARGS(ctx, buf, bufSz, 140);
@@ -693,6 +853,8 @@ int wolfSPDM_ParseKeyExchangeRsp(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufS
     if (!ctx->flags.hasResponderPubKey) {
         return WOLFSPDM_E_BAD_STATE;
     }
+
+    sigSize = wolfSPDM_GetSigSize(ctx);
 
     /* MutAuthRequested (offset 6) per DSP0274 Table 35. We don't implement
      * the requester-signed FINISH path; refuse before committing sessionId
@@ -709,7 +871,7 @@ int wolfSPDM_ParseKeyExchangeRsp(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufS
     sigOffset = 138 + opaqueLen;
     keRspPartialLen = sigOffset;
 
-    if (bufSz < sigOffset + WOLFSPDM_ECC_SIG_SIZE + WOLFSPDM_HASH_SIZE) {
+    if (bufSz < sigOffset + sigSize + WOLFSPDM_HASH_SIZE) {
         return WOLFSPDM_E_BUFFER_SMALL;
     }
 
@@ -722,7 +884,7 @@ int wolfSPDM_ParseKeyExchangeRsp(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufS
     XMEMCPY(peerPubKeyY, &buf[88], WOLFSPDM_ECC_KEY_SIZE);
 
     signature = buf + sigOffset;
-    rspVerifyData = buf + sigOffset + WOLFSPDM_ECC_SIG_SIZE;
+    rspVerifyData = buf + sigOffset + sigSize;
 
     /* Add KEY_EXCHANGE_RSP partial (without sig/verify) to transcript */
     rc = wolfSPDM_TranscriptAdd(ctx, buf, keRspPartialLen);
@@ -730,19 +892,15 @@ int wolfSPDM_ParseKeyExchangeRsp(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufS
         goto cleanup;
     }
 
-    /* Verify responder signature per DSP0274 Sec 14: signature is over
-     * BuildSignedHash("responder-key_exchange_rsp signing", Hash(partial
-     * transcript)). wolfSPDM_KeyExchange refuses to proceed without a
-     * parsed cert chain, so hasResponderPubKey is always true here. */
+    /* Verify responder signature per DSP0274 Sec 14: signature is over the
+     * partial transcript hash with context "responder-key_exchange_rsp
+     * signing", using the negotiated asym family (ECDSA or ML-DSA).
+     * wolfSPDM_KeyExchange refuses to proceed without a parsed cert chain,
+     * so hasResponderPubKey is always true here. */
     rc = wolfSPDM_TranscriptHash(ctx, th1Partial);
     if (rc == WOLFSPDM_SUCCESS) {
-        rc = wolfSPDM_BuildSignedHash(ctx->spdmVersion,
-            sigCtx, (word32)(sizeof(sigCtx) - 1),
-            th1Partial, signedDigest);
-    }
-    if (rc == WOLFSPDM_SUCCESS) {
-        rc = wolfSPDM_VerifyEccSig(ctx, signature, WOLFSPDM_ECC_SIG_SIZE,
-            signedDigest, WOLFSPDM_HASH_SIZE);
+        rc = wolfSPDM_VerifySig(ctx, sigCtx, (word32)(sizeof(sigCtx) - 1),
+            th1Partial, signature, sigSize);
         if (rc != WOLFSPDM_SUCCESS) {
             wolfSPDM_DebugPrint(ctx,
                 "KEY_EXCHANGE_RSP signature verification failed (rc=%d)\n",
@@ -758,7 +916,7 @@ int wolfSPDM_ParseKeyExchangeRsp(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufS
     }
 
     /* Add signature to transcript (TH1 includes signature) */
-    rc = wolfSPDM_TranscriptAdd(ctx, signature, WOLFSPDM_ECC_SIG_SIZE);
+    rc = wolfSPDM_TranscriptAdd(ctx, signature, sigSize);
     if (rc != WOLFSPDM_SUCCESS) {
         goto cleanup;
     }
@@ -806,13 +964,12 @@ int wolfSPDM_ParseKeyExchangeRsp(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufS
 
 cleanup:
     /* expectedHmac is derived from rspFinishedKey; wipe regardless of path.
-     * th1Partial / signedDigest are intermediate handshake material - wipe
-     * them too so they do not linger on the stack frame. */
+     * th1Partial is intermediate handshake material - wipe it too so it does
+     * not linger on the stack frame. */
     wc_ForceZero(expectedHmac, sizeof(expectedHmac));
     wc_ForceZero(peerPubKeyX, sizeof(peerPubKeyX));
     wc_ForceZero(peerPubKeyY, sizeof(peerPubKeyY));
     wc_ForceZero(th1Partial, sizeof(th1Partial));
-    wc_ForceZero(signedDigest, sizeof(signedDigest));
     return rc;
 }
 
@@ -938,6 +1095,7 @@ int wolfSPDM_ParseMeasurements(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufSz)
     word32 recordLen;
     word32 recordEnd;
     word32 blockIdx;
+    word32 sigSize;
 
     SPDM_CHECK_PARSE_OR_ERROR_ARGS(ctx, buf, bufSz, 8);
     SPDM_CHECK_RESPONSE(ctx, buf, bufSz, SPDM_MEASUREMENTS, WOLFSPDM_E_MEASUREMENT);
@@ -1094,10 +1252,12 @@ int wolfSPDM_ParseMeasurements(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufSz)
             offset += 8;
         }
 
-        /* Signature (if present) */
-        if (offset + WOLFSPDM_ECC_SIG_SIZE <= bufSz) {
-            XMEMCPY(ctx->measSignature, &buf[offset], WOLFSPDM_ECC_SIG_SIZE);
-            ctx->measSignatureSize = WOLFSPDM_ECC_SIG_SIZE;
+        /* Signature (if present). Size is the negotiated SigLen (ECDSA or
+         * ML-DSA); the stored copy bounds at WOLFSPDM_MAX_SIG_SIZE. */
+        sigSize = wolfSPDM_GetSigSize(ctx);
+        if (offset + sigSize <= bufSz) {
+            XMEMCPY(ctx->measSignature, &buf[offset], sigSize);
+            ctx->measSignatureSize = sigSize;
         }
     }
 
@@ -1113,15 +1273,13 @@ int wolfSPDM_ParseMeasurements(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufSz)
 /* Shared tail: BuildSignedHash -> VerifyEccSig -> debug print -> return */
 static int wolfSPDM_VerifySignedDigest(WOLFSPDM_CTX* ctx,
     const char* contextStr, word32 contextStrLen,
-    byte* digest,  /* in: hash, overwritten by BuildSignedHash */
+    byte* digest,  /* in: message_hash (ECDSA path overwrites it) */
     const byte* sig, word32 sigSz,
     const char* passMsg, const char* failMsg, int failErr)
 {
-    int rc = wolfSPDM_BuildSignedHash(ctx->spdmVersion,
-        contextStr, contextStrLen, digest, digest);
-    if (rc != WOLFSPDM_SUCCESS) return rc;
+    int rc = wolfSPDM_VerifySig(ctx, contextStr, contextStrLen,
+        digest, sig, sigSz);
 
-    rc = wolfSPDM_VerifyEccSig(ctx, sig, sigSz, digest, WOLFSPDM_HASH_SIZE);
     if (rc == WOLFSPDM_SUCCESS) {
         wolfSPDM_DebugPrint(ctx, "%s\n", passMsg);
         return WOLFSPDM_SUCCESS;
@@ -1139,6 +1297,7 @@ int wolfSPDM_VerifyMeasurementSig(WOLFSPDM_CTX* ctx,
 {
     byte digest[WOLFSPDM_HASH_SIZE];
     word32 sigOffset;
+    word32 sigSize;
     int rc;
 
     if (ctx == NULL || rspBuf == NULL || reqMsg == NULL) {
@@ -1149,11 +1308,12 @@ int wolfSPDM_VerifyMeasurementSig(WOLFSPDM_CTX* ctx,
         return WOLFSPDM_E_MEAS_NOT_VERIFIED;
     }
 
-    /* Signature is the last WOLFSPDM_ECC_SIG_SIZE bytes of the response */
-    if (rspBufSz < WOLFSPDM_ECC_SIG_SIZE) {
+    /* Signature is the last SigLen bytes of the response (ECDSA or ML-DSA) */
+    sigSize = wolfSPDM_GetSigSize(ctx);
+    if (rspBufSz < sigSize) {
         return WOLFSPDM_E_MEASUREMENT;
     }
-    sigOffset = rspBufSz - WOLFSPDM_ECC_SIG_SIZE;
+    sigOffset = rspBufSz - sigSize;
 
     /* Compute L1||L2 hash per DSP0274 Section 10.11.1:
      * L1/L2 = VCA || GET_MEASUREMENTS_request || MEASUREMENTS_response(before sig) */
@@ -1164,7 +1324,7 @@ int wolfSPDM_VerifyMeasurementSig(WOLFSPDM_CTX* ctx,
     if (rc == WOLFSPDM_SUCCESS) {
         rc = wolfSPDM_VerifySignedDigest(ctx,
             "responder-measurements signing", 30, digest,
-            rspBuf + sigOffset, WOLFSPDM_ECC_SIG_SIZE,
+            rspBuf + sigOffset, sigSize,
             "Measurement signature VERIFIED",
             "Measurement signature INVALID",
             WOLFSPDM_E_MEAS_SIG_FAIL);
@@ -1249,12 +1409,72 @@ static int wolfSPDM_FindLeafCert(const byte* certChain, word32 certChainLen,
     return WOLFSPDM_SUCCESS;
 }
 
+/* Import the ECDSA P-384 public key from the parsed leaf cert. */
+static int wolfSPDM_ImportEccPubKey(WOLFSPDM_CTX* ctx, DecodedCert* cert)
+{
+    word32 idx = 0;
+    int rc = wc_ecc_init(&ctx->responderPubKey.ecc);
+    if (rc != 0) {
+        return WOLFSPDM_E_CRYPTO_FAIL;
+    }
+    rc = wc_EccPublicKeyDecode(cert->publicKey, &idx,
+        &ctx->responderPubKey.ecc, cert->pubKeySize);
+    if (rc != 0) {
+        wolfSPDM_DebugPrint(ctx, "ECC public key decode failed: %d\n", rc);
+        wc_ecc_free(&ctx->responderPubKey.ecc);
+        return WOLFSPDM_E_CERT_PARSE;
+    }
+    wolfSPDM_DebugPrint(ctx, "Extracted responder ECC P-384 public key\n");
+    return WOLFSPDM_SUCCESS;
+}
+
+#ifdef WOLFSPDM_HAVE_MLDSA
+/* Import the ML-DSA public key from the parsed leaf cert. The parameter set
+ * is pinned from the negotiated PqcAsymSel, so a cert whose AlgorithmIdentifier
+ * OID names a different level is rejected by the decoder. */
+static int wolfSPDM_ImportMlDsaPubKey(WOLFSPDM_CTX* ctx, DecodedCert* cert)
+{
+    word32 idx = 0;
+    byte level;
+    int rc;
+
+    if (ctx->pqcAsymSel == SPDM_PQC_ASYM_ALGO_ML_DSA_44) {
+        level = WC_ML_DSA_44;
+    }
+    else if (ctx->pqcAsymSel == SPDM_PQC_ASYM_ALGO_ML_DSA_87) {
+        level = WC_ML_DSA_87;
+    }
+    else {
+        level = WC_ML_DSA_65;
+    }
+
+    rc = wc_MlDsaKey_Init(&ctx->responderPubKey.mldsa, NULL, INVALID_DEVID);
+    if (rc == 0) {
+        rc = wc_MlDsaKey_SetParams(&ctx->responderPubKey.mldsa, level);
+    }
+    if (rc != 0) {
+        wc_MlDsaKey_Free(&ctx->responderPubKey.mldsa);
+        return WOLFSPDM_E_CRYPTO_FAIL;
+    }
+
+    rc = wc_MlDsaKey_PublicKeyDecode(&ctx->responderPubKey.mldsa,
+        cert->publicKey, cert->pubKeySize, &idx);
+    if (rc != 0) {
+        wolfSPDM_DebugPrint(ctx, "ML-DSA public key decode failed: %d\n", rc);
+        wc_MlDsaKey_Free(&ctx->responderPubKey.mldsa);
+        return WOLFSPDM_E_CERT_PARSE;
+    }
+    wolfSPDM_DebugPrint(ctx, "Extracted responder ML-DSA public key (level %u)\n",
+        level);
+    return WOLFSPDM_SUCCESS;
+}
+#endif /* WOLFSPDM_HAVE_MLDSA */
+
 int wolfSPDM_ExtractResponderPubKey(WOLFSPDM_CTX* ctx)
 {
     DecodedCert cert;
     const byte* leafCert;
     word32 leafCertSz;
-    word32 idx;
     int rc;
 
     if (ctx == NULL || ctx->certChainLen == 0) {
@@ -1278,27 +1498,24 @@ int wolfSPDM_ExtractResponderPubKey(WOLFSPDM_CTX* ctx)
         return WOLFSPDM_E_CERT_PARSE;
     }
 
-    /* Extract public key from cert and import into ecc_key */
-    rc = wc_ecc_init(&ctx->responderPubKey);
-    if (rc != 0) {
-        wc_FreeDecodedCert(&cert);
-        return WOLFSPDM_E_CRYPTO_FAIL;
+    /* Import the responder verify key for whichever family was negotiated. */
+#ifdef WOLFSPDM_HAVE_MLDSA
+    if (ctx->asymType == WOLFSPDM_ASYM_MLDSA) {
+        rc = wolfSPDM_ImportMlDsaPubKey(ctx, &cert);
     }
-
-    idx = 0;
-    rc = wc_EccPublicKeyDecode(cert.publicKey, &idx, &ctx->responderPubKey,
-        cert.pubKeySize);
-    if (rc != 0) {
-        wolfSPDM_DebugPrint(ctx, "ECC public key decode failed: %d\n", rc);
-        wc_ecc_free(&ctx->responderPubKey);
-        wc_FreeDecodedCert(&cert);
-        return WOLFSPDM_E_CERT_PARSE;
+    else {
+        rc = wolfSPDM_ImportEccPubKey(ctx, &cert);
     }
+#else
+    rc = wolfSPDM_ImportEccPubKey(ctx, &cert);
+#endif
 
     wc_FreeDecodedCert(&cert);
-    ctx->flags.hasResponderPubKey = 1;
-    wolfSPDM_DebugPrint(ctx, "Extracted responder ECC P-384 public key\n");
+    if (rc != WOLFSPDM_SUCCESS) {
+        return rc;
+    }
 
+    ctx->flags.hasResponderPubKey = 1;
     return WOLFSPDM_SUCCESS;
 }
 
@@ -1499,8 +1716,8 @@ int wolfSPDM_ParseChallengeAuth(WOLFSPDM_CTX* ctx, const byte* buf,
         offset += 8;
     }
 
-    /* Signature starts here */
-    if (offset + WOLFSPDM_ECC_SIG_SIZE > bufSz) {
+    /* Signature starts here (ECDSA or ML-DSA SigLen) */
+    if (offset + wolfSPDM_GetSigSize(ctx) > bufSz) {
         wolfSPDM_DebugPrint(ctx, "CHALLENGE_AUTH: no room for signature\n");
         return WOLFSPDM_E_CHALLENGE;
     }
@@ -1559,7 +1776,7 @@ int wolfSPDM_VerifyChallengeAuthSig(WOLFSPDM_CTX* ctx,
 
     rc = wolfSPDM_VerifySignedDigest(ctx,
         "responder-challenge_auth signing", 32, digest,
-        rspBuf + sigOffset, WOLFSPDM_ECC_SIG_SIZE,
+        rspBuf + sigOffset, wolfSPDM_GetSigSize(ctx),
         "CHALLENGE_AUTH signature VERIFIED",
         "CHALLENGE_AUTH signature INVALID",
         WOLFSPDM_E_CHALLENGE);

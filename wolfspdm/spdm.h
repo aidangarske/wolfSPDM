@@ -89,11 +89,16 @@ extern "C" {
 /* Compile-time size for static allocation of WOLFSPDM_CTX.
  * Use this when you need a buffer large enough to hold WOLFSPDM_CTX
  * without access to the struct definition (e.g., in wolfTPM).
- * Actual struct size: ~31.3 KB (with measurements) / ~29.9 KB (NO_WOLFSPDM_MEAS).
- * Rounded up to 32 KB for platform alignment.
- * wolfSPDM_InitStatic() verifies at runtime that the provided buffer
- * is large enough; returns WOLFSPDM_E_BUFFER_SMALL if not. */
+ * Classical (Algorithm Set B) struct size: ~31.3 KB, rounded to 32 KB.
+ * With ML-DSA the larger PQC buffers (sigs, cert chains) and the ML-DSA verify
+ * key push it to ~67 KB, rounded to 72 KB. wolfSPDM_InitStatic() verifies at
+ * runtime that the provided buffer is large enough (WOLFSPDM_E_BUFFER_SMALL);
+ * a compile-time _Static_assert in spdm_context.c also guards this value. */
+#ifdef WOLFSPDM_HAVE_MLDSA
+#define WOLFSPDM_CTX_STATIC_SIZE  73728  /* 72KB - fits CTX with ML-DSA buffers */
+#else
 #define WOLFSPDM_CTX_STATIC_SIZE  32768  /* 32KB - fits CTX with cert validation + challenge + key update fields */
+#endif
 
 /* Forward declaration */
 struct WOLFSPDM_CTX;

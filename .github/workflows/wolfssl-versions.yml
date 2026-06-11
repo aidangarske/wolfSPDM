@@ -42,11 +42,20 @@ jobs:
           fi
           echo "Latest stable wolfSSL: $LATEST"
           echo "latest-stable=$LATEST" >> "$GITHUB_OUTPUT"
-          MATRIX=$(jq -nc --arg latest "$LATEST" '{
+          # ML-DSA (the wc_MlDsaKey context API wolfSPDM verifies with) lands
+          # post-v5.9.1-stable. Enable it for master and any latest-stable
+          # strictly newer than v5.9.1-stable; v5.8.0 floor stays classical.
+          PQC_LATEST=false
+          NEWEST=$(printf '%s\n%s\n' "v5.9.1-stable" "$LATEST" | sort -V | tail -n1)
+          if [ "$NEWEST" = "$LATEST" ] && [ "$LATEST" != "v5.9.1-stable" ]; then
+            PQC_LATEST=true
+          fi
+          echo "PQC for latest-stable: $PQC_LATEST"
+          MATRIX=$(jq -nc --arg latest "$LATEST" --argjson pqclatest "$PQC_LATEST" '{
             include: [
-              {"wolfssl-version":"v5.8.0-stable","wolfssl-ref":"v5.8.0-stable","cache-key":"wolfssl-spdm-v5.8.0-v1"},
-              {"wolfssl-version":$latest,"wolfssl-ref":$latest,"cache-key":("wolfssl-spdm-" + $latest + "-v1")},
-              {"wolfssl-version":"master","wolfssl-ref":"master","cache-key":""}
+              {"wolfssl-version":"v5.8.0-stable","wolfssl-ref":"v5.8.0-stable","cache-key":"wolfssl-spdm-v5.8.0-v2","pqc":false},
+              {"wolfssl-version":$latest,"wolfssl-ref":$latest,"cache-key":("wolfssl-spdm-" + $latest + "-pqc" + ($pqclatest|tostring) + "-v2"),"pqc":$pqclatest},
+              {"wolfssl-version":"master","wolfssl-ref":"master","cache-key":"","pqc":true}
             ]
           }')
           echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
@@ -84,9 +93,11 @@ jobs:
           git clone --depth 1 --branch ${{ matrix.wolfssl-ref }} \
               https://github.com/wolfSSL/wolfssl.git
           cd wolfssl
+          PQC_FLAGS=""
+          if [ "${{ matrix.pqc }}" = "true" ]; then PQC_FLAGS="--enable-mldsa"; fi
           ./autogen.sh
           ./configure --enable-wolftpm --enable-ecc --enable-sha384 \
-                      --enable-aesgcm --enable-hkdf --enable-sp \
+                      --enable-aesgcm --enable-hkdf --enable-sp $PQC_FLAGS \
                       --prefix=$HOME/wolfssl-install
           make -j"$(nproc)"
           make install
@@ -98,8 +109,13 @@ jobs:
 
       - name: Build wolfSPDM
         run: |
+          # On PQC-capable wolfSSL, pass --enable-mldsa so configure ERRORS if
+          # the wc_MlDsaKey API is somehow missing, instead of silently
+          # dropping ML-DSA coverage.
+          MLDSA_FLAG=""
+          if [ "${{ matrix.pqc }}" = "true" ]; then MLDSA_FLAG="--enable-mldsa"; fi
           ./autogen.sh
-          ./configure --with-wolfssl=$HOME/wolfssl-install
+          ./configure --with-wolfssl=$HOME/wolfssl-install $MLDSA_FLAG
           make -j"$(nproc)"
 
       - name: Run unit tests
@@ -109,9 +125,11 @@ jobs:
 
       - name: Build with --enable-dynamic-mem
         run: |
+          MLDSA_FLAG=""
+          if [ "${{ matrix.pqc }}" = "true" ]; then MLDSA_FLAG="--enable-mldsa"; fi
           make distclean || true
           ./autogen.sh
-          ./configure --with-wolfssl=$HOME/wolfssl-install --enable-dynamic-mem
+          ./configure --with-wolfssl=$HOME/wolfssl-install --enable-dynamic-mem $MLDSA_FLAG
           make -j"$(nproc)"
 
       - name: Run unit tests (dynamic-mem)

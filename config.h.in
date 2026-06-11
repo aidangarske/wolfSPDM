@@ -6,7 +6,7 @@
 /* Define to 1 if you have the <inttypes.h> header file. */
 #undef HAVE_INTTYPES_H
 
-/* Define to 1 if you have the `wolfssl' library (-lwolfssl). */
+/* Define to 1 if you have the 'wolfssl' library (-lwolfssl). */
 #undef HAVE_LIBWOLFSSL
 
 /* Define to 1 if you have the <stdint.h> header file. */
@@ -57,7 +57,7 @@
 /* Define to the version of this package. */
 #undef PACKAGE_VERSION
 
-/* Define to 1 if all of the C90 standard headers exist (not just the ones
+/* Define to 1 if all of the C89 standard headers exist (not just the ones
    required in a freestanding environment). This macro is provided for
    backward compatibility; new code need not use it. */
 #undef STDC_HEADERS
@@ -70,6 +70,9 @@
 
 /* Enable dynamic memory allocation */
 #undef WOLFSPDM_DYNAMIC_MEMORY
+
+/* Disable ML-DSA support */
+#undef WOLFSPDM_NO_MLDSA
 
 /* Define for Solaris 2.5.1 so the uint32_t typedef from <sys/synch.h>,
    <pthread.h>, or <semaphore.h> is not used. If the typedef were allowed, the
@@ -86,7 +89,7 @@
    #define below would cause a syntax error. */
 #undef _UINT8_T
 
-/* Define to `unsigned int' if <sys/types.h> does not define. */
+/* Define as 'unsigned int' if <stddef.h> doesn't define. */
 #undef size_t
 
 /* Define to the type of an unsigned integer type of width exactly 16 bits if

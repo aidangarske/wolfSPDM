@@ -275,7 +275,7 @@ int wolfSPDM_GetCertificate(WOLFSPDM_CTX* ctx, int slotId)
 int wolfSPDM_KeyExchange(WOLFSPDM_CTX* ctx)
 {
     byte txBuf[192];  /* KEY_EXCHANGE: ~158 bytes */
-    byte rxBuf[384];  /* KEY_EXCHANGE_RSP: ~302 bytes */
+    byte rxBuf[WOLFSPDM_SIG_RSP_BUF];  /* KEY_EXCHANGE_RSP (ECDSA ~302 / ML-DSA) */
     word32 txSz = sizeof(txBuf);
     word32 rxSz = sizeof(rxBuf);
     int rc;
@@ -520,7 +520,7 @@ int wolfSPDM_GetMeasurements(WOLFSPDM_CTX* ctx, byte measOperation,
 int wolfSPDM_Challenge(WOLFSPDM_CTX* ctx, int slotId, byte measHashType)
 {
     byte txBuf[48];   /* CHALLENGE: 36 bytes (1.2) or 44 bytes (1.3+) */
-    byte rxBuf[512];  /* CHALLENGE_AUTH: variable, up to ~300+ bytes */
+    byte rxBuf[WOLFSPDM_SIG_RSP_BUF];  /* CHALLENGE_AUTH (ECDSA ~300 / ML-DSA) */
     word32 txSz = sizeof(txBuf);
     word32 rxSz = sizeof(rxBuf);
     word32 sigOffset = 0;

@@ -47,6 +47,9 @@
 #include <wolfssl/wolfcrypt/aes.h>
 #include <wolfssl/wolfcrypt/memory.h>
 #include <wolfssl/wolfcrypt/asn_public.h>
+#ifdef WOLFSPDM_HAVE_MLDSA
+    #include <wolfssl/wolfcrypt/wc_mldsa.h>
+#endif
 
 #if defined(LIBWOLFSSL_VERSION_HEX) && LIBWOLFSSL_VERSION_HEX < 0x05008004
 /* wc_ForceZero added in wolfSSL v5.8.4; provide a stub for older releases. */
@@ -204,8 +207,8 @@ struct WOLFSPDM_CTX {
     word32 measBlockCount;
     byte   measNonce[32];                           /* Nonce for signed measurements */
     byte   measSummaryHash[WOLFSPDM_HASH_SIZE];     /* Summary hash from response */
-    byte   measSignature[WOLFSPDM_ECC_SIG_SIZE];    /* Captured signature (96 bytes P-384) */
-    word32 measSignatureSize;                       /* 0 if unsigned, 96 if signed */
+    byte   measSignature[WOLFSPDM_MAX_SIG_SIZE];    /* Captured signature (ECDSA/ML-DSA) */
+    word32 measSignatureSize;                       /* 0 if unsigned, else SigLen */
 
 #ifndef NO_WOLFSPDM_MEAS_VERIFY
     /* Saved GET_MEASUREMENTS request for L1/L2 transcript */
@@ -214,11 +217,20 @@ struct WOLFSPDM_CTX {
 #endif /* !NO_WOLFSPDM_MEAS_VERIFY */
 #endif /* !NO_WOLFSPDM_MEAS */
 
-    /* Responder identity for signature verification (measurements + challenge) */
-    ecc_key         responderPubKey;                /* Extracted from cert chain leaf */
+    /* Responder identity for signature verification (measurements + challenge).
+     * asymType records which family the responder selected during
+     * NEGOTIATE_ALGORITHMS; only one key in the union is ever live. */
+    byte            asymType;                       /* WOLFSPDM_ASYM_ECDSA|_MLDSA */
+    word32          pqcAsymSel;                     /* Selected PqcAsymSel (0=ECDSA) */
+    union {
+        ecc_key     ecc;                            /* ECDSA P-384 (Algorithm Set B) */
+#ifdef WOLFSPDM_HAVE_MLDSA
+        MlDsaKey    mldsa;                          /* ML-DSA (DSP0274 1.4) */
+#endif
+    } responderPubKey;                              /* Extracted from cert chain leaf */
 
     /* Certificate chain validation */
-    byte   trustedCAs[WOLFSPDM_MAX_CERT_CHAIN];    /* DER-encoded root CAs */
+    byte   trustedCAs[WOLFSPDM_MAX_TRUSTED_CA];    /* DER-encoded root CA */
     word32 trustedCAsSz;
 
 #ifndef NO_WOLFSPDM_CHALLENGE
@@ -242,6 +254,18 @@ struct WOLFSPDM_CTX {
     byte   reqAppSecret[WOLFSPDM_HASH_SIZE];        /* 48 bytes */
     byte   rspAppSecret[WOLFSPDM_HASH_SIZE];        /* 48 bytes */
 };
+
+/* Free whichever responder verify key is live (union member by asymType). */
+static WC_INLINE void wolfSPDM_FreeResponderPubKey(WOLFSPDM_CTX* ctx)
+{
+#ifdef WOLFSPDM_HAVE_MLDSA
+    if (ctx->asymType == WOLFSPDM_ASYM_MLDSA) {
+        wc_MlDsaKey_Free(&ctx->responderPubKey.mldsa);
+        return;
+    }
+#endif
+    wc_ecc_free(&ctx->responderPubKey.ecc);
+}
 
 /* --- Byte-Order Helpers --- */
 

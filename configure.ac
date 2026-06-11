@@ -80,6 +80,60 @@ if test "x$enable_dynamic_mem" = "xyes"; then
     AC_DEFINE([WOLFSPDM_DYNAMIC_MEMORY], [1], [Enable dynamic memory allocation])
 fi
 
+# ML-DSA (FIPS 204) post-quantum signatures (DSP0274 1.4). Default: auto-follow
+# the linked wolfSSL - on when it reports WOLFSSL_HAVE_MLDSA, off otherwise.
+AC_ARG_ENABLE([mldsa],
+    [AS_HELP_STRING([--disable-mldsa], [Disable ML-DSA support even if wolfSSL has it])],
+    [enable_mldsa=$enableval],
+    [enable_mldsa=auto])
+
+AC_MSG_CHECKING([whether wolfSSL provides ML-DSA])
+AC_COMPILE_IFELSE([AC_LANG_SOURCE([[
+    #include <wolfssl/options.h>
+    #include <wolfssl/wolfcrypt/settings.h>
+    #ifndef WOLFSSL_HAVE_MLDSA
+    #error "no mldsa"
+    #endif
+    int main(void) { return 0; }
+]])],
+[have_wolfssl_mldsa=yes],
+[have_wolfssl_mldsa=no])
+AC_MSG_RESULT([$have_wolfssl_mldsa])
+
+# wolfSPDM uses the context-based wc_MlDsaKey_* verification API (FIPS 204
+# ML-DSA.Verify with a context). That API lands post-v5.9.1-stable; older
+# wolfSSL releases ship only the legacy ML-DSA interface and report the same
+# LIBWOLFSSL_VERSION_HEX as wolfSSL master, so we capability-test for the API
+# instead of gating on a version number.
+have_mldsa_api=no
+if test "x$enable_mldsa" != "xno" && test "x$have_wolfssl_mldsa" = "xyes"; then
+    AC_MSG_CHECKING([for the wc_MlDsaKey context API])
+    AC_LINK_IFELSE([AC_LANG_PROGRAM([[
+        #include <wolfssl/options.h>
+        #include <wolfssl/wolfcrypt/settings.h>
+        #include <wolfssl/wolfcrypt/wc_mldsa.h>
+    ]], [[
+        MlDsaKey k; int res = 0; word32 idx = 0;
+        (void)wc_MlDsaKey_VerifyCtx(&k, 0, 0, 0, 0, 0, 0, &res);
+        (void)wc_MlDsaKey_PublicKeyDecode(&k, 0, 0, &idx);
+    ]])],
+    [have_mldsa_api=yes],
+    [have_mldsa_api=no])
+    AC_MSG_RESULT([$have_mldsa_api])
+fi
+
+if test "x$enable_mldsa" = "xno"; then
+    AC_DEFINE([WOLFSPDM_NO_MLDSA], [1], [Disable ML-DSA support])
+    mldsa_status=disabled
+elif test "x$have_mldsa_api" = "xyes"; then
+    mldsa_status=enabled
+elif test "x$enable_mldsa" = "xyes"; then
+    AC_MSG_ERROR([--enable-mldsa requires a wolfSSL with the wc_MlDsaKey context API (wolfSSL master or a release that ships it, built with --enable-mldsa). Use --disable-mldsa or update wolfSSL.])
+else
+    AC_DEFINE([WOLFSPDM_NO_MLDSA], [1], [Disable ML-DSA support])
+    mldsa_status=disabled
+fi
+
 # Output files
 AC_CONFIG_FILES([Makefile wolfspdm.pc])
 AC_OUTPUT
@@ -89,5 +143,6 @@ echo "wolfSPDM configuration summary:"
 echo "  Version:     $PACKAGE_VERSION"
 echo "  Debug:       $enable_debug"
 echo "  Dynamic mem: $enable_dynamic_mem"
+echo "  ML-DSA:      $mldsa_status"
 echo "  wolfSSL:     ${WOLFSSL_DIR:-system}"
 echo ""
