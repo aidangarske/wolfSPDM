@@ -687,6 +687,22 @@ static int test_negotiate_algorithms_kem_build(void)
     ASSERT_EQ(bufSz, 48, "1.2 NEGOTIATE_ALGORITHMS stays 48 bytes");
     ASSERT_EQ(buf[2], 0x04, "1.2 NumAlgoStructTables = 4");
 
+    /* KEM-only preference below 1.4 must fail rather than silently advertise
+     * DHE (no security downgrade of an explicit PQC-only request). */
+    ASSERT_SUCCESS(wolfSPDM_SetKeyExchangePref(ctx, 0, SPDM_KEM_ALGO_ML_KEM_768));
+    ctx->spdmVersion = SPDM_VERSION_12;
+    bufSz = sizeof(buf);
+    ASSERT_EQ(wolfSPDM_BuildNegotiateAlgorithms(ctx, buf, &bufSz),
+        WOLFSPDM_E_ALGO_MISMATCH, "KEM-only below 1.4 must not downgrade to DHE");
+    /* At 1.4 the same preference advertises a KEM-only request: DHE struct
+     * dropped, so 4 structs (AEAD, ReqBaseAsym, KeySchedule, KEM) and no DHE. */
+    ctx->spdmVersion = SPDM_VERSION_14;
+    bufSz = sizeof(buf);
+    ASSERT_SUCCESS(wolfSPDM_BuildNegotiateAlgorithms(ctx, buf, &bufSz));
+    ASSERT_EQ(buf[2], 0x04, "KEM-only: 4 structs (no DHE)");
+    ASSERT_EQ(buf[32], SPDM_ALG_TYPE_AEAD, "KEM-only: DHE dropped, AEAD first");
+    ASSERT_EQ(buf[44], SPDM_ALG_TYPE_KEM, "KEM-only: KEMAlg struct present");
+
     TEST_CTX_FREE();
     TEST_PASS();
 }
@@ -884,6 +900,39 @@ static int test_key_exchange_mlkem_exceeds_dts(void)
 
     ASSERT_EQ(wolfSPDM_KeyExchange(ctx), WOLFSPDM_E_BUFFER_SMALL,
         "oversized ML-KEM KEY_EXCHANGE rejected before send");
+
+    TEST_CTX_FREE();
+    TEST_PASS();
+}
+
+/* KEY_EXCHANGE_RSP parsing for ML-KEM must locate OpaqueData/signature after a
+ * ciphertext-sized ExchangeData, not the 96-byte ECDHE point. A buffer that
+ * stops between the two offsets distinguishes them. */
+static int test_parse_key_exchange_rsp_mlkem_offset(void)
+{
+    byte ek[WOLFSPDM_MLKEM768_EK_SIZE];
+    byte rsp[1100];
+    word32 ekSz = sizeof(ek);
+    TEST_CTX_SETUP();
+
+    printf("test_parse_key_exchange_rsp_mlkem_offset...\n");
+    ctx->spdmVersion = SPDM_VERSION_14;
+    ctx->kemAlgSel = SPDM_KEM_ALGO_ML_KEM_768;
+    ASSERT_SUCCESS(wolfSPDM_GenerateMlKemKey(ctx, ek, &ekSz));
+    ctx->flags.hasResponderPubKey = 1;
+
+    XMEMSET(rsp, 0, sizeof(rsp));
+    rsp[0] = SPDM_VERSION_14;
+    rsp[1] = SPDM_KEY_EXCHANGE_RSP;
+    rsp[6] = 0;   /* no mutual auth */
+
+    /* With the ML-KEM-768 ciphertext (1088), OpaqueLength sits at offset
+     * 40+1088 = 1128, so a 1000-byte buffer fails the length check. If the parse
+     * wrongly used the 96-byte ECDHE size (OpaqueLength at 136) it would read
+     * past 1000 instead of returning here. */
+    ASSERT_EQ(wolfSPDM_ParseKeyExchangeRsp(ctx, rsp, 1000),
+        WOLFSPDM_E_BUFFER_SMALL,
+        "ML-KEM RSP uses ciphertext-sized ExchangeData offset");
 
     TEST_CTX_FREE();
     TEST_PASS();
@@ -2920,6 +2969,7 @@ int main(void)
     test_kex_reconnect_method_switch();
     test_build_key_exchange_mlkem();
     test_key_exchange_mlkem_exceeds_dts();
+    test_parse_key_exchange_rsp_mlkem_offset();
 #endif
 #ifdef WOLFSPDM_HAVE_CHUNK
     test_chunk_reassemble();

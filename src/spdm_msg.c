@@ -83,7 +83,13 @@ int wolfSPDM_BuildNegotiateAlgorithms(WOLFSPDM_CTX* ctx, byte* buf, word32* bufS
     advDhe = (ctx->kexAdvDhe != 0);
     advKem = (ctx->spdmVersion >= SPDM_VERSION_14 && ctx->kexAdvKem != 0);
     if (!advDhe && !advKem) {
-        advDhe = 1;  /* never advertise zero key-exchange methods */
+        /* The caller forced KEM-only (kexAdvDhe == 0) but ML-KEM cannot be
+         * advertised at the negotiated version (< 1.4). Fail rather than
+         * silently re-enable DHE and downgrade the caller's PQC-only intent. */
+        wolfSPDM_DebugPrint(ctx,
+            "NEGOTIATE: KEM-only requested but unavailable at version 0x%02x\n",
+            ctx->spdmVersion);
+        return WOLFSPDM_E_ALGO_MISMATCH;
     }
 #else
     advDhe = 1;  /* DHE is the only key-exchange method without ML-KEM */
@@ -996,6 +1002,11 @@ int wolfSPDM_ParseKeyExchangeRsp(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufS
     exDataLen = WOLFSPDM_ECC_POINT_SIZE;
 #ifdef WOLFSPDM_HAVE_MLKEM
     if (ctx->kexType == WOLFSPDM_KEX_MLKEM) {
+        /* GetKemCtSize reads the ephemeral ML-KEM key; require it live, mirroring
+         * the hasResponderPubKey guard above. */
+        if (!ctx->flags.ephemeralKeyInit) {
+            return WOLFSPDM_E_BAD_STATE;
+        }
         exDataLen = wolfSPDM_GetKemCtSize(ctx);
         if (exDataLen == 0 || exDataLen > WOLFSPDM_MAX_KEM_CT_SIZE) {
             return WOLFSPDM_E_CRYPTO_FAIL;

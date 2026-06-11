@@ -181,9 +181,13 @@ if test "x$enable_mlkem" != "xno" && test "x$have_wolfssl_mlkem" = "xyes"; then
     ]], [[
         MlKemKey k; word32 len = 0;
         (void)wc_MlKemKey_Init(&k, 0, 0, 0);
+        (void)wc_MlKemKey_MakeKey(&k, 0);
         (void)wc_MlKemKey_EncodePublicKey(&k, 0, 0);
-        (void)wc_MlKemKey_Decapsulate(&k, 0, 0, 0);
         (void)wc_MlKemKey_PublicKeySize(&k, &len);
+        (void)wc_MlKemKey_CipherTextSize(&k, &len);
+        (void)wc_MlKemKey_SharedSecretSize(&k, &len);
+        (void)wc_MlKemKey_Decapsulate(&k, 0, 0, 0);
+        (void)wc_MlKemKey_Free(&k);
     ]])],
     [have_mlkem_api=yes],
     [have_mlkem_api=no])

@@ -97,7 +97,7 @@ int wolfSPDM_GetCapabilities(WOLFSPDM_CTX* ctx)
 
 int wolfSPDM_NegotiateAlgorithms(WOLFSPDM_CTX* ctx)
 {
-    byte txBuf[52];   /* NEGOTIATE_ALGORITHMS: 48 bytes */
+    byte txBuf[52];   /* NEGOTIATE_ALGORITHMS: 48 B, or 52 with the KEM struct */
     byte rxBuf[80];   /* ALGORITHMS: ~56 bytes with struct tables */
     int rc;
 #ifndef NO_WOLFSPDM_CHALLENGE

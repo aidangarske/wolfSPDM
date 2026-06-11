@@ -350,8 +350,12 @@ extern "C" {
 #endif
 #endif
 #ifndef WOLFSPDM_MAX_TRANSCRIPT
-#ifdef WOLFSPDM_HAVE_MLDSA
+#if defined(WOLFSPDM_HAVE_MLDSA)
 #define WOLFSPDM_MAX_TRANSCRIPT     16384   /* Maximum transcript buffer */
+#elif defined(WOLFSPDM_HAVE_MLKEM)
+/* ML-KEM (no ML-DSA): an ML-KEM-1024 handshake transcript (ek 1568 + ciphertext
+ * 1568 + the fixed messages) approaches 4 KB, so allow extra headroom. */
+#define WOLFSPDM_MAX_TRANSCRIPT     8192
 #else
 #define WOLFSPDM_MAX_TRANSCRIPT     4096
 #endif
