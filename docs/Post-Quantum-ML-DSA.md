@@ -7,7 +7,9 @@ alongside the classical ECDSA P-384 profile.
 
 All three parameter sets work over the wire: ML-DSA-87's larger responses are
 reassembled with **SPDM 1.2 message chunking** ([[Message Chunking]]). ML-KEM
-hybrid key exchange is tracked as follow-on work.
+**key exchange** is also implemented ([[Post-Quantum ML-KEM]]); combining the two
+gives a **fully post-quantum SPDM handshake** (ML-KEM key exchange + ML-DSA
+authentication, no classical asymmetric crypto).
 
 ## How negotiation works
 

@@ -34,21 +34,29 @@ Maximum negotiated version can be capped with `wolfSPDM_SetMaxVersion`.
 
 - Hash: SHA-384
 - Asymmetric signature: ECDSA P-384
-- DHE: secp384r1
+- Key exchange: ECDHE secp384r1
 - AEAD: AES-256-GCM
 - Key schedule: SPDM key schedule + HKDF-SHA384
 
-## Post-quantum signatures (SPDM 1.4, optional)
+## Post-quantum cryptography (SPDM 1.4, optional)
 
-When built against a wolfSSL with ML-DSA (FIPS 204), wolfSPDM additionally
-advertises **ML-DSA-44 / ML-DSA-65 / ML-DSA-87** in the SPDM 1.4 `PqcAsymAlgo`
-field (dual-stack alongside ECDSA P-384). The responder selects exactly one
-signature algorithm; wolfSPDM verifies whichever was negotiated. See
-[[Post-Quantum ML-DSA]].
+When built against a wolfSSL with the matching support, wolfSPDM adds two
+independent post-quantum capabilities, each dual-stacked with the classical
+profile so the responder selects one:
 
-Large responses (e.g. an ML-DSA-87 signature that exceeds the negotiated
-`DataTransferSize`) are reassembled with **SPDM 1.2 message chunking**
-(`CHUNK_GET`); see [[Message Chunking]].
+- **Signatures (ML-DSA, FIPS 204):** advertises **ML-DSA-44 / 65 / 87** in the
+  1.4 `PqcAsymAlgo` field alongside ECDSA P-384; verifies whichever was
+  negotiated. See [[Post-Quantum ML-DSA]].
+- **Key exchange (ML-KEM, FIPS 203):** advertises **ML-KEM-512 / 768 / 1024**
+  as a `KEMAlg` struct alongside the ECDHE group; sends the encapsulation key and
+  decapsulates the responder's ciphertext. Standalone (not hybrid). See
+  [[Post-Quantum ML-KEM]].
+
+Enabling both yields a **fully post-quantum SPDM handshake** (ML-KEM key
+exchange + ML-DSA authentication). Large responses (e.g. an ML-DSA-87 signature,
+or ML-DSA + the ML-KEM ciphertext, exceeding the negotiated `DataTransferSize`)
+are reassembled with **SPDM 1.2 message chunking** (`CHUNK_GET`); see
+[[Message Chunking]].
 
 ## Notable implementation scope
 

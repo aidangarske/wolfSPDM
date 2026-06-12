@@ -60,6 +60,14 @@ extern "C" {
     #endif
 #endif
 
+/* ML-KEM (FIPS 203) key exchange follows the linked wolfSSL: on when it
+ * reports WOLFSSL_HAVE_MLKEM unless WOLFSPDM_NO_MLKEM is defined. */
+#if defined(WOLFSSL_HAVE_MLKEM) && !defined(WOLFSPDM_NO_MLKEM)
+    #ifndef WOLFSPDM_HAVE_MLKEM
+        #define WOLFSPDM_HAVE_MLKEM
+    #endif
+#endif
+
 /* --- SPDM Protocol Constants (DMTF DSP0274 / DSP0277) --- */
 
 /* SPDM Version Numbers */
@@ -157,6 +165,12 @@ extern "C" {
 /* DHE (Diffie-Hellman Ephemeral) Algorithms */
 #define SPDM_DHE_ALGO_SECP384R1     0x0010      /* secp384r1 */
 
+/* KEM Algorithms (DSP0274 1.4 Table 24 KEMAlg AlgSupported). Byte 0 bit mask;
+ * one selected, mutually exclusive with a DHE group (no hybrid in 1.4). */
+#define SPDM_KEM_ALGO_ML_KEM_512    0x0001      /* ML-KEM-512 */
+#define SPDM_KEM_ALGO_ML_KEM_768    0x0002      /* ML-KEM-768 */
+#define SPDM_KEM_ALGO_ML_KEM_1024   0x0004      /* ML-KEM-1024 */
+
 /* AEAD Algorithms */
 #define SPDM_AEAD_ALGO_AES_256_GCM  0x0002      /* AES-256-GCM */
 
@@ -174,6 +188,10 @@ extern "C" {
 /* Which asymmetric family the responder selected (ctx->asymType) */
 #define WOLFSPDM_ASYM_ECDSA         0  /* BaseAsymSel = ECDSA P-384 */
 #define WOLFSPDM_ASYM_MLDSA         1  /* PqcAsymSel  = ML-DSA */
+
+/* Which key-exchange method the responder selected (ctx->kexType) */
+#define WOLFSPDM_KEX_ECDHE          0  /* DHE group  = secp384r1 */
+#define WOLFSPDM_KEX_MLKEM          1  /* KEM        = ML-KEM */
 
 /* Algorithm Set B Fixed Parameters */
 #define WOLFSPDM_HASH_SIZE          48  /* SHA-384 output size */
@@ -196,6 +214,28 @@ extern "C" {
 #define WOLFSPDM_MAX_SIG_SIZE       WOLFSPDM_ECC_SIG_SIZE
 #endif
 
+#ifdef WOLFSPDM_HAVE_MLKEM
+/* ML-KEM sizes (FIPS 203). The KEY_EXCHANGE ExchangeData carries the
+ * encapsulation key ek; the KEY_EXCHANGE_RSP ExchangeData carries the ciphertext
+ * c; decapsulation yields a 32-byte shared secret. */
+#define WOLFSPDM_MLKEM512_EK_SIZE   800
+#define WOLFSPDM_MLKEM512_CT_SIZE   768
+#define WOLFSPDM_MLKEM768_EK_SIZE   1184
+#define WOLFSPDM_MLKEM768_CT_SIZE   1088
+#define WOLFSPDM_MLKEM1024_EK_SIZE  1568
+#define WOLFSPDM_MLKEM1024_CT_SIZE  1568
+#define WOLFSPDM_KEM_SS_SIZE        32
+#define WOLFSPDM_MAX_KEM_EK_SIZE    WOLFSPDM_MLKEM1024_EK_SIZE
+#define WOLFSPDM_MAX_KEM_CT_SIZE    WOLFSPDM_MLKEM1024_CT_SIZE
+/* Fixed OpaqueData block wolfSPDM_BuildKeyExchange appends after ExchangeData
+ * (2-byte OpaqueLength + 20-byte secured-message-version block). */
+#define WOLFSPDM_KEX_OPAQUE_LEN     22
+/* KEY_EXCHANGE request buffer: fixed fields + the largest ek + OpaqueData. */
+#define WOLFSPDM_KEX_REQ_BUF        (96 + WOLFSPDM_MAX_KEM_EK_SIZE)
+#else
+#define WOLFSPDM_KEX_REQ_BUF        192
+#endif
+
 /* Receive-buffer size for the signature-bearing responses (KEY_EXCHANGE_RSP,
  * CHALLENGE_AUTH). Sized for fixed fields + a small OpaqueData block + the
  * negotiated SigLen + HMAC, NOT the full advertised DataTransferSize: like the
@@ -203,8 +243,16 @@ extern "C" {
  * responders keep OpaqueData in these two responses small. These are on-stack
  * buffers in wolfSPDM_KeyExchange / wolfSPDM_Challenge, so the ML-DSA value
  * (~5.3 KB) is the per-call stack cost on constrained targets. */
-#ifdef WOLFSPDM_HAVE_MLDSA
+#if defined(WOLFSPDM_HAVE_MLDSA) && defined(WOLFSPDM_HAVE_MLKEM)
+/* ML-KEM ciphertext c (up to 1568 B) replaces the 96-byte ECDHE point in the
+ * KEY_EXCHANGE_RSP ExchangeData, so add headroom for it alongside the SigLen. */
+#define WOLFSPDM_SIG_RSP_BUF        (640 + WOLFSPDM_MAX_SIG_SIZE + \
+                                     WOLFSPDM_MAX_KEM_CT_SIZE)
+#elif defined(WOLFSPDM_HAVE_MLDSA)
 #define WOLFSPDM_SIG_RSP_BUF        (640 + WOLFSPDM_MAX_SIG_SIZE)
+#elif defined(WOLFSPDM_HAVE_MLKEM)
+#define WOLFSPDM_SIG_RSP_BUF        (640 + WOLFSPDM_MAX_SIG_SIZE + \
+                                     WOLFSPDM_MAX_KEM_CT_SIZE)
 #else
 #define WOLFSPDM_SIG_RSP_BUF        512
 #endif
@@ -302,8 +350,12 @@ extern "C" {
 #endif
 #endif
 #ifndef WOLFSPDM_MAX_TRANSCRIPT
-#ifdef WOLFSPDM_HAVE_MLDSA
+#if defined(WOLFSPDM_HAVE_MLDSA)
 #define WOLFSPDM_MAX_TRANSCRIPT     16384   /* Maximum transcript buffer */
+#elif defined(WOLFSPDM_HAVE_MLKEM)
+/* ML-KEM (no ML-DSA): an ML-KEM-1024 handshake transcript (ek 1568 + ciphertext
+ * 1568 + the fixed messages) approaches 4 KB, so allow extra headroom. */
+#define WOLFSPDM_MAX_TRANSCRIPT     8192
 #else
 #define WOLFSPDM_MAX_TRANSCRIPT     4096
 #endif

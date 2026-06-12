@@ -7,6 +7,8 @@ wolfSPDM is a lightweight C library implementing [SPDM 1.2 / 1.3 / 1.4](https://
 - **Standard SPDM 1.2 / 1.3 / 1.4 requester** per DMTF DSP0274 and DSP0277
 - **Algorithm Set B fixed:** ECDSA P-384, ECDHE P-384, SHA-384, AES-256-GCM, HKDF-SHA384
 - **Post-quantum signatures (SPDM 1.4):** optional ML-DSA-44 / 65 / 87 (FIPS 204), dual-stacked with ECDSA P-384 — see the [Post-Quantum ML-DSA](https://github.com/aidangarske/wolfSPDM/wiki/Post-Quantum-ML-DSA) wiki page
+- **Post-quantum key exchange (SPDM 1.4):** optional ML-KEM-512 / 768 / 1024 (FIPS 203), advertised alongside ECDHE P-384 — see the [Post-Quantum ML-KEM](https://github.com/aidangarske/wolfSPDM/wiki/Post-Quantum-ML-KEM) wiki page
+- **Fully post-quantum SPDM handshake:** ML-KEM key exchange + ML-DSA authentication (no classical asymmetric crypto), proven end-to-end against spdm-emu
 - **Zero-malloc by default:** static memory, ~32 KB context, ideal for constrained/embedded environments
 - **Optional `--enable-dynamic-mem`** for heap-allocated contexts on small-stack platforms
 - **Full session lifecycle:** key exchange, finish, encrypted messaging, heartbeat keep-alive, key update
@@ -43,7 +45,7 @@ sudo ldconfig
 
 `--enable-sp` enables Single Precision math with optimized ECC P-384, required for SPDM Algorithm Set B on ARM64 and other constrained targets. `--enable-all` works as a superset.
 
-For post-quantum ML-DSA signatures, add `--enable-mldsa` and use wolfSSL master (or a release that ships the `wc_MlDsaKey` context API). wolfSPDM then auto-enables ML-DSA; `./configure --disable-mldsa` forces it off.
+For post-quantum cryptography, add `--enable-mldsa` (signatures, FIPS 204) and/or `--enable-mlkem` (key exchange, FIPS 203) to wolfSSL — use wolfSSL master (or a release that ships the `wc_MlDsaKey` context API and `wc_MlKemKey` API). wolfSPDM then auto-enables each when the linked wolfSSL provides it; `./configure --disable-mldsa` / `--disable-mlkem` force them off. Enabling both gives a fully post-quantum SPDM handshake (ML-KEM key exchange + ML-DSA authentication).
 
 ## Build
 
@@ -60,6 +62,8 @@ make check
 |---|---|
 | `--enable-debug` | Debug output with `-g -O0` (default: `-O2`) |
 | `--enable-dynamic-mem` | Use heap allocation for `WOLFSPDM_CTX` (default: static) |
+| `--disable-mldsa` / `--disable-mlkem` | Force off ML-DSA signatures / ML-KEM key exchange (default: auto-follow wolfSSL) |
+| `--disable-chunking` | Compile out SPDM 1.2 message chunking (default: enabled) |
 | `--with-wolfssl=PATH` | wolfSSL installation path |
 
 ### Memory Modes
@@ -148,6 +152,9 @@ Full documentation is available in the [GitHub Wiki](https://github.com/aidangar
 - [Supported Operations](https://github.com/aidangarske/wolfSPDM/wiki/Supported-Operations): SPDM operation coverage and API mapping
 - [API Reference](https://github.com/aidangarske/wolfSPDM/wiki/API-Reference): Public function groups and common error-code references
 - [Configuration and Macros](https://github.com/aidangarske/wolfSPDM/wiki/Configuration-and-Macros): Configure flags and compile-time feature controls
+- [Post-Quantum ML-DSA](https://github.com/aidangarske/wolfSPDM/wiki/Post-Quantum-ML-DSA): Post-quantum signatures (FIPS 204)
+- [Post-Quantum ML-KEM](https://github.com/aidangarske/wolfSPDM/wiki/Post-Quantum-ML-KEM): Post-quantum key exchange (FIPS 203) and the fully post-quantum handshake
+- [Message Chunking](https://github.com/aidangarske/wolfSPDM/wiki/Message-Chunking): SPDM 1.2 CHUNK_GET reassembly for large responses
 - [Testing and CI](https://github.com/aidangarske/wolfSPDM/wiki/Testing-and-CI): Unit tests, emulator integration tests, and CI workflow coverage
 - [Project Structure](https://github.com/aidangarske/wolfSPDM/wiki/Project-Structure): Source layout and module responsibilities
 - [Attestation Notes](https://github.com/aidangarske/wolfSPDM/wiki/Attestation-Notes): Measurement and challenge attestation behavior

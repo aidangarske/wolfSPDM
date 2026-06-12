@@ -97,7 +97,7 @@ int wolfSPDM_GetCapabilities(WOLFSPDM_CTX* ctx)
 
 int wolfSPDM_NegotiateAlgorithms(WOLFSPDM_CTX* ctx)
 {
-    byte txBuf[52];   /* NEGOTIATE_ALGORITHMS: 48 bytes */
+    byte txBuf[52];   /* NEGOTIATE_ALGORITHMS: 48 B, or 52 with the KEM struct */
     byte rxBuf[80];   /* ALGORITHMS: ~56 bytes with struct tables */
     int rc;
 #ifndef NO_WOLFSPDM_CHALLENGE
@@ -274,7 +274,7 @@ int wolfSPDM_GetCertificate(WOLFSPDM_CTX* ctx, int slotId)
 
 int wolfSPDM_KeyExchange(WOLFSPDM_CTX* ctx)
 {
-    byte txBuf[192];  /* KEY_EXCHANGE: ~158 bytes */
+    byte txBuf[WOLFSPDM_KEX_REQ_BUF];  /* KEY_EXCHANGE: ~158 B / ML-KEM ek */
     byte rxBuf[WOLFSPDM_SIG_RSP_BUF];  /* KEY_EXCHANGE_RSP (ECDSA ~302 / ML-DSA) */
     word32 txSz = sizeof(txBuf);
     word32 rxSz = sizeof(rxBuf);
@@ -304,6 +304,20 @@ int wolfSPDM_KeyExchange(WOLFSPDM_CTX* ctx)
     rc = wolfSPDM_BuildKeyExchange(ctx, txBuf, &txSz);
     if (rc != WOLFSPDM_SUCCESS) {
         return rc;
+    }
+
+    /* An ML-KEM encapsulation key makes this request large (up to ~1.6 KB for
+     * ML-KEM-1024), unlike the ~158-byte ECDHE request. wolfSPDM implements
+     * CHUNK_GET (response reassembly) but not CHUNK_SEND (request
+     * fragmentation), so if the request exceeds the responder's advertised
+     * DataTransferSize, fail fast with a clear error rather than transmit a
+     * non-conformant oversized request (DSP0274 Sec. 10.27). */
+    if (ctx->dataTransferSize != 0 && txSz > ctx->dataTransferSize) {
+        wolfSPDM_DebugPrint(ctx,
+            "KEY_EXCHANGE %u B exceeds responder DataTransferSize %u "
+            "(no CHUNK_SEND)\n",
+            (unsigned)txSz, (unsigned)ctx->dataTransferSize);
+        return WOLFSPDM_E_BUFFER_SMALL;
     }
 
     rc = wolfSPDM_TranscriptAdd(ctx, txBuf, txSz);

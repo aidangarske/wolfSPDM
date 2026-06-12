@@ -50,6 +50,9 @@
 #ifdef WOLFSPDM_HAVE_MLDSA
     #include <wolfssl/wolfcrypt/wc_mldsa.h>
 #endif
+#ifdef WOLFSPDM_HAVE_MLKEM
+    #include <wolfssl/wolfcrypt/wc_mlkem.h>
+#endif
 
 #if defined(LIBWOLFSSL_VERSION_HEX) && LIBWOLFSSL_VERSION_HEX < 0x05008004
 /* wc_ForceZero added in wolfSSL v5.8.4; provide a stub for older releases. */
@@ -159,10 +162,22 @@ struct WOLFSPDM_CTX {
     byte   slotMask;            /* DIGESTS Param1: bit i = slot i populated */
     byte   currentSlotId;       /* Slot the most recent GET_CERTIFICATE used */
 
-    /* Ephemeral ECDHE key (generated for KEY_EXCHANGE) */
-    ecc_key ephemeralKey;
+    /* Ephemeral key generated for KEY_EXCHANGE. kexType records the negotiated
+     * key-exchange method; only one union member is ever live. The ML-KEM key
+     * also holds the decapsulation key dk between request and response. */
+    byte kexType;                       /* WOLFSPDM_KEX_ECDHE|_MLKEM */
+    word16 kemAlgSel;                   /* Selected SPDM_KEM_ALGO_* (0 if ECDHE) */
+    byte kexAdvDhe;                     /* Advertise the DHE group (default 1) */
+    word16 kexAdvKem;                   /* ML-KEM mask to advertise (0 = none) */
+    union {
+        ecc_key     ecc;                /* ECDHE secp384r1 (Algorithm Set B) */
+#ifdef WOLFSPDM_HAVE_MLKEM
+        MlKemKey    mlkem;              /* ML-KEM (DSP0274 1.4) */
+#endif
+    } ephemeralKey;
 
-    /* ECDH shared secret (P-384 X-coordinate = 48 bytes) */
+    /* Key-exchange shared secret: ECDH P-384 X-coordinate (48 bytes) or an
+     * ML-KEM decapsulated shared secret (32 bytes); sharedSecretSz tracks which. */
     byte sharedSecret[WOLFSPDM_ECC_KEY_SIZE];
     word32 sharedSecretSz;
 
@@ -271,6 +286,18 @@ static WC_INLINE void wolfSPDM_FreeResponderPubKey(WOLFSPDM_CTX* ctx)
     }
 #endif
     wc_ecc_free(&ctx->responderPubKey.ecc);
+}
+
+/* Free whichever ephemeral key is live (union member by kexType). */
+static WC_INLINE void wolfSPDM_FreeEphemeralKey(WOLFSPDM_CTX* ctx)
+{
+#ifdef WOLFSPDM_HAVE_MLKEM
+    if (ctx->kexType == WOLFSPDM_KEX_MLKEM) {
+        wc_MlKemKey_Free(&ctx->ephemeralKey.mlkem);
+        return;
+    }
+#endif
+    wc_ecc_free(&ctx->ephemeralKey.ecc);
 }
 
 /* --- Byte-Order Helpers --- */
@@ -408,6 +435,14 @@ int wolfSPDM_ExportEphemeralPubKey(WOLFSPDM_CTX* ctx,
 /* Compute ECDH shared secret from responder's public key */
 int wolfSPDM_ComputeSharedSecret(WOLFSPDM_CTX* ctx,
     const byte* peerPubKeyX, const byte* peerPubKeyY);
+
+#ifdef WOLFSPDM_HAVE_MLKEM
+/* Generate the ephemeral ML-KEM key pair and export the encapsulation key ek */
+int wolfSPDM_GenerateMlKemKey(WOLFSPDM_CTX* ctx, byte* ekOut, word32* ekOutSz);
+
+/* Decapsulate the responder's ciphertext c into ctx->sharedSecret (K') */
+int wolfSPDM_MlKemDecapsulate(WOLFSPDM_CTX* ctx, const byte* ct, word32 ctSz);
+#endif
 
 /* Generate random bytes */
 int wolfSPDM_GetRandom(WOLFSPDM_CTX* ctx, byte* out, word32 outSz);

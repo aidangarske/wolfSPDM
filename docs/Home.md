@@ -18,6 +18,8 @@ It uses [wolfSSL / wolfCrypt](https://www.wolfssl.com/) as its crypto backend an
 | SPDM 1.2/1.3/1.4 | Standards-based negotiation and session setup |
 | Fixed Algorithm Set B | ECDSA P-384, ECDHE P-384, SHA-384, AES-256-GCM, HKDF-SHA384 |
 | Post-quantum signatures (1.4) | Optional ML-DSA-44/65/87 (FIPS 204), dual-stacked with ECDSA P-384 |
+| Post-quantum key exchange (1.4) | Optional ML-KEM-512/768/1024 (FIPS 203), advertised alongside ECDHE P-384 |
+| Fully post-quantum handshake | ML-KEM key exchange + ML-DSA authentication, no classical asymmetric crypto |
 | Message chunking | SPDM 1.2 CHUNK_GET reassembly over a fixed MTU buffer (zero-alloc) |
 | Zero-malloc by default | Static context (`WOLFSPDM_CTX_STATIC_SIZE`, 32 KB; ~72 KB with ML-DSA) |
 | Optional dynamic context | `--enable-dynamic-mem` enables `wolfSPDM_New()` |
@@ -32,6 +34,7 @@ It uses [wolfSSL / wolfCrypt](https://www.wolfssl.com/) as its crypto backend an
 | [[Getting Started]] | Dependencies, build, install, and first connection flow |
 | [[Supported Operations]] | Supported SPDM flows and operation/API mapping |
 | [[Post-Quantum ML-DSA]] | SPDM 1.4 ML-DSA (FIPS 204) post-quantum signatures |
+| [[Post-Quantum ML-KEM]] | SPDM 1.4 ML-KEM (FIPS 203) post-quantum key exchange + fully post-quantum handshake |
 | [[Message Chunking]] | SPDM 1.2 CHUNK_GET reassembly of large responses |
 | [[API Reference]] | Public API grouped by lifecycle and purpose |
 | [[Configuration and Macros]] | Configure flags and compile-time feature controls |

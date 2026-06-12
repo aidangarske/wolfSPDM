@@ -1,11 +1,12 @@
-name: SPDM Emulator PQC (ML-DSA) Test
+name: SPDM Emulator PQC Test
 
-# Post-quantum interop, mirroring the classical SPDM Emulator Integration Test
-# matrix (ubuntu 22.04/24.04 x64 + 24.04 aarch64, each with static and dynamic
-# memory). The wc_MlDsaKey context API wolfSPDM verifies with lands
-# post-v5.9.1-stable, so this job pins wolfSSL master. libspdm's ML-DSA is only
-# in its OpenSSL backend (the mbedtls backend stubs it out), so spdm-emu is
-# built with CRYPTO=openssl.
+# Post-quantum interop (ML-DSA signing + ML-KEM key exchange, and a full-PQ
+# combination), mirroring the classical SPDM Emulator Integration Test matrix
+# (ubuntu 22.04/24.04 x64 + 24.04 aarch64, each with static and dynamic memory).
+# The wc_MlDsaKey context API wolfSPDM verifies with lands post-v5.9.1-stable,
+# so this job pins wolfSSL master. libspdm's ML-DSA/ML-KEM are only in its
+# OpenSSL backend (the mbedtls backend stubs them out), so spdm-emu is built
+# with CRYPTO=openssl.
 
 on:
   push:
@@ -62,30 +63,46 @@ jobs:
         run: echo "biweekly=$(( $(date +%s) / 1296000 ))" >> $GITHUB_OUTPUT
 
       # --- wolfSSL master with ML-DSA (rebuilt to track upstream drift) ---
-      - name: Build wolfSSL master (--enable-mldsa)
+      - name: Build wolfSSL master (--enable-mldsa --enable-mlkem)
         run: |
           cd ~
           git clone --depth 1 --branch master https://github.com/wolfSSL/wolfssl.git
           cd wolfssl
           ./autogen.sh
           ./configure --enable-ecc --enable-sha384 --enable-aesgcm \
-                      --enable-hkdf --enable-sp --enable-mldsa \
+                      --enable-hkdf --enable-sp --enable-mldsa --enable-mlkem \
                       --prefix=$HOME/wolfssl-install
           make -j"$(nproc)"
           make install
           grep LIBWOLFSSL_VERSION_STRING $HOME/wolfssl-install/include/wolfssl/version.h
 
-      # --- wolfSPDM with ML-DSA asserted on, static or dynamic memory ---
-      - name: Build and install wolfSPDM (--enable-mldsa)
+      # --- ML-KEM without ML-DSA: a real config (ML-KEM/Kyber is commonly
+      #     enabled for TLS hybrid KEX while ML-DSA is not). Exercises the
+      #     ML-KEM-only WOLFSPDM_CTX_STATIC_SIZE budget and unit tests, which
+      #     the combined build below does not. Cleaned up before the full build. ---
+      - name: Build + test wolfSPDM ML-KEM-only (--disable-mldsa --enable-mlkem)
         run: |
           ./autogen.sh
           ./configure --with-wolfssl=$HOME/wolfssl-install \
-                      --prefix=$HOME/wolfspdm-install --enable-mldsa \
+                      --disable-mldsa --enable-mlkem \
+                      ${{ matrix.dynamic-mem == 'yes' && '--enable-dynamic-mem' || '' }}
+          make -j"$(nproc)"
+          make check
+          make distclean
+        env:
+          LD_LIBRARY_PATH: ${{ github.workspace }}/.libs:${{ github.workspace }}/src/.libs:${{ env.HOME }}/wolfssl-install/lib
+
+      # --- wolfSPDM with ML-DSA + ML-KEM asserted on, static or dynamic memory ---
+      - name: Build and install wolfSPDM (--enable-mldsa --enable-mlkem)
+        run: |
+          ./autogen.sh
+          ./configure --with-wolfssl=$HOME/wolfssl-install \
+                      --prefix=$HOME/wolfspdm-install --enable-mldsa --enable-mlkem \
                       ${{ matrix.dynamic-mem == 'yes' && '--enable-dynamic-mem' || '' }}
           make -j"$(nproc)"
           make install
 
-      - name: Run unit tests (includes ML-DSA verify)
+      - name: Run unit tests (includes ML-DSA verify + ML-KEM decap)
         run: make check
         env:
           LD_LIBRARY_PATH: ${{ github.workspace }}/.libs:${{ github.workspace }}/src/.libs:${{ env.HOME }}/wolfssl-install/lib
@@ -101,7 +118,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/spdm-emu/build
-          key: spdm-emu-pqc-openssl-v3-${{ matrix.os }}-${{ matrix.arch }}-${{ steps.cache-period.outputs.biweekly }}
+          key: spdm-emu-pqc-openssl-v4-${{ matrix.os }}-${{ matrix.arch }}-${{ steps.cache-period.outputs.biweekly }}
 
       - name: Build spdm-emu (CRYPTO=openssl)
         if: steps.cache-spdm-emu.outputs.cache-hit != 'true'
@@ -161,6 +178,7 @@ jobs:
               fi
               kill $emu 2>/dev/null || true
               wait $emu 2>/dev/null || true
+              pkill -f spdm_responder_emu 2>/dev/null || true
               [ $rc -eq 0 ] && break
               echo "--- responder log (attempt $attempt) ---"
               cat /tmp/pqc_emu_${alg}_${label}.log || true
@@ -189,6 +207,150 @@ jobs:
             exit 1
           fi
           echo "All ML-DSA 44/65/87 interop cases passed."
+
+      # --- ML-KEM interop: responder offers only ML-KEM (--dhe NONE) with ECDSA
+      #     signing, so the handshake performs ML-KEM key exchange in isolation.
+      #     The requester forces KEM-only advertisement with --kex. ek (<=1568 B)
+      #     and ciphertext c (<=1568 B) fit one message under the responder's
+      #     DataTransferSize, so this tests the KEM path without chunking.
+      - name: ML-KEM 512/768/1024 session + measurements + challenge
+        run: |
+          export LD_LIBRARY_PATH=$HOME/wolfspdm-install/lib:$HOME/wolfssl-install/lib
+          export SPDM_EMU_PATH=$HOME/spdm-emu/build/bin
+          export SPDM_EMU_CERT_DIR=ecp384
+          DEMO=./examples/spdm_demo
+          FAILURES=""
+
+          wait_for_port() {
+            local i
+            for i in $(seq 1 50); do
+              if ss -ltn 2>/dev/null | grep -q ':2323 '; then return 0; fi
+              sleep 0.2
+            done
+            return 1
+          }
+
+          # $1 emu KEM name, $2 demo --kex name, $3 label, then demo args.
+          run_kem() {
+            local kem="$1" kex="$2" label="$3"; shift 3
+            echo "::group::$kem $label"
+            local attempt rc=1 emu
+            for attempt in 1 2 3; do
+              ( cd "$SPDM_EMU_PATH" && ./spdm_responder_emu --ver 1.4 \
+                  --hash SHA_384 --asym ECDSA_P384 --pqc_asym NONE \
+                  --dhe NONE --kem "$kem" --aead AES_256_GCM \
+                  >/tmp/pqc_emu_${kem}_${label}.log 2>&1 ) &
+              emu=$!
+              if wait_for_port; then
+                sleep 1
+                if "$DEMO" "$@" --ver 1.4 --kex "$kex" --debug; then rc=0; else rc=$?; fi
+              else
+                rc=1
+              fi
+              kill $emu 2>/dev/null || true
+              wait $emu 2>/dev/null || true
+              pkill -f spdm_responder_emu 2>/dev/null || true
+              [ $rc -eq 0 ] && break
+              echo "--- responder log (attempt $attempt) ---"
+              cat /tmp/pqc_emu_${kem}_${label}.log || true
+              echo "attempt $attempt for $kem $label failed (rc=$rc), retrying"
+              sleep 1
+            done
+            echo "::endgroup::"
+            if [ $rc -ne 0 ]; then
+              echo "::error::$kem $label failed after retries (rc=$rc)"
+              FAILURES="$FAILURES $kem/$label"
+            else
+              echo "$kem $label: OK"
+            fi
+          }
+
+          for spec in "ML_KEM_512 mlkem512" "ML_KEM_768 mlkem768" \
+                      "ML_KEM_1024 mlkem1024"; do
+            set -- $spec
+            kem="$1"; kex="$2"
+            run_kem "$kem" "$kex" session   --emu
+            run_kem "$kem" "$kex" meas      --meas
+            run_kem "$kem" "$kex" challenge --challenge
+          done
+
+          if [ -n "$FAILURES" ]; then
+            echo "::error::ML-KEM interop failures:$FAILURES"
+            exit 1
+          fi
+          echo "All ML-KEM 512/768/1024 interop cases passed."
+
+      # --- Full post-quantum handshake: ML-KEM-768 key exchange + ML-DSA
+      #     signing together, no classical asymmetric crypto. ML-DSA-65 fits one
+      #     message; ML-DSA-87 (sig 4627 B) + ciphertext c (1088 B) exceeds the
+      #     DataTransferSize, so this case also exercises CHUNK_GET reassembly -
+      #     ML-KEM + ML-DSA + chunking in a single handshake.
+      - name: Full PQ (ML-KEM-768 + ML-DSA 65/87) session + measurements + challenge
+        run: |
+          export LD_LIBRARY_PATH=$HOME/wolfspdm-install/lib:$HOME/wolfssl-install/lib
+          export SPDM_EMU_PATH=$HOME/spdm-emu/build/bin
+          DEMO=./examples/spdm_demo
+          FAILURES=""
+
+          wait_for_port() {
+            local i
+            for i in $(seq 1 50); do
+              if ss -ltn 2>/dev/null | grep -q ':2323 '; then return 0; fi
+              sleep 0.2
+            done
+            return 1
+          }
+
+          # $1 pqc_asym (ML_DSA_xx), $2 cert dir, $3 label, then demo args. KEM is
+          # ML-KEM-768 throughout; the requester forces it with --kex mlkem768.
+          run_pq() {
+            local pqc="$1" certdir="$2" label="$3"; shift 3
+            export SPDM_EMU_CERT_DIR="$certdir"
+            echo "::group::$pqc+ML_KEM_768 $label"
+            local attempt rc=1 emu
+            for attempt in 1 2 3; do
+              ( cd "$SPDM_EMU_PATH" && ./spdm_responder_emu --ver 1.4 \
+                  --hash SHA_384 --asym NONE --pqc_asym "$pqc" \
+                  --dhe NONE --kem ML_KEM_768 --aead AES_256_GCM \
+                  >/tmp/pqc_emu_${pqc}_kem_${label}.log 2>&1 ) &
+              emu=$!
+              if wait_for_port; then
+                sleep 1
+                if "$DEMO" "$@" --ver 1.4 --kex mlkem768 --debug; then rc=0; else rc=$?; fi
+              else
+                rc=1
+              fi
+              kill $emu 2>/dev/null || true
+              wait $emu 2>/dev/null || true
+              pkill -f spdm_responder_emu 2>/dev/null || true
+              [ $rc -eq 0 ] && break
+              echo "--- responder log (attempt $attempt) ---"
+              cat /tmp/pqc_emu_${pqc}_kem_${label}.log || true
+              echo "attempt $attempt for $pqc+KEM $label failed (rc=$rc), retrying"
+              sleep 1
+            done
+            echo "::endgroup::"
+            if [ $rc -ne 0 ]; then
+              echo "::error::$pqc+ML_KEM_768 $label failed after retries (rc=$rc)"
+              FAILURES="$FAILURES $pqc+kem/$label"
+            else
+              echo "$pqc+ML_KEM_768 $label: OK"
+            fi
+          }
+
+          for spec in "ML_DSA_65 mldsa65" "ML_DSA_87 mldsa87"; do
+            set -- $spec
+            pqc="$1"; dir="$2"
+            run_pq "$pqc" "$dir" session   --emu
+            run_pq "$pqc" "$dir" meas      --meas
+            run_pq "$pqc" "$dir" challenge --challenge
+          done
+
+          if [ -n "$FAILURES" ]; then
+            echo "::error::Full-PQ interop failures:$FAILURES"
+            exit 1
+          fi
+          echo "All full-PQ (ML-KEM + ML-DSA) interop cases passed."
 
       - name: Upload logs on failure
         if: failure()

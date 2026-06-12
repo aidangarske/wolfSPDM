@@ -657,6 +657,349 @@ static int test_challenge_auth_mldsa_sigsize(void)
 #endif /* !NO_WOLFSPDM_CHALLENGE */
 #endif /* WOLFSPDM_HAVE_MLDSA */
 
+#ifdef WOLFSPDM_HAVE_MLKEM
+static int test_negotiate_algorithms_kem_build(void)
+{
+    byte buf[64];
+    word32 bufSz;
+    TEST_CTX_SETUP();
+
+    printf("test_negotiate_algorithms_kem_build...\n");
+
+    /* SPDM 1.4: a 5th KEMAlg struct (AlgType 0x07) at offset 48 advertises
+     * ML-KEM 512|768|1024 = 0x07, NumAlgoStructTables = 5, Length = 52. */
+    ctx->spdmVersion = SPDM_VERSION_14;
+    bufSz = sizeof(buf);
+    ASSERT_SUCCESS(wolfSPDM_BuildNegotiateAlgorithms(ctx, buf, &bufSz));
+    ASSERT_EQ(bufSz, 52, "1.4 NEGOTIATE_ALGORITHMS with KEM is 52 bytes");
+    ASSERT_EQ(buf[2], 0x05, "NumAlgoStructTables = 5");
+    ASSERT_EQ(buf[48], SPDM_ALG_TYPE_KEM, "KEMAlg AlgType 0x07 at offset 48");
+    ASSERT_EQ(buf[50],
+        (SPDM_KEM_ALGO_ML_KEM_512 | SPDM_KEM_ALGO_ML_KEM_768 |
+         SPDM_KEM_ALGO_ML_KEM_1024),
+        "KEMAlg advertises ML-KEM 512/768/1024");
+    ASSERT_EQ(buf[32], SPDM_ALG_TYPE_DHE, "DHE struct still present (dual-stack)");
+
+    /* SPDM 1.2: no KEMAlg struct, message stays 48 bytes. */
+    ctx->spdmVersion = SPDM_VERSION_12;
+    bufSz = sizeof(buf);
+    ASSERT_SUCCESS(wolfSPDM_BuildNegotiateAlgorithms(ctx, buf, &bufSz));
+    ASSERT_EQ(bufSz, 48, "1.2 NEGOTIATE_ALGORITHMS stays 48 bytes");
+    ASSERT_EQ(buf[2], 0x04, "1.2 NumAlgoStructTables = 4");
+
+    /* KEM-only preference below 1.4 must fail rather than silently advertise
+     * DHE (no security downgrade of an explicit PQC-only request). */
+    ASSERT_SUCCESS(wolfSPDM_SetKeyExchangePref(ctx, 0, SPDM_KEM_ALGO_ML_KEM_768));
+    ctx->spdmVersion = SPDM_VERSION_12;
+    bufSz = sizeof(buf);
+    ASSERT_EQ(wolfSPDM_BuildNegotiateAlgorithms(ctx, buf, &bufSz),
+        WOLFSPDM_E_ALGO_MISMATCH, "KEM-only below 1.4 must not downgrade to DHE");
+    /* At 1.4 the same preference advertises a KEM-only request: DHE struct
+     * dropped, so 4 structs (AEAD, ReqBaseAsym, KeySchedule, KEM) and no DHE. */
+    ctx->spdmVersion = SPDM_VERSION_14;
+    bufSz = sizeof(buf);
+    ASSERT_SUCCESS(wolfSPDM_BuildNegotiateAlgorithms(ctx, buf, &bufSz));
+    ASSERT_EQ(buf[2], 0x04, "KEM-only: 4 structs (no DHE)");
+    ASSERT_EQ(buf[32], SPDM_ALG_TYPE_AEAD, "KEM-only: DHE dropped, AEAD first");
+    ASSERT_EQ(buf[44], SPDM_ALG_TYPE_KEM, "KEM-only: KEMAlg struct present");
+
+    TEST_CTX_FREE();
+    TEST_PASS();
+}
+
+/* Build a 1.4 ALGORITHMS response with a 5th KEMAlg struct. dheSel is the DHE
+ * selection (0 = not selected) and kemSel the ML-KEM selection; the caller picks
+ * the mutual-exclusivity case. Returns total length (56). */
+static word32 build_algorithms_14_kem(byte* rsp, word16 dheSel, word16 kemSel)
+{
+    XMEMSET(rsp, 0, 56);
+    rsp[0] = SPDM_VERSION_14;
+    rsp[1] = SPDM_ALGORITHMS;
+    rsp[2] = 5;                  /* AlgStructCount = 5 */
+    SPDM_Set16LE(&rsp[4], 56);
+    rsp[6] = 0x01;
+    rsp[7] = 0x02;
+    SPDM_Set32LE(&rsp[12], SPDM_ASYM_ALGO_ECDSA_P384);
+    rsp[16] = SPDM_HASH_ALGO_SHA_384;
+    rsp[36] = 2; rsp[37] = 0x20; SPDM_Set16LE(&rsp[38], dheSel);  /* DHE */
+    rsp[40] = 3; rsp[41] = 0x20; rsp[42] = 0x02;                  /* AEAD */
+    rsp[44] = 4; rsp[45] = 0x20; rsp[46] = 0x0F;                  /* ReqBaseAsym */
+    rsp[48] = 5; rsp[49] = 0x20; rsp[50] = 0x01;                  /* KeySchedule */
+    rsp[52] = SPDM_ALG_TYPE_KEM; rsp[53] = 0x20;                  /* KEMAlg */
+    SPDM_Set16LE(&rsp[54], kemSel);
+    return 56;
+}
+
+static int test_parse_algorithms_kem_select(void)
+{
+    byte rsp[72];
+    word32 len;
+    TEST_CTX_SETUP();
+
+    printf("test_parse_algorithms_kem_select...\n");
+
+    /* Responder selects ML-KEM-768 (DHE = 0): kexType becomes MLKEM. */
+    len = build_algorithms_14_kem(rsp, 0, SPDM_KEM_ALGO_ML_KEM_768);
+    ASSERT_SUCCESS(wolfSPDM_ParseAlgorithms(ctx, rsp, len));
+    ASSERT_EQ(ctx->kexType, WOLFSPDM_KEX_MLKEM, "kexType MLKEM on KEM select");
+    ASSERT_EQ(ctx->kemAlgSel, SPDM_KEM_ALGO_ML_KEM_768, "kemAlgSel = ML-KEM-768");
+
+    /* Responder selects DHE (KEM = 0): kexType stays ECDHE. */
+    len = build_algorithms_14_kem(rsp, SPDM_DHE_ALGO_SECP384R1, 0);
+    ASSERT_SUCCESS(wolfSPDM_ParseAlgorithms(ctx, rsp, len));
+    ASSERT_EQ(ctx->kexType, WOLFSPDM_KEX_ECDHE, "kexType ECDHE on DHE select");
+
+    /* Both DHE and KEM selected: no hybrid in 1.4, must be rejected. */
+    len = build_algorithms_14_kem(rsp, SPDM_DHE_ALGO_SECP384R1,
+        SPDM_KEM_ALGO_ML_KEM_768);
+    ASSERT_EQ(wolfSPDM_ParseAlgorithms(ctx, rsp, len),
+        WOLFSPDM_E_ALGO_MISMATCH, "DHE+KEM (hybrid) must be rejected");
+
+    /* Neither selected: must be rejected. */
+    len = build_algorithms_14_kem(rsp, 0, 0);
+    ASSERT_EQ(wolfSPDM_ParseAlgorithms(ctx, rsp, len),
+        WOLFSPDM_E_ALGO_MISMATCH, "no key-exchange method must be rejected");
+
+    /* Unsupported KEM bit: must be rejected. */
+    len = build_algorithms_14_kem(rsp, 0, 0x0008);
+    ASSERT_EQ(wolfSPDM_ParseAlgorithms(ctx, rsp, len),
+        WOLFSPDM_E_ALGO_MISMATCH, "unsupported KEM must be rejected");
+
+    TEST_CTX_FREE();
+    TEST_PASS();
+}
+
+static int test_mlkem_decapsulate(void)
+{
+    byte ek[WOLFSPDM_MLKEM768_EK_SIZE];
+    byte ct[WOLFSPDM_MLKEM768_CT_SIZE];
+    byte ssResponder[WOLFSPDM_KEM_SS_SIZE];
+    word32 ekSz = sizeof(ek);
+    MlKemKey rspKey;
+    int rspKeyInit = 0;
+    int rc;
+    TEST_CTX_SETUP();
+
+    printf("test_mlkem_decapsulate...\n");
+
+    /* Requester generates the ephemeral ML-KEM-768 key and exports ek. */
+    ctx->kemAlgSel = SPDM_KEM_ALGO_ML_KEM_768;
+    ASSERT_SUCCESS(wolfSPDM_GenerateMlKemKey(ctx, ek, &ekSz));
+    ASSERT_EQ(ekSz, WOLFSPDM_MLKEM768_EK_SIZE, "ML-KEM-768 ek is 1184 bytes");
+    ASSERT_EQ(ctx->kexType, WOLFSPDM_KEX_MLKEM, "kexType set to MLKEM");
+
+    /* Responder side: import ek, encapsulate -> ciphertext c + shared secret K. */
+    ASSERT_EQ(wc_MlKemKey_Init(&rspKey, WC_ML_KEM_768, NULL, INVALID_DEVID), 0,
+        "responder MlKemKey_Init");
+    rspKeyInit = 1;
+    ASSERT_EQ(wc_MlKemKey_DecodePublicKey(&rspKey, ek, ekSz), 0,
+        "responder decode ek");
+    ASSERT_EQ(wc_MlKemKey_Encapsulate(&rspKey, ct, ssResponder, &ctx->rng), 0,
+        "responder encapsulate");
+
+    /* Requester decapsulates c -> K'; K' must equal the responder's K. */
+    rc = wolfSPDM_MlKemDecapsulate(ctx, ct, sizeof(ct));
+    ASSERT_SUCCESS(rc);
+    ASSERT_EQ(ctx->sharedSecretSz, WOLFSPDM_KEM_SS_SIZE,
+        "decapsulated secret is 32 bytes");
+    ASSERT_EQ(XMEMCMP(ctx->sharedSecret, ssResponder, WOLFSPDM_KEM_SS_SIZE), 0,
+        "K' (decapsulation) equals K (encapsulation)");
+
+    if (rspKeyInit) {
+        wc_MlKemKey_Free(&rspKey);
+    }
+    TEST_CTX_FREE();
+    TEST_PASS();
+}
+
+/* Reconnect on a reused context switching key-exchange method must free the
+ * prior ephemeral key while ctx->kexType still names its union member (no
+ * type-confused free). Run under valgrind in CI to catch a mismatched free. */
+static int test_kex_reconnect_method_switch(void)
+{
+    byte ek[WOLFSPDM_MLKEM768_EK_SIZE];
+    byte rsp[72];
+    word32 ekSz = sizeof(ek);
+    word32 len;
+    TEST_CTX_SETUP();
+
+    printf("test_kex_reconnect_method_switch...\n");
+    ctx->spdmVersion = SPDM_VERSION_14;
+
+    /* Round 1 leaves a live ML-KEM ephemeral key. */
+    ctx->kemAlgSel = SPDM_KEM_ALGO_ML_KEM_768;
+    ASSERT_SUCCESS(wolfSPDM_GenerateMlKemKey(ctx, ek, &ekSz));
+    ASSERT_EQ(ctx->flags.ephemeralKeyInit, 1, "ML-KEM key live");
+    ASSERT_EQ(ctx->kexType, WOLFSPDM_KEX_MLKEM, "kexType MLKEM");
+
+    /* Reconnect negotiates ECDHE: ParseAlgorithms frees the live ML-KEM key
+     * (still matching kexType) before flipping to ECDHE. */
+    len = build_algorithms_14_kem(rsp, SPDM_DHE_ALGO_SECP384R1, 0);
+    ASSERT_SUCCESS(wolfSPDM_ParseAlgorithms(ctx, rsp, len));
+    ASSERT_EQ(ctx->kexType, WOLFSPDM_KEX_ECDHE, "switched to ECDHE");
+    ASSERT_EQ(ctx->flags.ephemeralKeyInit, 0, "stale ML-KEM key freed");
+
+    /* And the reverse: a live ECDHE key, then a reconnect negotiating ML-KEM. */
+    ASSERT_SUCCESS(wolfSPDM_GenerateEphemeralKey(ctx));
+    ASSERT_EQ(ctx->flags.ephemeralKeyInit, 1, "ECDHE key live");
+    len = build_algorithms_14_kem(rsp, 0, SPDM_KEM_ALGO_ML_KEM_768);
+    ASSERT_SUCCESS(wolfSPDM_ParseAlgorithms(ctx, rsp, len));
+    ASSERT_EQ(ctx->kexType, WOLFSPDM_KEX_MLKEM, "switched to ML-KEM");
+    ASSERT_EQ(ctx->flags.ephemeralKeyInit, 0, "stale ECDHE key freed");
+
+    TEST_CTX_FREE();
+    TEST_PASS();
+}
+
+/* KEY_EXCHANGE with ML-KEM places the encapsulation key ek as ExchangeData at
+ * offset 40; confirm it decodes as a valid ML-KEM-768 public key. */
+static int test_build_key_exchange_mlkem(void)
+{
+    byte buf[WOLFSPDM_KEX_REQ_BUF];
+    word32 bufSz = sizeof(buf);
+    MlKemKey check;
+    int checkInit = 0;
+    TEST_CTX_SETUP();
+
+    printf("test_build_key_exchange_mlkem...\n");
+    ctx->spdmVersion = SPDM_VERSION_14;
+    ctx->kexType = WOLFSPDM_KEX_MLKEM;
+    ctx->kemAlgSel = SPDM_KEM_ALGO_ML_KEM_768;
+
+    ASSERT_SUCCESS(wolfSPDM_BuildKeyExchange(ctx, buf, &bufSz));
+    ASSERT_EQ(buf[1], SPDM_KEY_EXCHANGE, "KEY_EXCHANGE code");
+    /* offset 40 = 4 hdr + 2 sessionId + 2 policy/rsvd + 32 random. */
+    ASSERT_EQ(wc_MlKemKey_Init(&check, WC_ML_KEM_768, NULL, INVALID_DEVID), 0,
+        "MlKemKey_Init");
+    checkInit = 1;
+    ASSERT_EQ(wc_MlKemKey_DecodePublicKey(&check, &buf[40],
+        WOLFSPDM_MLKEM768_EK_SIZE), 0, "ek decodes at offset 40");
+    /* 40 fixed + 1184 ek + 22 OpaqueData block. */
+    ASSERT_EQ(bufSz, 40u + WOLFSPDM_MLKEM768_EK_SIZE + 22u,
+        "ML-KEM KEY_EXCHANGE total size");
+
+    if (checkInit) {
+        wc_MlKemKey_Free(&check);
+    }
+    TEST_CTX_FREE();
+    TEST_PASS();
+}
+
+/* An ML-KEM KEY_EXCHANGE request larger than the responder's DataTransferSize
+ * must fail fast (no CHUNK_SEND), not emit a non-conformant oversized message. */
+static int test_key_exchange_mlkem_exceeds_dts(void)
+{
+    TEST_CTX_SETUP();
+
+    printf("test_key_exchange_mlkem_exceeds_dts...\n");
+    ctx->spdmVersion = SPDM_VERSION_14;
+    ctx->kexType = WOLFSPDM_KEX_MLKEM;
+    ctx->kemAlgSel = SPDM_KEM_ALGO_ML_KEM_1024;   /* ek 1568 -> request ~1630 B */
+    ctx->flags.hasResponderPubKey = 1;            /* pass the precondition */
+    ctx->dataTransferSize = 512;                  /* smaller than the request */
+
+    ASSERT_EQ(wolfSPDM_KeyExchange(ctx), WOLFSPDM_E_BUFFER_SMALL,
+        "oversized ML-KEM KEY_EXCHANGE rejected before send");
+
+    TEST_CTX_FREE();
+    TEST_PASS();
+}
+
+/* KEY_EXCHANGE_RSP parsing for ML-KEM must locate OpaqueData/signature after a
+ * ciphertext-sized ExchangeData, not the 96-byte ECDHE point. A buffer that
+ * stops between the two offsets distinguishes them. */
+static int test_parse_key_exchange_rsp_mlkem_offset(void)
+{
+    byte ek[WOLFSPDM_MLKEM768_EK_SIZE];
+    byte rsp[1100];
+    word32 ekSz = sizeof(ek);
+    TEST_CTX_SETUP();
+
+    printf("test_parse_key_exchange_rsp_mlkem_offset...\n");
+    ctx->spdmVersion = SPDM_VERSION_14;
+    ctx->kemAlgSel = SPDM_KEM_ALGO_ML_KEM_768;
+    ASSERT_SUCCESS(wolfSPDM_GenerateMlKemKey(ctx, ek, &ekSz));
+    ctx->flags.hasResponderPubKey = 1;
+
+    XMEMSET(rsp, 0, sizeof(rsp));
+    rsp[0] = SPDM_VERSION_14;
+    rsp[1] = SPDM_KEY_EXCHANGE_RSP;
+    rsp[6] = 0;   /* no mutual auth */
+
+    /* With the ML-KEM-768 ciphertext (1088), OpaqueLength sits at offset
+     * 40+1088 = 1128, so a 1000-byte buffer fails the length check. If the parse
+     * wrongly used the 96-byte ECDHE size (OpaqueLength at 136) it would read
+     * past 1000 instead of returning here. */
+    ASSERT_EQ(wolfSPDM_ParseKeyExchangeRsp(ctx, rsp, 1000),
+        WOLFSPDM_E_BUFFER_SMALL,
+        "ML-KEM RSP uses ciphertext-sized ExchangeData offset");
+
+    TEST_CTX_FREE();
+    TEST_PASS();
+}
+
+/* Error/guard paths: the public preference API and the ML-KEM helpers must
+ * fail closed on invalid input and bad state. */
+static int test_mlkem_error_paths(void)
+{
+    byte ek[WOLFSPDM_MLKEM768_EK_SIZE];
+    byte small[64];
+    byte req[WOLFSPDM_KEX_REQ_BUF];
+    byte ct[WOLFSPDM_MLKEM768_CT_SIZE];
+    word32 sz;
+    TEST_CTX_SETUP();
+
+    printf("test_mlkem_error_paths...\n");
+    ctx->spdmVersion = SPDM_VERSION_14;
+
+    /* wolfSPDM_SetKeyExchangePref validation. */
+    ASSERT_EQ(wolfSPDM_SetKeyExchangePref(NULL, 1, 0), WOLFSPDM_E_INVALID_ARG,
+        "SetKeyExchangePref NULL ctx");
+    ASSERT_EQ(wolfSPDM_SetKeyExchangePref(ctx, 0, 0), WOLFSPDM_E_INVALID_ARG,
+        "SetKeyExchangePref no methods");
+    ASSERT_EQ(wolfSPDM_SetKeyExchangePref(ctx, 0, 0x0008),
+        WOLFSPDM_E_INVALID_ARG, "SetKeyExchangePref undefined KEM bit");
+    ASSERT_SUCCESS(wolfSPDM_SetKeyExchangePref(ctx, 1,
+        SPDM_KEM_ALGO_ML_KEM_768));
+
+    /* GenerateMlKemKey: NULL, unknown KEM selection, ek output too small. */
+    sz = sizeof(ek);
+    ASSERT_EQ(wolfSPDM_GenerateMlKemKey(NULL, ek, &sz), WOLFSPDM_E_INVALID_ARG,
+        "GenerateMlKemKey NULL ctx");
+    ctx->kemAlgSel = 0;  /* not a valid ML-KEM selection */
+    sz = sizeof(ek);
+    ASSERT_EQ(wolfSPDM_GenerateMlKemKey(ctx, ek, &sz), WOLFSPDM_E_ALGO_MISMATCH,
+        "GenerateMlKemKey unknown KEM set");
+    ctx->kemAlgSel = SPDM_KEM_ALGO_ML_KEM_768;
+    sz = sizeof(small);  /* 64 < 1184 */
+    ASSERT_EQ(wolfSPDM_GenerateMlKemKey(ctx, small, &sz),
+        WOLFSPDM_E_BUFFER_SMALL, "GenerateMlKemKey ek buffer too small");
+
+    /* MlKemDecapsulate: NULL, and no live ephemeral key / wrong kexType. */
+    ASSERT_EQ(wolfSPDM_MlKemDecapsulate(ctx, NULL, 0), WOLFSPDM_E_INVALID_ARG,
+        "MlKemDecapsulate NULL ct");
+    ctx->flags.ephemeralKeyInit = 0;
+    ctx->kexType = WOLFSPDM_KEX_MLKEM;
+    ASSERT_EQ(wolfSPDM_MlKemDecapsulate(ctx, ct, sizeof(ct)),
+        WOLFSPDM_E_BAD_STATE, "MlKemDecapsulate no live key");
+
+    /* BuildKeyExchange: unrecognized kexType fails closed; ML-KEM request that
+     * does not fit the caller buffer is rejected. */
+    ctx->kexType = (byte)0xEE;
+    sz = sizeof(req);
+    ASSERT_EQ(wolfSPDM_BuildKeyExchange(ctx, req, &sz), WOLFSPDM_E_BAD_STATE,
+        "BuildKeyExchange unknown kexType");
+    ctx->kexType = WOLFSPDM_KEX_MLKEM;
+    ctx->kemAlgSel = SPDM_KEM_ALGO_ML_KEM_768;
+    sz = 500;  /* >= 180 arg check, < 40 + 1184 ek + 22 */
+    ASSERT_EQ(wolfSPDM_BuildKeyExchange(ctx, req, &sz), WOLFSPDM_E_BUFFER_SMALL,
+        "BuildKeyExchange ML-KEM request exceeds buffer");
+
+    TEST_CTX_FREE();
+    TEST_PASS();
+}
+#endif /* WOLFSPDM_HAVE_MLKEM */
+
 #ifdef WOLFSPDM_HAVE_CHUNK
 #define CHUNK_TEST_MAX 4627            /* ML-DSA-87 SigLen — largest we reassemble */
 #define CHUNK_NONE 0xFFFFFFFFu
@@ -2679,6 +3022,16 @@ int main(void)
 #ifndef NO_WOLFSPDM_CHALLENGE
     test_challenge_auth_mldsa_sigsize();
 #endif
+#endif
+#ifdef WOLFSPDM_HAVE_MLKEM
+    test_negotiate_algorithms_kem_build();
+    test_parse_algorithms_kem_select();
+    test_mlkem_decapsulate();
+    test_kex_reconnect_method_switch();
+    test_build_key_exchange_mlkem();
+    test_key_exchange_mlkem_exceeds_dts();
+    test_parse_key_exchange_rsp_mlkem_offset();
+    test_mlkem_error_paths();
 #endif
 #ifdef WOLFSPDM_HAVE_CHUNK
     test_chunk_reassemble();
