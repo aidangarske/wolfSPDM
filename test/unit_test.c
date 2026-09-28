@@ -323,6 +323,7 @@ static int test_build_get_version(void)
 
     ASSERT_SUCCESS(wolfSPDM_BuildGetVersion(buf, &bufSz));
     ASSERT_EQ(bufSz, 4, "GET_VERSION should be 4 bytes");
+    ASSERT_EQ(buf[0], SPDM_VERSION_10, "Version should be 0x10");
     ASSERT_EQ(buf[1], SPDM_GET_VERSION, "Code should be 0x84");
 
     bufSz = 2;
@@ -2586,7 +2587,7 @@ static int test_encrypt_decrypt_roundtrip_tcg(void)
     TEST_CTX_SETUP_V12();
     printf("test_encrypt_decrypt_roundtrip_tcg...\n");
 
-    wolfSPDM_SetMode(ctx, WOLFSPDM_MODE_NATIONS);
+    ctx->mode = WOLFSPDM_MODE_NATIONS;
     ctx->sessionId = 0x00020001;
     ctx->reqSeqNum = 0;
     ctx->rspSeqNum = 0;

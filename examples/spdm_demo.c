@@ -567,10 +567,10 @@ int main(int argc, char* argv[])
                 }
                 break;
             case 'K':
-#ifdef WOLFSPDM_HAVE_MLKEM
                 if (strcmp(optarg, "ecdhe") == 0) {
                     kexEcdheOnly = 1;
                 }
+#ifdef WOLFSPDM_HAVE_MLKEM
                 else if (strcmp(optarg, "mlkem512") == 0) {
                     kexKemOnly = SPDM_KEM_ALGO_ML_KEM_512;
                 }
@@ -580,16 +580,19 @@ int main(int argc, char* argv[])
                 else if (strcmp(optarg, "mlkem1024") == 0) {
                     kexKemOnly = SPDM_KEM_ALGO_ML_KEM_1024;
                 }
+#else
+                else if (strncmp(optarg, "mlkem", 5) == 0) {
+                    fprintf(stderr, "--kex %s needs ML-KEM support in "
+                        "wolfSPDM\n", optarg);
+                    return 77;
+                }
+#endif
                 else {
                     fprintf(stderr, "Invalid --kex %s (expected ecdhe/"
                         "mlkem512/mlkem768/mlkem1024)\n", optarg);
                     return 1;
                 }
                 break;
-#else
-                fprintf(stderr, "--kex needs ML-KEM support in wolfSPDM\n");
-                return 77;
-#endif
             case 'h': usage(argv[0]); return 0;
             default:  usage(argv[0]); return 1;
         }
@@ -637,7 +640,7 @@ int main(int argc, char* argv[])
         }
     }
 
-#ifdef WOLFSPDM_HAVE_MLKEM
+#ifndef WOLFSPDM_NO_CERT
     if (kexEcdheOnly || kexKemOnly != 0) {
         rc = wolfSPDM_SetKeyExchangePref(ctx, kexEcdheOnly ? 1 : 0, kexKemOnly);
         if (rc != WOLFSPDM_SUCCESS) {
