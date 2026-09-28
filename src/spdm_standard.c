@@ -740,7 +740,6 @@ int wolfSPDM_ValidateCertChain(WOLFSPDM_CTX* ctx)
             wolfSPDM_DebugPrint(ctx, "Leaf key does not match pinned key\n");
             rc = WOLFSPDM_E_CERT_FAIL;
         }
-        anchored = 1;
     }
     else if (rc == WOLFSPDM_SUCCESS && !anchored &&
             !ctx->flags.allowUntrustedCert) {
