@@ -368,7 +368,7 @@ extern "C" {
     #ifdef WOLFSPDM_HAVE_MLDSA
     #define WOLFSPDM_MAX_TRUSTED_CA 8192
     #else
-    #define WOLFSPDM_MAX_TRUSTED_CA 2048
+    #define WOLFSPDM_MAX_TRUSTED_CA 4096
     #endif
 #endif
 #endif /* !WOLFSPDM_NO_CERT */

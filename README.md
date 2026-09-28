@@ -9,7 +9,7 @@ wolfSPDM is a lightweight C library implementing [SPDM 1.2 / 1.3 / 1.4](https://
 - **Post-quantum signatures (SPDM 1.4):** optional ML-DSA-44 / 65 / 87 (FIPS 204), dual-stacked with ECDSA P-384 — see the [Post-Quantum ML-DSA](https://github.com/aidangarske/wolfSPDM/wiki/Post-Quantum-ML-DSA) wiki page
 - **Post-quantum key exchange (SPDM 1.4):** optional ML-KEM-512 / 768 / 1024 (FIPS 203), advertised alongside ECDHE P-384 — see the [Post-Quantum ML-KEM](https://github.com/aidangarske/wolfSPDM/wiki/Post-Quantum-ML-KEM) wiki page
 - **Fully post-quantum SPDM handshake:** ML-KEM key exchange + ML-DSA authentication (no classical asymmetric crypto), proven end-to-end against spdm-emu
-- **Zero-malloc by default:** static memory, ~17 KB context (~59 KB with ML-DSA), ideal for constrained/embedded environments
+- **Zero-malloc by default:** static memory, ~19 KB context (~59 KB with ML-DSA), ideal for constrained/embedded environments
 - **Optional `--enable-dynamic-mem`** for heap-allocated contexts on small-stack platforms
 - **Full session lifecycle:** key exchange, finish, encrypted messaging, heartbeat keep-alive, key update
 - **Device attestation:** signed / unsigned `GET_MEASUREMENTS`, sessionless `CHALLENGE_AUTH`, certificate-chain validation against trusted root CAs
@@ -120,8 +120,8 @@ wolfSPDM is the SPDM stack wolfTPM builds on. Its core is the SPDM code that wol
 
 | Build | Compiled in | `sizeof(WOLFSPDM_CTX)` (arm64) |
 |---|---|---|
-| Standalone (default) | Standard DSP0274 / DSP0277 requester: certificates, attestation, heartbeat, key update, chunking, application data; ML-DSA / ML-KEM when wolfSSL has them | ~17 KB classical, ~59 KB with ML-DSA |
-| Standalone + TPM side | Adds `--enable-tcg` / `--enable-nuvoton` / `--enable-nations` / `--enable-psk` / `--enable-responder` | ~17 KB classical |
+| Standalone (default) | Standard DSP0274 / DSP0277 requester: certificates, attestation, heartbeat, key update, chunking, application data; ML-DSA / ML-KEM when wolfSSL has them | ~19 KB classical, ~59 KB with ML-DSA |
+| Standalone + TPM side | Adds `--enable-tcg` / `--enable-nuvoton` / `--enable-nations` / `--enable-psk` / `--enable-responder` | ~19 KB classical |
 | Pure TCG (`--disable-mctp`) | TCG binding, vendors, PSK and responder only | ~9.6 KB |
 | wolfTPM (`WOLFTPM_SPDM`, profile `WOLFSPDM_PROFILE_TPM`) | What wolfTPM needs: TCG binding, vendors, PSK, responder | ~9.5 KB |
 

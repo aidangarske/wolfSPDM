@@ -90,10 +90,10 @@ defaults grow when ML-DSA or ML-KEM is built in (all are overridable with
 | `WOLFSPDM_CTX_STATIC_SIZE` | `32768` | `40960` | `73728` |
 | `WOLFSPDM_MAX_MSG_SIZE` | `4096` | `4096` | `8192` |
 | `WOLFSPDM_MAX_CERT_CHAIN` | `4096` | `4096` | `24576` |
-| `WOLFSPDM_MAX_TRUSTED_CA` | `2048` | `2048` | `8192` |
+| `WOLFSPDM_MAX_TRUSTED_CA` | `4096` | `4096` | `8192` |
 | `WOLFSPDM_MAX_TRANSCRIPT` | `4096` | `8192` | `16384` |
 
-Measured `sizeof(WOLFSPDM_CTX)` on arm64: ~17 KB classical, ~22 KB ML-KEM
+Measured `sizeof(WOLFSPDM_CTX)` on arm64: ~19 KB classical, ~24 KB ML-KEM
 only, ~59 KB with ML-DSA, ~9.5 KB in the TPM profile (well under the
 corresponding `WOLFSPDM_CTX_STATIC_SIZE`).
 
