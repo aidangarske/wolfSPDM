@@ -209,10 +209,16 @@ int wolfSPDM_BuildVendorDefined(
 {
     word32 totalSz;
     word32 offset = 0;
+    word32 i;
 
-    if (vdCode == NULL || outBuf == NULL ||
-            XSTRLEN(vdCode) != WOLFSPDM_VDCODE_LEN) {
+    if (vdCode == NULL || outBuf == NULL) {
         return WOLFSPDM_E_INVALID_ARG;
+    }
+    /* Fixed 8-byte code: a NUL inside it means the caller's string is short */
+    for (i = 0; i < WOLFSPDM_VDCODE_LEN; i++) {
+        if (vdCode[i] == '\0') {
+            return WOLFSPDM_E_INVALID_ARG;
+        }
     }
     if (payload == NULL && payloadSz != 0) {
         return WOLFSPDM_E_INVALID_ARG;
