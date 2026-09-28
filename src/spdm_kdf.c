@@ -60,7 +60,9 @@ int wolfSPDM_HkdfExpandLabel(byte spdmVersion, const byte* secret, word32 secret
     labelLen = (word32)XSTRLEN(label);
 
     /* Bounds check: 2 + prefix(8) + label + context must fit in info[128] */
-    if (2 + SPDM_BIN_CONCAT_PREFIX_LEN + labelLen + contextSz > sizeof(info)) {
+    if (labelLen > sizeof(info) || contextSz > sizeof(info) ||
+            2 + SPDM_BIN_CONCAT_PREFIX_LEN + labelLen + contextSz >
+            sizeof(info)) {
         return WOLFSPDM_E_BUFFER_SMALL;
     }
 
@@ -76,6 +78,8 @@ int wolfSPDM_HkdfExpandLabel(byte spdmVersion, const byte* secret, word32 secret
     }
 
     rc = wc_HKDF_Expand(WC_SHA384, secret, secretSz, info, infoLen, out, outSz);
+    /* The context is a transcript hash */
+    wc_ForceZero(info, sizeof(info));
 
     return (rc == 0) ? WOLFSPDM_SUCCESS : WOLFSPDM_E_CRYPTO_FAIL;
 }

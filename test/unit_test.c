@@ -1468,11 +1468,59 @@ static int test_secured_exchange_null_args(void)
 
 static int test_disconnect_states(void)
 {
+    byte cmd[4] = { SPDM_VERSION_12, 0xE8, 0x00, 0x00 };
+    byte rsp[16];
+    byte err[4] = { SPDM_VERSION_12, SPDM_ERROR, SPDM_ERROR_BUSY, 0x00 };
+    byte zero[WOLFSPDM_AEAD_KEY_SIZE];
+    word32 rspSz = sizeof(rsp);
     TEST_CTX_SETUP();
     printf("test_disconnect_states...\n");
-    /* Not connected should still succeed (cleanup is safe) */
-    wolfSPDM_Disconnect(ctx);
-    wolfSPDM_Disconnect(NULL); /* Should not crash */
+
+    ASSERT_EQ(wolfSPDM_Disconnect(ctx), WOLFSPDM_E_NOT_CONNECTED,
+        "no session to end");
+    ASSERT_EQ(wolfSPDM_Disconnect(NULL), WOLFSPDM_E_INVALID_ARG, "NULL ctx");
+
+    /* Nothing is sealed before KEY_EXCHANGE sets up session keys */
+    ASSERT_EQ(wolfSPDM_SecuredExchange(ctx, cmd, sizeof(cmd), rsp, &rspSz),
+        WOLFSPDM_E_NOT_CONNECTED, "secured message before a session");
+
+    /* A handshake that failed after KEY_EXCHANGE is still wiped */
+    XMEMSET(zero, 0, sizeof(zero));
+    ctx->state = WOLFSPDM_STATE_ERROR;
+    ctx->sessionId = 0x00020001;
+    ctx->reqSeqNum = 1;
+    XMEMSET(ctx->reqDataKey, 0x11, WOLFSPDM_AEAD_KEY_SIZE);
+    XMEMSET(ctx->handshakeSecret, 0x22, WOLFSPDM_HASH_SIZE);
+    ASSERT_EQ(wolfSPDM_SecuredExchange(ctx, cmd, sizeof(cmd), rsp, &rspSz),
+        WOLFSPDM_E_NOT_CONNECTED, "secured message after a failure");
+    ASSERT_EQ(wolfSPDM_Disconnect(ctx), WOLFSPDM_E_NOT_CONNECTED,
+        "failed handshake");
+    ASSERT_EQ(ctx->state, WOLFSPDM_STATE_INIT, "state reset");
+    ASSERT_EQ(ctx->reqSeqNum, 0, "sequence reset");
+    ASSERT_EQ(ctx->sessionId, 0, "session ID reset");
+    ASSERT_EQ(memcmp(ctx->reqDataKey, zero, sizeof(zero)), 0, "keys wiped");
+    ASSERT_EQ(memcmp(ctx->handshakeSecret, zero, sizeof(zero)), 0,
+        "secrets wiped");
+
+    /* A retry starts from sequence number 0 even if it fails early */
+    ctx->reqSeqNum = 5;
+    ctx->rspSeqNum = 5;
+    wolfSPDM_SetIO(ctx, dummy_io_cb, NULL);
+    TEST_ASSERT(wolfSPDM_Connect(ctx) != WOLFSPDM_SUCCESS, "no responder");
+    ASSERT_EQ(ctx->reqSeqNum, 0, "request sequence reset on connect");
+    ASSERT_EQ(ctx->rspSeqNum, 0, "response sequence reset on connect");
+
+    /* A 4-byte SPDM ERROR is reported as such, not as a short buffer */
+    ASSERT_EQ(wolfSPDM_ParseKeyExchangeRsp(ctx, err, sizeof(err)),
+        WOLFSPDM_E_PEER_ERROR, "short ERROR to KEY_EXCHANGE");
+    ASSERT_EQ(wolfSPDM_GetLastPeerError(ctx), SPDM_ERROR_BUSY,
+        "peer error recorded");
+    ASSERT_EQ(wolfSPDM_ParseVersion(ctx, err, sizeof(err)),
+        WOLFSPDM_E_PEER_ERROR, "short ERROR to GET_VERSION");
+    err[1] = SPDM_KEY_EXCHANGE_RSP;
+    ASSERT_EQ(wolfSPDM_ParseKeyExchangeRsp(ctx, err, sizeof(err)),
+        WOLFSPDM_E_INVALID_ARG, "short non-ERROR response");
+
     TEST_CTX_FREE();
     TEST_PASS();
 }
@@ -2948,6 +2996,78 @@ static int resp_send_clear_vd(WOLFSPDM_RESP_CTX* rctx, const char* vdCode,
         (word32)spdmMsgSz + WOLFSPDM_TCG_HEADER_SIZE, out, outSz);
 }
 
+/* A clear SPDM message in a TCG clear frame */
+static int resp_send_clear(WOLFSPDM_RESP_CTX* rctx, const byte* msg,
+    word32 msgSz, byte* out, word32* outSz)
+{
+    byte frame[320];
+
+    if (msgSz > sizeof(frame) - WOLFSPDM_TCG_HEADER_SIZE) {
+        return -1;
+    }
+    XMEMSET(frame, 0, sizeof(frame));
+    frame[0] = 0x81; frame[1] = 0x01;
+    frame[4] = (byte)((msgSz + WOLFSPDM_TCG_HEADER_SIZE) >> 8);
+    frame[5] = (byte)(msgSz + WOLFSPDM_TCG_HEADER_SIZE);
+    XMEMCPY(frame + WOLFSPDM_TCG_HEADER_SIZE, msg, msgSz);
+    return wolfSPDM_RespHandleMessage(rctx, frame,
+        msgSz + WOLFSPDM_TCG_HEADER_SIZE, out, outSz);
+}
+
+/* The clear channel may register a ClearAuth for a configured PSK but never
+ * swap the PSK, and a PSK-only responder refuses KEY_EXCHANGE */
+static int test_responder_configured_psk(void)
+{
+    byte rctxBuf[WOLFSPDM_RESP_CTX_STATIC_SIZE];
+    WOLFSPDM_RESP_CTX* rctx = (WOLFSPDM_RESP_CTX*)rctxBuf;
+    byte psk[WOLFSPDM_PSK_MAX_SIZE];
+    byte setPayload[WOLFSPDM_PSK_MAX_SIZE + WOLFSPDM_HASH_SIZE];
+    byte clearAuth[32];
+    byte getVer[4] = { SPDM_VERSION_10, SPDM_GET_VERSION, 0x00, 0x00 };
+    byte keyEx[160];
+    byte outBuf[256];
+    word32 outSz;
+
+    printf("test_responder_configured_psk...\n");
+    ASSERT_SUCCESS(wolfSPDM_RespInit(rctx));
+    ASSERT_SUCCESS(wolfSPDM_RespSetMode(rctx, 0, 1));
+    XMEMSET(psk, 0x5C, sizeof(psk));
+    ASSERT_SUCCESS(wolfSPDM_RespSetPSK(rctx, psk, sizeof(psk), NULL, 0));
+
+    XMEMSET(clearAuth, 0xC1, sizeof(clearAuth));
+    XMEMSET(setPayload, 0xA5, WOLFSPDM_PSK_MAX_SIZE);
+    ASSERT_SUCCESS(wolfSPDM_Sha384Hash(setPayload + WOLFSPDM_PSK_MAX_SIZE,
+        clearAuth, sizeof(clearAuth), NULL, 0, NULL, 0));
+    outSz = sizeof(outBuf);
+    TEST_ASSERT(resp_send_clear_vd(rctx, WOLFSPDM_NATIONS_VDCODE_PSK_SET,
+        setPayload, (word32)sizeof(setPayload), outBuf, &outSz) !=
+        WOLFSPDM_SUCCESS, "a clear frame must not replace a configured PSK");
+
+    /* The same PSK only registers the ClearAuth */
+    XMEMCPY(setPayload, psk, sizeof(psk));
+    outSz = sizeof(outBuf);
+    ASSERT_SUCCESS(resp_send_clear_vd(rctx, WOLFSPDM_NATIONS_VDCODE_PSK_SET,
+        setPayload, (word32)sizeof(setPayload), outBuf, &outSz));
+
+    /* PSK only: KEY_EXCHANGE gets ERROR(UnsupportedRequest) */
+    outSz = sizeof(outBuf);
+    ASSERT_SUCCESS(resp_send_clear(rctx, getVer, sizeof(getVer), outBuf,
+        &outSz));
+    XMEMSET(keyEx, 0, sizeof(keyEx));
+    keyEx[0] = SPDM_VERSION_13;
+    keyEx[1] = SPDM_KEY_EXCHANGE;
+    outSz = sizeof(outBuf);
+    ASSERT_SUCCESS(resp_send_clear(rctx, keyEx, sizeof(keyEx), outBuf,
+        &outSz));
+    ASSERT_EQ(outBuf[WOLFSPDM_TCG_HEADER_SIZE + 1], SPDM_ERROR,
+        "KEY_EXCHANGE refused");
+    ASSERT_EQ(outBuf[WOLFSPDM_TCG_HEADER_SIZE + 2],
+        SPDM_ERROR_UNSUPPORTED_REQUEST, "unsupported in PSK-only mode");
+
+    wolfSPDM_RespFree(rctx);
+    TEST_PASS();
+}
+
 /* A provisioned PSK may only be replaced after an authenticated PSK_CLR_. */
 static int test_responder_psk_replace_guard(void)
 {
@@ -3359,6 +3479,7 @@ static int test_validate_cert_chain(void)
     ASSERT_SUCCESS(test_load_sample_chain(ctx));
     ASSERT_EQ(wolfSPDM_ValidateCertChain(ctx), WOLFSPDM_E_CERT_FAIL,
         "chain without a trust anchor must fail");
+    ASSERT_EQ(ctx->flags.hasRspPubKey, 0, "rejected chain installs no key");
 
     /* Root CA anchor: every signature verifies, leaf key installed */
     ASSERT_SUCCESS(wolfSPDM_SetTrustedCAs(ctx, test_ca_cert_der,
@@ -4873,6 +4994,11 @@ static int test_measurements_loopback(void)
     valSz = 2;
     ASSERT_EQ(wolfSPDM_GetMeasurementBlock(ctx, 0, &idx, &type, val, &valSz),
         WOLFSPDM_E_BUFFER_SMALL, "Small value buffer");
+    ASSERT_EQ(valSz, 4, "Needed size reported");
+    valSz = 0;
+    ASSERT_EQ(wolfSPDM_GetMeasurementBlock(ctx, 0, NULL, NULL, NULL, &valSz),
+        WOLFSPDM_E_BUFFER_SMALL, "Size query");
+    ASSERT_EQ(valSz, 4, "Size query result");
     valSz = sizeof(val);
     ASSERT_EQ(wolfSPDM_GetMeasurementBlock(ctx, 1, &idx, &type, val, &valSz),
         WOLFSPDM_E_INVALID_ARG, "Block out of range");
@@ -5356,6 +5482,7 @@ int main(void)
     test_responder_secured_requires_session();
 #ifdef WOLFSPDM_NATIONS
     test_responder_psk_replace_guard();
+    test_responder_configured_psk();
 #endif
     test_responder_identity_roundtrip();
 #endif

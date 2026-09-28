@@ -454,6 +454,14 @@ static WC_INLINE void wolfSPDM_BuildIV(byte* iv, const byte* baseIv,
             return WOLFSPDM_E_BUFFER_SMALL; \
     } while(0)
 
+/* A 4-byte SPDM ERROR passes so the response check can report it */
+#define SPDM_CHECK_PARSE_OR_ERROR_ARGS(ctx, buf, bufSz, minSz) \
+    do { \
+        if ((ctx) == NULL || (buf) == NULL || (bufSz) < 4 || \
+                ((bufSz) < (minSz) && (buf)[1] != SPDM_ERROR)) \
+            return WOLFSPDM_E_INVALID_ARG; \
+    } while(0)
+
 #define SPDM_CHECK_PARSE_ARGS(ctx, buf, bufSz, minSz) \
     do { \
         if ((ctx) == NULL || (buf) == NULL || (bufSz) < (minSz)) \
@@ -504,6 +512,7 @@ WOLFSPDM_API int wolfSPDM_VerifySignature(WOLFSPDM_CTX* ctx,
     const byte* hash, word32 hashSz,
     const byte* sig, word32 sigSz);
 WOLFSPDM_API void wolfSPDM_FreeEphemeralKey(WOLFSPDM_CTX* ctx);
+WOLFSPDM_LOCAL void wolfSPDM_ResetSession(WOLFSPDM_CTX* ctx);
 #ifdef WOLFSPDM_HAVE_MLDSA
 WOLFSPDM_API int wolfSPDM_MlDsaVerify(byte level, const byte* pub,
     word32 pubSz, const byte* context, word32 contextSz,
@@ -527,7 +536,8 @@ WOLFSPDM_API int wolfSPDM_HkdfExpandLabel(byte spdmVersion, const byte* secret, 
 WOLFSPDM_API int wolfSPDM_ComputeVerifyData(const byte* finishedKey, const byte* thHash,
     byte* verifyData);
 /* Cross-TU helper, not a shipped API - WOLFSPDM_LOCAL keeps it out of the
- * shared-library export table. spdm_internal.h is private to wolfSPDM. */
+ * shared-library export table in wolfTPM builds. spdm_internal.h is private
+ * to wolfSPDM. */
 WOLFSPDM_LOCAL int wolfSPDM_BuildSignedHash(byte spdmVersion,
     const char* contextStr, word32 contextStrLen,
     const byte* inputDigest, byte* outputDigest);
@@ -584,7 +594,6 @@ WOLFSPDM_TEST_API int wolfSPDM_ParseDigests(WOLFSPDM_CTX* ctx,
     const byte* buf, word32 bufSz);
 WOLFSPDM_TEST_API int wolfSPDM_ParseCertificate(WOLFSPDM_CTX* ctx,
     const byte* buf, word32 bufSz, word16* portionLen, word16* remainderLen);
-WOLFSPDM_TEST_API int wolfSPDM_ValidateCertChain(WOLFSPDM_CTX* ctx);
 WOLFSPDM_LOCAL int wolfSPDM_ConnectStandard(WOLFSPDM_CTX* ctx);
 #endif
 

@@ -119,9 +119,9 @@ jobs:
           make -j"$(nproc)"
 
       - name: Run unit tests
-        run: make check
-        env:
-          LD_LIBRARY_PATH: ${{ github.workspace }}/src/.libs:${{ env.HOME }}/wolfssl-install/lib
+        run: |
+          export LD_LIBRARY_PATH="${{ github.workspace }}/src/.libs:$HOME/wolfssl-install/lib"
+          make check
 
       - name: Build with --enable-dynamic-mem
         run: |
@@ -133,9 +133,9 @@ jobs:
           make -j"$(nproc)"
 
       - name: Run unit tests (dynamic-mem)
-        run: make check
-        env:
-          LD_LIBRARY_PATH: ${{ github.workspace }}/src/.libs:${{ env.HOME }}/wolfssl-install/lib
+        run: |
+          export LD_LIBRARY_PATH="${{ github.workspace }}/src/.libs:$HOME/wolfssl-install/lib"
+          make check
 
       - name: Upload failure logs
         if: failure()

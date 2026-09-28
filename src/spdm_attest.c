@@ -178,7 +178,7 @@ int wolfSPDM_ParseMeasurements(WOLFSPDM_CTX* ctx, const byte* req,
     word32 i;
     int signedReq;
 
-    SPDM_CHECK_PARSE_ARGS(ctx, buf, bufSz, 8);
+    SPDM_CHECK_PARSE_OR_ERROR_ARGS(ctx, buf, bufSz, 8);
     if (req == NULL || reqSz < 4 || sigOff == NULL) {
         return WOLFSPDM_E_INVALID_ARG;
     }
@@ -285,10 +285,10 @@ int wolfSPDM_GetMeasurementBlock(WOLFSPDM_CTX* ctx, int blockIdx,
     const byte* blk;
     word32 off = 0;
     word32 len;
+    byte type = 0;
     int i;
 
-    if (ctx == NULL || measIndex == NULL || measType == NULL ||
-            value == NULL || valueSz == NULL || blockIdx < 0 ||
+    if (ctx == NULL || valueSz == NULL || blockIdx < 0 ||
             blockIdx >= (int)ctx->measBlockCount) {
         return WOLFSPDM_E_INVALID_ARG;
     }
@@ -299,19 +299,25 @@ int wolfSPDM_GetMeasurementBlock(WOLFSPDM_CTX* ctx, int blockIdx,
             SPDM_Get16LE(&ctx->measRecord[off + 2]);
     }
     blk = &ctx->measRecord[off];
-    *measIndex = blk[0];
-    *measType = 0;
+    if (measIndex != NULL) {
+        *measIndex = blk[0];
+    }
     len = SPDM_Get16LE(&blk[2]);
     if (blk[1] == SPDM_MEAS_SPEC_DMTF && len >= 3 &&
             SPDM_Get16LE(&blk[WOLFSPDM_MEAS_BLOCK_HDR_SZ + 1]) <= len - 3) {
         /* DMTF value: Type(1) + ValueSize(2) + Value */
-        *measType = blk[WOLFSPDM_MEAS_BLOCK_HDR_SZ];
+        type = blk[WOLFSPDM_MEAS_BLOCK_HDR_SZ];
         len = SPDM_Get16LE(&blk[WOLFSPDM_MEAS_BLOCK_HDR_SZ + 1]);
         blk += 3;
     }
     blk += WOLFSPDM_MEAS_BLOCK_HDR_SZ;
+    if (measType != NULL) {
+        *measType = type;
+    }
 
-    if (len > *valueSz) {
+    /* A short or NULL value buffer learns the size it needs */
+    if (value == NULL || len > *valueSz) {
+        *valueSz = len;
         return WOLFSPDM_E_BUFFER_SMALL;
     }
     XMEMCPY(value, blk, len);

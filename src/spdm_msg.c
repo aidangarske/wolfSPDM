@@ -446,7 +446,7 @@ int wolfSPDM_ParseVersion(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufSz)
     byte highestVersion = 0;  /* No version found yet */
     byte maxVer;
 
-    SPDM_CHECK_PARSE_ARGS(ctx, buf, bufSz, 6);
+    SPDM_CHECK_PARSE_OR_ERROR_ARGS(ctx, buf, bufSz, 6);
     SPDM_CHECK_RESPONSE(ctx, buf, bufSz, SPDM_VERSION, WOLFSPDM_E_VERSION_MISMATCH);
 
     /* VersionNumberEntryCount is the one-byte field at offset 5 (byte 4
@@ -505,7 +505,7 @@ int wolfSPDM_ParseKeyExchangeRsp(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufS
     const byte* rspVerifyData;
     int rc;
 
-    SPDM_CHECK_PARSE_ARGS(ctx, buf, bufSz, 140);
+    SPDM_CHECK_PARSE_OR_ERROR_ARGS(ctx, buf, bufSz, 140);
     SPDM_CHECK_RESPONSE(ctx, buf, bufSz, SPDM_KEY_EXCHANGE_RSP, WOLFSPDM_E_KEY_EXCHANGE);
 
     /* Only the TCG binding carries a requester identity (GIVE_PUB) */

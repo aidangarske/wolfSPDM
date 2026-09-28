@@ -53,8 +53,8 @@ chain link by link:
 The negotiated-algorithm responder public key is kept as raw bytes in the
 context (`ctx->rspPubKey`, the ML-DSA public key or a P-384 point). An
 `MlDsaKey` is not kept live in the context: `wolfSPDM_MlDsaVerify`
-(`src/spdm_crypto.c`) allocates one on the stack for each verification (a
-static local when `WOLFSPDM_DYNAMIC_MEMORY` is off) and imports the raw key
+(`src/spdm_crypto.c`) creates one for each verification (on the stack, or on
+the heap with `WOLFSPDM_DYNAMIC_MEMORY`) and imports the raw key
 with `wc_MlDsaKey_ImportPubRaw` before calling `wc_MlDsaKey_VerifyCtx`; with
 `--enable-dynamic-mem`, the key is heap-allocated instead of living on the
 stack for that call.

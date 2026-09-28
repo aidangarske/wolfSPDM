@@ -79,9 +79,9 @@ jobs:
           make install
 
       - name: Run unit tests
-        run: make check
-        env:
-          LD_LIBRARY_PATH: ${{ github.workspace }}/.libs:${{ github.workspace }}/src/.libs:${{ env.HOME }}/wolfssl-install/lib
+        run: |
+          export LD_LIBRARY_PATH="${{ github.workspace }}/.libs:${{ github.workspace }}/src/.libs:$HOME/wolfssl-install/lib"
+          make check
 
       # --- spdm-emu (cached) ---
       - name: Cache spdm-emu

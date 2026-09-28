@@ -20,7 +20,10 @@
  */
 
 /* SPDM responder. Lives above fwtpm's transport HAL and reuses wolfSPDM
- * crypto + framing helpers, flipped to answer requester-driven messages. */
+ * crypto + framing helpers, flipped to answer requester-driven messages.
+ * It authenticates itself to the requester but not the reverse: a KEY_EXCHANGE
+ * session asks for no mutual auth and GIVE_PUB is recorded, not verified, so
+ * gate sensitive TPM use on the PSK or on transport access. */
 
 #ifndef WOLFSPDM_RESPONDER_H
 #define WOLFSPDM_RESPONDER_H

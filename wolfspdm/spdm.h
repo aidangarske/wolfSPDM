@@ -88,7 +88,9 @@ typedef struct WOLFSPDM_CTX WOLFSPDM_CTX;
 
 /* I/O callback: transport-agnostic send/receive.
  * Returns 0 on success, negative on error.
- * rxSz: [in] buffer size, [out] actual received size. */
+ * rxSz: [in] buffer size, [out] actual received size, never more than [in].
+ * wolfSPDM_SendData calls it send only (rxBuf NULL, *rxSz 0) and
+ * wolfSPDM_ReceiveData receive only (txBuf NULL, txSz 0). */
 typedef int (*WOLFSPDM_IO_CB)(
     WOLFSPDM_CTX* ctx,
     const byte* txBuf, word32 txSz,
@@ -154,6 +156,9 @@ WOLFSPDM_API int wolfSPDM_GetCapabilities(WOLFSPDM_CTX* ctx);
 WOLFSPDM_API int wolfSPDM_NegotiateAlgorithms(WOLFSPDM_CTX* ctx);
 WOLFSPDM_API int wolfSPDM_GetDigests(WOLFSPDM_CTX* ctx);
 WOLFSPDM_API int wolfSPDM_GetCertificate(WOLFSPDM_CTX* ctx, int slotId);
+/* Verify the fetched chain against the trust anchor and install its leaf as
+ * the responder key; call between GetCertificate and KeyExchange */
+WOLFSPDM_API int wolfSPDM_ValidateCertChain(WOLFSPDM_CTX* ctx);
 #endif
 WOLFSPDM_API int wolfSPDM_KeyExchange(WOLFSPDM_CTX* ctx);
 WOLFSPDM_API int wolfSPDM_Finish(WOLFSPDM_CTX* ctx);
@@ -189,7 +194,9 @@ WOLFSPDM_API int wolfSPDM_ReceiveData(WOLFSPDM_CTX* ctx, byte* data,
 WOLFSPDM_API int wolfSPDM_GetMeasurements(WOLFSPDM_CTX* ctx,
     byte measOperation, int requestSignature);
 WOLFSPDM_API int wolfSPDM_GetMeasurementCount(WOLFSPDM_CTX* ctx);
-/* valueSz is in/out; measType is the DMTF value type, 0 for raw blocks */
+/* valueSz is in/out; measType is the DMTF value type, 0 for raw blocks.
+ * measIndex, measType and value may be NULL; a NULL or short value returns
+ * WOLFSPDM_E_BUFFER_SMALL with the needed size in *valueSz. */
 WOLFSPDM_API int wolfSPDM_GetMeasurementBlock(WOLFSPDM_CTX* ctx, int blockIdx,
     byte* measIndex, byte* measType, byte* value, word32* valueSz);
 #endif

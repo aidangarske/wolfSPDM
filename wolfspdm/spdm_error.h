@@ -63,6 +63,10 @@ enum WOLFSPDM_ERROR {
     WOLFSPDM_E_CHUNK            = -28,  /* Chunked transfer failed */
 };
 
+/* Older spellings, kept for source compatibility */
+#define WOLFSPDM_E_MEAS_NOT_VERIFIED    WOLFSPDM_E_MEASUREMENT
+#define WOLFSPDM_E_MEAS_SIG_FAIL        WOLFSPDM_E_BAD_SIGNATURE
+
 /* Get human-readable error string */
 WOLFSPDM_API const char* wolfSPDM_GetErrorString(int error);
 

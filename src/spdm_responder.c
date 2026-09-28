@@ -178,6 +178,9 @@ int wolfSPDM_RespSetPSK(WOLFSPDM_RESP_CTX* ctx,
         ctx->pskHintStoreSz = 0;
     }
     ctx->flags.pskProvisioned = 1;
+    /* A ClearAuth registered for an earlier PSK must not clear this one */
+    ctx->flags.clearAuthSet = 0;
+    wc_ForceZero(ctx->clearAuthDigest, sizeof(ctx->clearAuthDigest));
     return WOLFSPDM_SUCCESS;
 #endif
 }
@@ -272,6 +275,13 @@ void wolfSPDM_RespReset(WOLFSPDM_RESP_CTX* ctx)
                  sizeof(ctx->ctx.rspFinishedKey));
     wc_ForceZero(ctx->ctx.sharedSecret, sizeof(ctx->ctx.sharedSecret));
     ctx->ctx.sharedSecretSz = 0;
+#ifndef WOLFSPDM_NO_KEY_UPDATE
+    wc_ForceZero(ctx->ctx.reqAppSecret, sizeof(ctx->ctx.reqAppSecret));
+    wc_ForceZero(ctx->ctx.rspAppSecret, sizeof(ctx->ctx.rspAppSecret));
+#endif
+    /* The ephemeral key and transcript would rebuild every session key */
+    wolfSPDM_FreeEphemeralKey(&ctx->ctx);
+    wolfSPDM_TranscriptReset(&ctx->ctx);
     ctx->ctx.reqSeqNum = 0;
     ctx->ctx.rspSeqNum = 0;
     ctx->ctx.sessionId = 0;
@@ -382,9 +392,9 @@ static int RespBuildVersion(WOLFSPDM_CTX* ctx,
     out[off++] = SPDM_VERSION;
     out[off++] = 0x00;
     out[off++] = 0x00;
-    /* VersionNumberEntryCount (LE) at offset 4. */
-    out[off++] = WOLFSPDM_RESP_VERSION_COUNT;
+    /* Reserved, then VersionNumberEntryCount (DSP0274) */
     out[off++] = 0x00;
+    out[off++] = WOLFSPDM_RESP_VERSION_COUNT;
     /* Entries: 2 bytes each, byte+1 holds the version (Major<<4 | Minor). */
     for (ver = WOLFSPDM_MIN_SPDM_VERSION; ver <= WOLFSPDM_RESP_MAX_VERSION;
          ver++) {
@@ -508,6 +518,14 @@ static int RespBuildPskExchangeRsp(WOLFSPDM_RESP_CTX* rctx,
     if (*outSz < 12u + 32u + WOLFSPDM_HASH_SIZE) {
         return WOLFSPDM_E_BUFFER_SMALL;
     }
+    reqHintLen = SPDM_Get16LE(&in[6]);
+    reqContextLen = SPDM_Get16LE(&in[8]);
+    reqOpaqueLen = SPDM_Get16LE(&in[10]);
+    /* Every declared variable-length field must fit within the request */
+    if ((word32)12 + reqHintLen + reqContextLen + reqOpaqueLen > inSz) {
+        return WOLFSPDM_E_FRAMING;
+    }
+
     /* Reload PSK from the persistent store - the requester-side helper
      * zeroes ctx->psk after derivation. */
     XMEMCPY(ctx->psk, rctx->pskStore, rctx->pskStoreSz);
@@ -516,15 +534,7 @@ static int RespBuildPskExchangeRsp(WOLFSPDM_RESP_CTX* rctx,
         XMEMCPY(ctx->pskHint, rctx->pskHintStore, rctx->pskHintStoreSz);
         ctx->pskHintSz = rctx->pskHintStoreSz;
     }
-
     ctx->reqSessionId = SPDM_Get16LE(&in[4]);
-    reqHintLen = SPDM_Get16LE(&in[6]);
-    reqContextLen = SPDM_Get16LE(&in[8]);
-    reqOpaqueLen = SPDM_Get16LE(&in[10]);
-    /* Every declared variable-length field must fit within the request */
-    if ((word32)12 + reqHintLen + reqContextLen + reqOpaqueLen > inSz) {
-        return WOLFSPDM_E_FRAMING;
-    }
 
     ctx->rspSessionId = 0xFFFE;
     ctx->sessionId = (word32)ctx->reqSessionId |
@@ -606,6 +616,20 @@ static int RespDispatchClear(WOLFSPDM_RESP_CTX* rctx,
         if (rc != WOLFSPDM_SUCCESS) {
             return RespBuildErrorClear(ctx,
                 SPDM_ERROR_MAJOR_VERSION_MISMATCH, 0, out, outSz);
+        }
+    }
+
+    /* A handshake needs its mode, and cannot restart over a live one */
+    if (code == SPDM_KEY_EXCHANGE || code == SPDM_PSK_EXCHANGE) {
+        if ((code == SPDM_KEY_EXCHANGE && !rctx->flags.useTcg) ||
+                (code == SPDM_PSK_EXCHANGE && !rctx->flags.usePsk)) {
+            return RespBuildErrorClear(ctx,
+                SPDM_ERROR_UNSUPPORTED_REQUEST, code, out, outSz);
+        }
+        if (ctx->state == WOLFSPDM_STATE_KEY_EX ||
+                ctx->state == WOLFSPDM_STATE_CONNECTED) {
+            return RespBuildErrorClear(ctx,
+                SPDM_ERROR_UNEXPECTED_REQUEST, 0, out, outSz);
         }
     }
 
@@ -979,6 +1003,12 @@ static int RespHandleVendorDefined(WOLFSPDM_RESP_CTX* rctx,
              XSTRCMP(vdCode, WOLFSPDM_VDCODE_SPDMONLY) == 0)) {
         return WOLFSPDM_E_BAD_STATE;
     }
+    /* Under handshake keys, before FINISH verifies the requester, only
+     * GIVE_PUB belongs */
+    if (fromSecured && ctx->state != WOLFSPDM_STATE_CONNECTED &&
+            XSTRCMP(vdCode, WOLFSPDM_VDCODE_GIVE_PUB) != 0) {
+        return WOLFSPDM_E_BAD_STATE;
+    }
 
     if (XSTRCMP(vdCode, WOLFSPDM_VDCODE_TPM2_CMD) == 0) {
         /* Reserve the VENDOR_DEFINED_RSP wrapper overhead
@@ -995,6 +1025,9 @@ static int RespHandleVendorDefined(WOLFSPDM_RESP_CTX* rctx,
             respPayload, tpmRespCap, &respPayloadSz);
         if (rc != 0) {
             return WOLFSPDM_E_IO_FAIL;
+        }
+        if (respPayloadSz > tpmRespCap) {
+            return WOLFSPDM_E_BUFFER_SMALL;
         }
     }
 #ifdef WOLFSPDM_TCG
@@ -1029,12 +1062,11 @@ static int RespHandleVendorDefined(WOLFSPDM_RESP_CTX* rctx,
         respPayloadSz = 4;
     }
     else if (XSTRCMP(vdCode, WOLFSPDM_VDCODE_SPDMONLY) == 0) {
-        if (payloadSz >= 1 && payload[0] == WOLFSPDM_SPDMONLY_LOCK) {
-            rctx->flags.spdmOnlyLock = 1;
+        if (payloadSz != 1 || (payload[0] != WOLFSPDM_SPDMONLY_LOCK &&
+                payload[0] != WOLFSPDM_SPDMONLY_UNLOCK)) {
+            return WOLFSPDM_E_INVALID_ARG;
         }
-        else {
-            rctx->flags.spdmOnlyLock = 0;
-        }
+        rctx->flags.spdmOnlyLock = (payload[0] == WOLFSPDM_SPDMONLY_LOCK);
         respPayloadSz = 0;
     }
 #endif /* WOLFSPDM_NUVOTON || WOLFSPDM_NATIONS */
@@ -1050,9 +1082,24 @@ static int RespHandleVendorDefined(WOLFSPDM_RESP_CTX* rctx,
         }
         /* Once a ClearAuth is registered, replacing the PSK requires
          * PSK_CLR_ first, or that check is trivially skipped. A PSK set by
-         * configuration has no ClearAuth, so it may still be provisioned. */
+         * configuration may only gain a ClearAuth here: an unauthenticated
+         * clear frame must never swap in a PSK of its own. */
         if (rctx->flags.clearAuthSet) {
             return WOLFSPDM_E_BAD_STATE;
+        }
+        if (rctx->pskStoreSz != 0) {
+            volatile int diff = 0;
+            word32 i;
+
+            if (rctx->pskStoreSz != pskLen) {
+                return WOLFSPDM_E_BAD_STATE;
+            }
+            for (i = 0; i < pskLen; i++) {
+                diff |= rctx->pskStore[i] ^ payload[i];
+            }
+            if (diff != 0) {
+                return WOLFSPDM_E_BAD_STATE;
+            }
         }
         XMEMCPY(rctx->pskStore, payload, pskLen);
         rctx->pskStoreSz = pskLen;
@@ -1121,6 +1168,9 @@ static int RespHandleVendorDefined(WOLFSPDM_RESP_CTX* rctx,
         off += respPayloadSz;
     }
     *outSz = off;
+    /* PSK_SET_ payloads and TPM traffic do not linger in scratch */
+    wc_ForceZero(payload, payloadSz);
+    wc_ForceZero(respPayload, respPayloadSz);
     return WOLFSPDM_SUCCESS;
 }
 

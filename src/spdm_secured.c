@@ -48,7 +48,7 @@ static int wolfSPDM_EncryptRecord(WOLFSPDM_CTX* ctx, int appMsg,
     Aes aes;
     byte iv[WOLFSPDM_AEAD_IV_SIZE];
     byte aad[16];  /* Up to 14 bytes for TCG format */
-    byte plainBuf[WOLFSPDM_XFER_MSG_SIZE + 16];
+    byte plainBuf[WOLFSPDM_XFER_MSG_SIZE + 2 + 16]; /* AppDataLength, pad */
     byte tag[WOLFSPDM_AEAD_TAG_SIZE];
     word32 plainBufSz;
     word16 recordLen;
@@ -408,6 +408,12 @@ int wolfSPDM_SecuredExchange(WOLFSPDM_CTX* ctx,
 {
     if (ctx == NULL || cmdPlain == NULL || rspPlain == NULL || rspSz == NULL) {
         return WOLFSPDM_E_INVALID_ARG;
+    }
+    /* Session keys exist from KEY_EXCHANGE_RSP on (GIVE_PUB runs before
+     * FINISH); anything earlier would seal with zero keys */
+    if (ctx->state < WOLFSPDM_STATE_KEY_EX ||
+            ctx->state == WOLFSPDM_STATE_ERROR || ctx->sessionId == 0) {
+        return WOLFSPDM_E_NOT_CONNECTED;
     }
 #ifndef WOLFSPDM_NO_MEAS
     /* Only back-to-back GET_MEASUREMENTS extend L1/L2 */

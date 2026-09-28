@@ -544,6 +544,7 @@ int main(int argc, char* argv[])
     word16 kexKemOnly = 0;
     int opt;
     int rc;
+    int notBuilt = 0;
     WOLFSPDM_CTX* ctx = (WOLFSPDM_CTX*)g_ctxBuf;
 
     while ((opt = getopt_long(argc, argv, "emncbkav:hd", longOpts, NULL)) != -1) {
@@ -672,6 +673,7 @@ int main(int argc, char* argv[])
         default:
             fprintf(stderr, "Scenario not built into this wolfSPDM\n");
             rc = WOLFSPDM_E_NOT_AVAILABLE;
+            notBuilt = 1;
             break;
     }
 
@@ -682,8 +684,8 @@ int main(int argc, char* argv[])
 done:
     wolfSPDM_Free(ctx);
     tcp_disconnect();
-    /* 77 = scenario skipped (automake convention) */
-    if (rc == WOLFSPDM_E_NOT_AVAILABLE) {
+    /* 77 = scenario skipped (automake convention), never a runtime error */
+    if (notBuilt) {
         return 77;
     }
     return (rc == WOLFSPDM_SUCCESS) ? 0 : 1;

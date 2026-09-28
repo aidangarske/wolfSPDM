@@ -32,6 +32,7 @@ int wolfSPDM_ExchangeMsg(WOLFSPDM_CTX* ctx,
 {
     word32 txSz = txBufSz;
     word32 rxSz = rxBufSz;
+    word32 mark = (ctx != NULL) ? ctx->transcriptLen : 0;
     int rc;
 
     rc = buildFn(ctx, txBuf, &txSz);
@@ -46,6 +47,10 @@ int wolfSPDM_ExchangeMsg(WOLFSPDM_CTX* ctx,
     }
     if (rc == WOLFSPDM_SUCCESS) {
         rc = parseFn(ctx, rxBuf, rxSz);
+    }
+    /* A failed exchange leaves no half message for a retry to build on */
+    if (rc != WOLFSPDM_SUCCESS && ctx != NULL && ctx->transcriptLen > mark) {
+        ctx->transcriptLen = mark;
     }
 
     return rc;
@@ -125,12 +130,10 @@ static int wolfSPDM_FinishXfer(WOLFSPDM_CTX* ctx, const byte* finishBuf,
     /* Check for unencrypted SPDM error response */
     if (rc == WOLFSPDM_SUCCESS &&
         rxSz >= 2 && rxBuf[0] >= 0x10 && rxBuf[0] <= 0x1F) {
-    #ifdef WOLFSPDM_DEBUG
-        if (rxBuf[1] == 0x7F) {
-            byte errCode = (rxSz >= 3) ? rxBuf[2] : 0xFF;
-            wolfSPDM_DebugPrint(ctx, "FINISH: SPDM ERROR 0x%02x\n", errCode);
+        if (rxSz >= 4 && rxBuf[1] == SPDM_ERROR) {
+            ctx->lastPeerErrorCode = rxBuf[2];
+            wolfSPDM_DebugPrint(ctx, "FINISH: SPDM ERROR 0x%02x\n", rxBuf[2]);
         }
-    #endif
         rc = WOLFSPDM_E_PEER_ERROR;
     }
 

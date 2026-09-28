@@ -684,6 +684,12 @@ int wolfSPDM_ValidateCertChain(WOLFSPDM_CTX* ctx)
     if (ctx->certChainLen <= WOLFSPDM_CERT_CHAIN_HDR_SZ) {
         return WOLFSPDM_E_CERT_FAIL;
     }
+    /* A key taken from an earlier chain is not an anchor for this one */
+    if (ctx->flags.rspKeyFromCert) {
+        ctx->flags.hasRspPubKey = 0;
+        ctx->flags.rspKeyFromCert = 0;
+        ctx->rspPubKeyLen = 0;
+    }
 
     /* RootHash in the chain header must name the configured root */
     if (ctx->trustedCASz > 0) {
@@ -736,6 +742,13 @@ int wolfSPDM_ValidateCertChain(WOLFSPDM_CTX* ctx)
         }
         anchored = 1;
     }
+    else if (rc == WOLFSPDM_SUCCESS && !anchored &&
+            !ctx->flags.allowUntrustedCert) {
+        wolfSPDM_DebugPrint(ctx, "No trust anchor: set a root CA, pin the "
+            "responder key, or allow untrusted certificates\n");
+        rc = WOLFSPDM_E_CERT_FAIL;
+    }
+    /* Only a chain that passed every check supplies the responder key */
     else if (rc == WOLFSPDM_SUCCESS) {
         rc = wolfSPDM_LeafKey(ctx, &key, ctx->rspPubKey, &leafSz);
         if (rc == WOLFSPDM_SUCCESS) {
@@ -743,13 +756,6 @@ int wolfSPDM_ValidateCertChain(WOLFSPDM_CTX* ctx)
             ctx->flags.hasRspPubKey = 1;
             ctx->flags.rspKeyFromCert = 1;
         }
-    }
-
-    if (rc == WOLFSPDM_SUCCESS && !anchored &&
-            !ctx->flags.allowUntrustedCert) {
-        wolfSPDM_DebugPrint(ctx, "No trust anchor: set a root CA, pin the "
-            "responder key, or allow untrusted certificates\n");
-        rc = WOLFSPDM_E_CERT_FAIL;
     }
 
     return rc;

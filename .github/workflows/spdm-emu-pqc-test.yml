@@ -82,6 +82,7 @@ jobs:
       #     the combined build below does not. Cleaned up before the full build. ---
       - name: Build + test wolfSPDM ML-KEM-only (--disable-mldsa --enable-mlkem)
         run: |
+          export LD_LIBRARY_PATH="${{ github.workspace }}/.libs:${{ github.workspace }}/src/.libs:$HOME/wolfssl-install/lib"
           ./autogen.sh
           ./configure --with-wolfssl=$HOME/wolfssl-install \
                       --disable-mldsa --enable-mlkem \
@@ -89,8 +90,6 @@ jobs:
           make -j"$(nproc)"
           make check
           make distclean
-        env:
-          LD_LIBRARY_PATH: ${{ github.workspace }}/.libs:${{ github.workspace }}/src/.libs:${{ env.HOME }}/wolfssl-install/lib
 
       # --- wolfSPDM with ML-DSA + ML-KEM asserted on, static or dynamic memory ---
       - name: Build and install wolfSPDM (--enable-mldsa --enable-mlkem)
@@ -103,9 +102,9 @@ jobs:
           make install
 
       - name: Run unit tests (includes ML-DSA verify + ML-KEM decap)
-        run: make check
-        env:
-          LD_LIBRARY_PATH: ${{ github.workspace }}/.libs:${{ github.workspace }}/src/.libs:${{ env.HOME }}/wolfssl-install/lib
+        run: |
+          export LD_LIBRARY_PATH="${{ github.workspace }}/.libs:${{ github.workspace }}/src/.libs:$HOME/wolfssl-install/lib"
+          make check
 
       # --- spdm-emu with OpenSSL backend (ML-DSA), cached per OS/arch ---
       # Cache the whole build tree, not just build/bin: the OpenSSL-backed

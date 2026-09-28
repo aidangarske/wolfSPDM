@@ -137,7 +137,7 @@ int wolfSPDM_ParsePskExchangeRsp(WOLFSPDM_CTX* ctx, const byte* buf,
 
     /* Minimum: header(4) + RspSessionID(2) + Reserved(1) + RspContextLen(2) +
      * OpaqueLen(2) + VerifyData(48) = 59 */
-    SPDM_CHECK_PARSE_ARGS(ctx, buf, bufSz, 59);
+    SPDM_CHECK_PARSE_OR_ERROR_ARGS(ctx, buf, bufSz, 59);
     SPDM_CHECK_RESPONSE(ctx, buf, bufSz, SPDM_PSK_EXCHANGE_RSP,
         WOLFSPDM_E_KEY_EXCHANGE);
 

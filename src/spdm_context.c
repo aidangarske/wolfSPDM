@@ -291,6 +291,13 @@ int wolfSPDM_SetMode(WOLFSPDM_CTX* ctx, WOLFSPDM_MODE mode)
         return WOLFSPDM_SUCCESS;
     }
 #endif
+#ifndef WOLFSPDM_NO_CERT
+    /* Back to the standard requester */
+    if (mode == WOLFSPDM_MODE_AUTO) {
+        ctx->mode = WOLFSPDM_MODE_AUTO;
+        return WOLFSPDM_SUCCESS;
+    }
+#endif
 
     return WOLFSPDM_E_INVALID_ARG;  /* Unsupported mode */
 }
@@ -370,6 +377,9 @@ int wolfSPDM_Connect(WOLFSPDM_CTX* ctx)
         return WOLFSPDM_E_IO_FAIL;
     }
 
+    /* A retry or reconnect starts from sequence number 0 and fresh keys */
+    wolfSPDM_ResetSession(ctx);
+
 #ifdef WOLFSPDM_TCG
     if (ctx->mode == WOLFSPDM_MODE_NUVOTON ||
         ctx->mode == WOLFSPDM_MODE_NATIONS) {
@@ -390,48 +400,17 @@ int wolfSPDM_Connect(WOLFSPDM_CTX* ctx)
     return WOLFSPDM_E_INVALID_ARG;
 }
 
-int wolfSPDM_Disconnect(WOLFSPDM_CTX* ctx)
+/* Drop session state and wipe session-scoped secrets; configured identity
+ * keys, PSK and trust anchors stay for a later connection */
+void wolfSPDM_ResetSession(WOLFSPDM_CTX* ctx)
 {
-    int rc;
-    byte txBuf[8];
-    byte rxBuf[16];   /* END_SESSION_ACK: 4 bytes */
-    word32 txSz, rxSz;
-
-    if (ctx == NULL) {
-        return WOLFSPDM_E_INVALID_ARG;
-    }
-
-    if (ctx->state != WOLFSPDM_STATE_CONNECTED) {
-        return WOLFSPDM_E_NOT_CONNECTED;
-    }
-
-    /* Build END_SESSION */
-    txSz = sizeof(txBuf);
-    rc = wolfSPDM_BuildEndSession(ctx, txBuf, &txSz);
-    if (rc == WOLFSPDM_SUCCESS) {
-        rxSz = sizeof(rxBuf);
-        rc = wolfSPDM_SecuredExchange(ctx, txBuf, txSz, rxBuf, &rxSz);
-    }
-    if (rc == WOLFSPDM_SUCCESS) {
-        if (rxSz < 4) {
-            rc = WOLFSPDM_E_BUFFER_SMALL;
-        }
-        else if (wolfSPDM_CheckError(rxBuf, rxSz, NULL)) {
-            rc = WOLFSPDM_E_PEER_ERROR;
-        }
-        else if (rxSz != 4 || rxBuf[0] != ctx->spdmVersion ||
-                 rxBuf[1] != SPDM_END_SESSION_ACK ||
-                 rxBuf[2] != 0 || rxBuf[3] != 0) {
-            rc = WOLFSPDM_E_PEER_ERROR;
-        }
-    }
-
-    /* Reset session state and wipe session-scoped keys; configured identity
-     * keys remain for a later connection */
     ctx->state = WOLFSPDM_STATE_INIT;
     ctx->sessionId = 0;
+    ctx->rspSessionId = 0;
     ctx->reqSeqNum = 0;
     ctx->rspSeqNum = 0;
+    ctx->mutAuthRequested = 0;
+    ctx->reqSlotIdParam = 0;
     /* App data keys */
     wc_ForceZero(ctx->reqDataKey, sizeof(ctx->reqDataKey));
     wc_ForceZero(ctx->rspDataKey, sizeof(ctx->rspDataKey));
@@ -453,86 +432,117 @@ int wolfSPDM_Disconnect(WOLFSPDM_CTX* ctx)
     wc_ForceZero(ctx->th1, sizeof(ctx->th1));
     wc_ForceZero(ctx->th2, sizeof(ctx->th2));
     wolfSPDM_FreeEphemeralKey(ctx);
+#if !defined(WOLFSPDM_NO_MEAS) || !defined(WOLFSPDM_NO_CHALLENGE)
+    wolfSPDM_AttestFree(ctx);
+#endif
+}
 
+int wolfSPDM_Disconnect(WOLFSPDM_CTX* ctx)
+{
+    int rc = WOLFSPDM_E_NOT_CONNECTED;
+    byte txBuf[8];
+    byte rxBuf[16];   /* END_SESSION_ACK: 4 bytes */
+    word32 txSz, rxSz;
+
+    if (ctx == NULL) {
+        return WOLFSPDM_E_INVALID_ARG;
+    }
+
+    /* END_SESSION only for a live session; the wipe always runs */
+    if (ctx->state == WOLFSPDM_STATE_CONNECTED) {
+        txSz = sizeof(txBuf);
+        rc = wolfSPDM_BuildEndSession(ctx, txBuf, &txSz);
+        if (rc == WOLFSPDM_SUCCESS) {
+            rxSz = sizeof(rxBuf);
+            rc = wolfSPDM_SecuredExchange(ctx, txBuf, txSz, rxBuf, &rxSz);
+        }
+        if (rc == WOLFSPDM_SUCCESS) {
+            if (rxSz < 4) {
+                rc = WOLFSPDM_E_BUFFER_SMALL;
+            }
+            else if (wolfSPDM_CheckError(rxBuf, rxSz, NULL)) {
+                rc = WOLFSPDM_E_PEER_ERROR;
+            }
+            else if (rxSz != 4 || rxBuf[0] != ctx->spdmVersion ||
+                     rxBuf[1] != SPDM_END_SESSION_ACK ||
+                     rxBuf[2] != 0 || rxBuf[3] != 0) {
+                rc = WOLFSPDM_E_PEER_ERROR;
+            }
+        }
+    }
+
+    wolfSPDM_ResetSession(ctx);
     return rc;
 }
 
 /* ----- I/O Helper ----- */
 
-int wolfSPDM_SendReceive(WOLFSPDM_CTX* ctx,
-    const byte* txBuf, word32 txSz,
-    byte* rxBuf, word32* rxSz)
+#ifdef WOLFSPDM_TCG
+/* One exchange in TCG binding framing: a clear (0x8101) or secured (0x8201)
+ * header around the message */
+static int wolfSPDM_TcgSendReceive(WOLFSPDM_CTX* ctx,
+    const byte* txBuf, word32 txSz, byte* rxBuf, word32* rxSz)
 {
-    int rc;
+    byte tcgTx[WOLFSPDM_MAX_MSG_SIZE + WOLFSPDM_AEAD_OVERHEAD +
+               WOLFSPDM_TCG_HEADER_SIZE];
+    byte tcgRx[WOLFSPDM_MAX_MSG_SIZE + WOLFSPDM_AEAD_OVERHEAD +
+               WOLFSPDM_TCG_HEADER_SIZE];
+    word32 tcgRxSz = sizeof(tcgRx);
+    int tcgTxSz = 0;
+    word32 msgSize;
+    word32 payloadSz;
+    word16 tag;
+    int rc = WOLFSPDM_SUCCESS;
 
-    if (ctx == NULL || ctx->ioCb == NULL) {
-        return WOLFSPDM_E_IO_FAIL;
+    /* Detect message type: SPDM version byte 0x10-0x1F = clear message.
+     * Secured records start with SessionID (LE, typically 0x01 0x00...),
+     * which is never in the SPDM version range. */
+    if (txSz > 0 && txBuf[0] >= 0x10 && txBuf[0] <= 0x1F) {
+        /* Clear SPDM message - wrap with TCG clear header (0x8101) */
+        tcgTxSz = wolfSPDM_BuildTcgClearMessage(ctx, txBuf, txSz,
+            tcgTx, sizeof(tcgTx));
+        if (tcgTxSz < 0) {
+            rc = tcgTxSz;
+        }
+    }
+    else if (txSz > sizeof(tcgTx) - WOLFSPDM_TCG_HEADER_SIZE) {
+        rc = WOLFSPDM_E_BUFFER_SMALL;
+    }
+    else {
+        /* Secured record - prepend TCG secured header (0x8201) */
+        tcgTxSz = (int)(WOLFSPDM_TCG_HEADER_SIZE + txSz);
+        wolfSPDM_WriteTcgHeader(tcgTx, WOLFSPDM_TCG_TAG_SECURED,
+            (word32)tcgTxSz, ctx->connectionHandle, ctx->fipsIndicator);
+        XMEMCPY(tcgTx + WOLFSPDM_TCG_HEADER_SIZE, txBuf, txSz);
     }
 
-#ifdef WOLFSPDM_TCG
-    if (wolfSPDM_IsTcgMode(ctx)) {
-        /* Wrap messages with TCG SPDM
-         * headers; I/O sends TCG-framed messages. */
-        byte tcgTx[WOLFSPDM_MAX_MSG_SIZE + WOLFSPDM_AEAD_OVERHEAD +
-                   WOLFSPDM_TCG_HEADER_SIZE];
-        byte tcgRx[WOLFSPDM_MAX_MSG_SIZE + WOLFSPDM_AEAD_OVERHEAD +
-                   WOLFSPDM_TCG_HEADER_SIZE];
-        word32 tcgRxSz = sizeof(tcgRx);
-        int tcgTxSz;
-        word32 msgSize;
-        word32 payloadSz;
-        word16 tag;
-
-        /* Detect message type: SPDM version byte 0x10-0x1F = clear message.
-         * Secured records start with SessionID (LE, typically 0x01 0x00...),
-         * which is never in the SPDM version range. */
-        if (txSz > 0 && txBuf[0] >= 0x10 && txBuf[0] <= 0x1F) {
-            /* Clear SPDM message - wrap with TCG clear header (0x8101) */
-            tcgTxSz = wolfSPDM_BuildTcgClearMessage(ctx, txBuf, txSz,
-                tcgTx, sizeof(tcgTx));
-        } else {
-            /* Secured record - prepend TCG secured header (0x8201) */
-            word32 totalSz;
-            if (txSz > sizeof(tcgTx) - WOLFSPDM_TCG_HEADER_SIZE) {
-                return WOLFSPDM_E_BUFFER_SMALL;
-            }
-            totalSz = WOLFSPDM_TCG_HEADER_SIZE + txSz;
-            wolfSPDM_WriteTcgHeader(tcgTx, WOLFSPDM_TCG_TAG_SECURED,
-                totalSz, ctx->connectionHandle, ctx->fipsIndicator);
-            XMEMCPY(tcgTx + WOLFSPDM_TCG_HEADER_SIZE, txBuf, txSz);
-            tcgTxSz = (int)totalSz;
-        }
-
-        if (tcgTxSz < 0) {
-            return tcgTxSz;
-        }
-
+    if (rc == WOLFSPDM_SUCCESS) {
         wolfSPDM_DebugHex(ctx, "TCG TX", tcgTx, (word32)tcgTxSz);
 
         /* Send/receive via I/O callback (raw transport) */
-        rc = ctx->ioCb(ctx, tcgTx, (word32)tcgTxSz, tcgRx, &tcgRxSz,
-            ctx->ioUserCtx);
-        if (rc != 0) {
-            wolfSPDM_DebugPrint(ctx, "TCG I/O failed: %d\n", rc);
-            return WOLFSPDM_E_IO_FAIL;
+        if (ctx->ioCb(ctx, tcgTx, (word32)tcgTxSz, tcgRx, &tcgRxSz,
+                ctx->ioUserCtx) != 0 || tcgRxSz > sizeof(tcgRx)) {
+            wolfSPDM_DebugPrint(ctx, "TCG I/O failed\n");
+            rc = WOLFSPDM_E_IO_FAIL;
         }
+    }
 
+    /* Strip TCG binding header from response */
+    if (rc == WOLFSPDM_SUCCESS && tcgRxSz < WOLFSPDM_TCG_HEADER_SIZE) {
+        wolfSPDM_DebugPrint(ctx, "SendReceive: response too short (%u)\n",
+            tcgRxSz);
+        rc = WOLFSPDM_E_BUFFER_SMALL;
+    }
+    if (rc == WOLFSPDM_SUCCESS) {
         wolfSPDM_DebugHex(ctx, "TCG RX", tcgRx, tcgRxSz);
-
-        /* Strip TCG binding header from response */
-        if (tcgRxSz < WOLFSPDM_TCG_HEADER_SIZE) {
-            wolfSPDM_DebugPrint(ctx, "SendReceive: response too short (%u)\n",
-                tcgRxSz);
-            return WOLFSPDM_E_BUFFER_SMALL;
-        }
-
         tag = SPDM_Get16BE(tcgRx);
         if (tag != WOLFSPDM_TCG_TAG_CLEAR && tag != WOLFSPDM_TCG_TAG_SECURED) {
             wolfSPDM_DebugPrint(ctx, "SendReceive: unexpected TCG tag "
                 "0x%04x\n", tag);
-            return WOLFSPDM_E_PEER_ERROR;
+            rc = WOLFSPDM_E_PEER_ERROR;
         }
-
+    }
+    if (rc == WOLFSPDM_SUCCESS) {
         /* Capture FIPS indicator from response if non-zero */
         tag = SPDM_Get16BE(tcgRx + 10);
         if (tag != 0) {
@@ -541,28 +551,51 @@ int wolfSPDM_SendReceive(WOLFSPDM_CTX* ctx,
 
         /* Extract payload (everything after 16-byte TCG header) */
         msgSize = SPDM_Get32BE(tcgRx + 2);
-
         if (msgSize < WOLFSPDM_TCG_HEADER_SIZE || msgSize > tcgRxSz) {
             wolfSPDM_DebugPrint(ctx, "SendReceive: TCG size %u invalid "
                 "(min=%u, received=%u)\n", msgSize,
                 WOLFSPDM_TCG_HEADER_SIZE, tcgRxSz);
-            return WOLFSPDM_E_BUFFER_SMALL;
+            rc = WOLFSPDM_E_BUFFER_SMALL;
         }
-
+    }
+    if (rc == WOLFSPDM_SUCCESS) {
         payloadSz = msgSize - WOLFSPDM_TCG_HEADER_SIZE;
         if (payloadSz > *rxSz) {
-            return WOLFSPDM_E_BUFFER_SMALL;
+            rc = WOLFSPDM_E_BUFFER_SMALL;
         }
-
-        XMEMCPY(rxBuf, tcgRx + WOLFSPDM_TCG_HEADER_SIZE, payloadSz);
-        *rxSz = payloadSz;
-
-        return WOLFSPDM_SUCCESS;
+        else {
+            XMEMCPY(rxBuf, tcgRx + WOLFSPDM_TCG_HEADER_SIZE, payloadSz);
+            *rxSz = payloadSz;
+        }
     }
+
+    /* Clear vendor messages carry PSK material */
+    wc_ForceZero(tcgTx, sizeof(tcgTx));
+    wc_ForceZero(tcgRx, sizeof(tcgRx));
+    return rc;
+}
 #endif /* WOLFSPDM_TCG */
 
-    rc = ctx->ioCb(ctx, txBuf, txSz, rxBuf, rxSz, ctx->ioUserCtx);
-    if (rc != 0) {
+int wolfSPDM_SendReceive(WOLFSPDM_CTX* ctx,
+    const byte* txBuf, word32 txSz,
+    byte* rxBuf, word32* rxSz)
+{
+    word32 cap;
+
+    if (ctx == NULL || ctx->ioCb == NULL || rxSz == NULL) {
+        return WOLFSPDM_E_IO_FAIL;
+    }
+
+#ifdef WOLFSPDM_TCG
+    if (wolfSPDM_IsTcgMode(ctx)) {
+        return wolfSPDM_TcgSendReceive(ctx, txBuf, txSz, rxBuf, rxSz);
+    }
+#endif
+
+    /* The callback may not report more than the buffer holds */
+    cap = *rxSz;
+    if (ctx->ioCb(ctx, txBuf, txSz, rxBuf, rxSz, ctx->ioUserCtx) != 0 ||
+            *rxSz > cap) {
         return WOLFSPDM_E_IO_FAIL;
     }
 

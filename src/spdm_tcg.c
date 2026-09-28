@@ -39,46 +39,53 @@ int wolfSPDM_TCG_VendorCmdClear(WOLFSPDM_CTX* ctx, const char* vdCode,
     byte spdmMsg[WOLFSPDM_VENDOR_BUF_SZ];
     int spdmMsgSz;
     byte rxBuf[WOLFSPDM_VENDOR_RX_SZ];
-    word32 rxSz;
-    int rc;
+    word32 rxSz = sizeof(rxBuf);
+    int rc = WOLFSPDM_SUCCESS;
     byte ver;
+
+    if (ctx == NULL || vdCode == NULL) {
+        return WOLFSPDM_E_INVALID_ARG;
+    }
 
     ver = ctx->spdmVersion ? ctx->spdmVersion : SPDM_VERSION_13;
     spdmMsgSz = wolfSPDM_BuildVendorDefined(ver, vdCode, payload,
         payloadSz, spdmMsg, sizeof(spdmMsg));
     if (spdmMsgSz < 0) {
-        return spdmMsgSz;
+        rc = spdmMsgSz;
+    }
+    if (rc == WOLFSPDM_SUCCESS) {
+        rc = wolfSPDM_SendReceive(ctx, spdmMsg, (word32)spdmMsgSz, rxBuf,
+            &rxSz);
     }
 
-    rxSz = sizeof(rxBuf);
-    rc = wolfSPDM_SendReceive(ctx, spdmMsg, (word32)spdmMsgSz, rxBuf, &rxSz);
-    if (rc != WOLFSPDM_SUCCESS) {
-        return rc;
-    }
-
-    if (rxSz >= 4 && rxBuf[1] == SPDM_ERROR) {
+    if (rc == WOLFSPDM_SUCCESS && rxSz >= 4 && rxBuf[1] == SPDM_ERROR) {
         wolfSPDM_DebugPrint(ctx, "%s: SPDM ERROR 0x%02x 0x%02x\n",
             vdCode, rxBuf[2], rxBuf[3]);
-        return WOLFSPDM_E_PEER_ERROR;
+        ctx->lastPeerErrorCode = rxBuf[2];
+        rc = WOLFSPDM_E_PEER_ERROR;
     }
 
-    if (rsp != NULL) {
+    if (rc == WOLFSPDM_SUCCESS && rsp != NULL) {
         rsp->payloadSz = sizeof(rsp->payload);
         XMEMSET(rsp->vdCode, 0, sizeof(rsp->vdCode));
         rc = wolfSPDM_ParseVendorDefined(rxBuf, rxSz,
             rsp->vdCode, rsp->payload, &rsp->payloadSz);
-        if (rc < 0) {
-            return rc;
+        if (rc >= 0) {
+            rc = WOLFSPDM_SUCCESS;
         }
         /* Validate response VdCode matches the request */
-        if (XMEMCMP(rsp->vdCode, vdCode, WOLFSPDM_VDCODE_LEN) != 0) {
+        if (rc == WOLFSPDM_SUCCESS &&
+                XMEMCMP(rsp->vdCode, vdCode, WOLFSPDM_VDCODE_LEN) != 0) {
             wolfSPDM_DebugPrint(ctx, "%s: unexpected VdCode '%.8s'\n",
                 vdCode, rsp->vdCode);
-            return WOLFSPDM_E_PEER_ERROR;
+            rc = WOLFSPDM_E_PEER_ERROR;
         }
     }
 
-    return WOLFSPDM_SUCCESS;
+    /* PSK_SET_ and PSK_CLR_ carry secrets */
+    wc_ForceZero(spdmMsg, sizeof(spdmMsg));
+    wc_ForceZero(rxBuf, sizeof(rxBuf));
+    return rc;
 }
 
 int wolfSPDM_TCG_VendorCmdSecured(WOLFSPDM_CTX* ctx, const char* vdCode,
@@ -90,6 +97,10 @@ int wolfSPDM_TCG_VendorCmdSecured(WOLFSPDM_CTX* ctx, const char* vdCode,
     word32 decSz = 0;
     int rc;
     byte ver;
+
+    if (ctx == NULL || vdCode == NULL) {
+        return WOLFSPDM_E_INVALID_ARG;
+    }
 
     ver = ctx->spdmVersion ? ctx->spdmVersion : SPDM_VERSION_13;
     spdmMsgSz = wolfSPDM_BuildVendorDefined(ver, vdCode, payload,
