@@ -13,6 +13,15 @@ usage() {
 TPM=$1
 SPDM=$(cd "$(dirname "$0")/.." && pwd)
 
+# wolfTPM with the lib/wolfSPDM submodule: replace the submodule contents
+if grep -qs 'lib/wolfSPDM' "$TPM/.gitmodules"; then
+    mkdir -p "$TPM/lib/wolfSPDM"
+    rm -rf "$TPM/lib/wolfSPDM/src" "$TPM/lib/wolfSPDM/wolfspdm"
+    cp -R "$SPDM/src" "$SPDM/wolfspdm" "$SPDM/LICENSE" "$TPM/lib/wolfSPDM/"
+    echo "wolfSPDM copied into $TPM/lib/wolfSPDM"
+    exit 0
+fi
+
 [ -d "$TPM/src/spdm" ] && [ -d "$TPM/wolftpm/spdm" ] || {
     echo "error: $TPM does not look like a wolfTPM tree with src/spdm" >&2
     exit 1

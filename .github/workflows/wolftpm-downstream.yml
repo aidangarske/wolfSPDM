@@ -1,8 +1,8 @@
 name: wolfTPM downstream
 
-# Builds wolfTPM master with this wolfSPDM tree in place of its embedded SPDM
-# sources and runs wolfTPM's SPDM test suite, so no change can land in
-# wolfSPDM that breaks wolfTPM.
+# Builds wolfTPM master (or a dispatched repo/ref) with this wolfSPDM tree in
+# place of its SPDM sources and runs wolfTPM's SPDM test suite, so no change
+# can land in wolfSPDM that breaks wolfTPM.
 
 on:
   push:
@@ -11,6 +11,14 @@ on:
     branches: [ '*' ]
   repository_dispatch:
     types: [nightly-trigger]
+  workflow_dispatch:
+    inputs:
+      wolftpm_repo:
+        description: wolfTPM repository to test against
+        default: wolfSSL/wolfTPM
+      wolftpm_ref:
+        description: wolfTPM branch or commit
+        default: master
 
 permissions:
   contents: read
@@ -63,8 +71,8 @@ jobs:
       - name: Checkout wolfTPM
         uses: actions/checkout@v4
         with:
-          repository: wolfSSL/wolfTPM
-          ref: master
+          repository: ${{ inputs.wolftpm_repo || 'wolfSSL/wolfTPM' }}
+          ref: ${{ inputs.wolftpm_ref || 'master' }}
           persist-credentials: false
 
       - name: Checkout wolfSPDM
@@ -134,8 +142,8 @@ jobs:
       - name: Checkout wolfTPM
         uses: actions/checkout@v4
         with:
-          repository: wolfSSL/wolfTPM
-          ref: master
+          repository: ${{ inputs.wolftpm_repo || 'wolfSSL/wolfTPM' }}
+          ref: ${{ inputs.wolftpm_ref || 'master' }}
           persist-credentials: false
 
       - name: Checkout wolfSPDM
