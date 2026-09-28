@@ -1620,6 +1620,10 @@ static int test_build_vendor_defined(void)
         (byte*)"X", 1, outBuf, sizeof(outBuf)) < 0, "NULL vdCode");
     TEST_ASSERT(wolfSPDM_BuildVendorDefined(SPDM_VERSION_12, "TPM2_CMD",
         (byte*)"X", 1, NULL, sizeof(outBuf)) < 0, "NULL outBuf");
+    TEST_ASSERT(wolfSPDM_BuildVendorDefined(SPDM_VERSION_12, "A",
+        (byte*)"X", 1, outBuf, sizeof(outBuf)) < 0, "short vdCode");
+    TEST_ASSERT(wolfSPDM_BuildVendorDefined(SPDM_VERSION_12, "TPM2_CMDX",
+        (byte*)"X", 1, outBuf, sizeof(outBuf)) < 0, "long vdCode");
 
     /* Buffer too small */
     TEST_ASSERT(wolfSPDM_BuildVendorDefined(SPDM_VERSION_12, "TPM2_CMD",

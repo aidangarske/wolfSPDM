@@ -210,7 +210,8 @@ int wolfSPDM_BuildVendorDefined(
     word32 totalSz;
     word32 offset = 0;
 
-    if (vdCode == NULL || outBuf == NULL) {
+    if (vdCode == NULL || outBuf == NULL ||
+            XSTRLEN(vdCode) != WOLFSPDM_VDCODE_LEN) {
         return WOLFSPDM_E_INVALID_ARG;
     }
     if (payload == NULL && payloadSz != 0) {
