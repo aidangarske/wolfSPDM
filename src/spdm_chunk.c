@@ -315,13 +315,24 @@ int wolfSPDM_ChunkExchange(WOLFSPDM_CTX* ctx, int secured,
     return rc;
 }
 
+#endif /* !WOLFSPDM_NO_CHUNK */
+
+#ifndef WOLFSPDM_NO_CERT
+/* Unchunked, a request must fit the responder's DataTransferSize */
 int wolfSPDM_ClearExchange(WOLFSPDM_CTX* ctx, const byte* req, word32 reqSz,
     byte* rsp, word32* rspSz)
 {
+#ifndef WOLFSPDM_NO_CHUNK
     if (ctx != NULL && wolfSPDM_ChunkOn(ctx)) {
         return wolfSPDM_ChunkExchange(ctx, 0, req, reqSz, rsp, rspSz);
     }
+#endif
+    if (ctx != NULL && !wolfSPDM_IsTcgMode(ctx) &&
+            ctx->dataTransferSize != 0 && reqSz > ctx->dataTransferSize) {
+        wolfSPDM_DebugPrint(ctx, "Request of %u bytes exceeds the responder "
+            "DataTransferSize %u\n", reqSz, ctx->dataTransferSize);
+        return WOLFSPDM_E_BUFFER_SMALL;
+    }
     return wolfSPDM_SendReceive(ctx, req, reqSz, rsp, rspSz);
 }
-
-#endif /* !WOLFSPDM_NO_CHUNK */
+#endif /* !WOLFSPDM_NO_CERT */

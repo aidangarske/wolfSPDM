@@ -48,6 +48,12 @@
 #include <wolfssl/wolfcrypt/aes.h>
 #include <wolfssl/wolfcrypt/memory.h>
 #include <wolfssl/version.h>
+#ifdef WOLFSPDM_HAVE_MLDSA
+    #include <wolfssl/wolfcrypt/wc_mldsa.h>
+#endif
+#ifdef WOLFSPDM_HAVE_MLKEM
+    #include <wolfssl/wolfcrypt/wc_mlkem.h>
+#endif
 
 #if defined(LIBWOLFSSL_VERSION_HEX) && LIBWOLFSSL_VERSION_HEX < 0x05008004
 /* wc_ForceZero added in wolfSSL v5.8.4 */
@@ -130,10 +136,17 @@ struct WOLFSPDM_CTX {
     byte spdmVersion;           /* Negotiated SPDM version */
     byte lastPeerErrorCode;     /* Last SPDM ERROR Param1 (0 = none) */
 
-    /* Ephemeral ECDHE key (generated for KEY_EXCHANGE) */
+    /* Ephemeral key for KEY_EXCHANGE: ECDHE P-384, or ML-KEM when negotiated */
+#ifdef WOLFSPDM_HAVE_MLKEM
+    union {
+        ecc_key ecc;
+        MlKemKey mlkem;
+    } ephemeral;
+#else
     ecc_key ephemeralKey;
+#endif
 
-    /* ECDH shared secret (P-384 X-coordinate = 48 bytes) */
+    /* ECDH shared secret (P-384 X-coordinate = 48 bytes, ML-KEM 32) */
     byte sharedSecret[WOLFSPDM_ECC_KEY_SIZE];
     word32 sharedSecretSz;
 
@@ -172,8 +185,8 @@ struct WOLFSPDM_CTX {
     word16 rspSessionId;        /* Responder's session ID */
     word32 sessionId;           /* Combined: reqSessionId | (rspSessionId << 16) */
 
-    /* Responder's identity public key (for cert-less mode like Nuvoton) */
-    byte rspPubKey[WOLFSPDM_PUBKEY_BUF_SZ / 2]; /* pinned raw X||Y */
+    /* Responder's identity public key: raw P-384 X||Y, or an ML-DSA key */
+    byte rspPubKey[WOLFSPDM_RSP_PUBKEY_SZ];
     word32 rspPubKeyLen;
 
     /* Mutual auth fields from KEY_EXCHANGE_RSP */
@@ -200,6 +213,14 @@ struct WOLFSPDM_CTX {
 #ifndef WOLFSPDM_NO_CHUNK
     byte   chunkHandle;         /* next CHUNK_SEND handle */
 #endif
+#ifdef WOLFSPDM_HAVE_MLDSA
+    word32 pqcAsymSel;          /* negotiated ML-DSA set, 0 for ECDSA P-384 */
+#endif
+#ifdef WOLFSPDM_HAVE_MLKEM
+    word16 kemAlgSel;           /* negotiated ML-KEM set, 0 for ECDHE */
+    word16 kexAdvKem;           /* ML-KEM sets offered at SPDM 1.4 */
+    byte   kexAdvDhe;           /* offer ECDHE P-384 */
+#endif
     byte   certChain[WOLFSPDM_MAX_CERT_CHAIN];
     byte   trustedCA[WOLFSPDM_MAX_TRUSTED_CA];
 #endif
@@ -222,6 +243,9 @@ struct WOLFSPDM_CTX {
         unsigned int isDynamic          : 1;  /* Set by wolfSPDM_New(), checked by Free */
         unsigned int rngInitialized     : 1;
         unsigned int ephemeralKeyInit   : 1;
+#ifdef WOLFSPDM_HAVE_MLKEM
+        unsigned int ephemeralIsKem     : 1;  /* live union member is mlkem */
+#endif
         unsigned int hasRspPubKey       : 1;
 #ifdef WOLFSPDM_MUTUAL_AUTH
         unsigned int hasReqKeyPair      : 1;
@@ -255,6 +279,94 @@ static WC_INLINE int wolfSPDM_ChunkOn(const WOLFSPDM_CTX* ctx)
            (ctx->rspCaps & SPDM_CAP_CHUNK_CAP) != 0;
 }
 #endif
+
+#ifdef WOLFSPDM_HAVE_MLKEM
+    #define WOLFSPDM_EPH_ECC(ctx)   (&(ctx)->ephemeral.ecc)
+#else
+    #define WOLFSPDM_EPH_ECC(ctx)   (&(ctx)->ephemeralKey)
+#endif
+
+#ifdef WOLFSPDM_HAVE_MLDSA
+/* Offer only the ML-DSA sets this wolfSSL was built with */
+#ifndef WOLFSSL_NO_ML_DSA_44
+    #define WOLFSPDM_MLDSA_44_SET   SPDM_PQC_ASYM_ALGO_ML_DSA_44
+#else
+    #define WOLFSPDM_MLDSA_44_SET   0
+#endif
+#ifndef WOLFSSL_NO_ML_DSA_65
+    #define WOLFSPDM_MLDSA_65_SET   SPDM_PQC_ASYM_ALGO_ML_DSA_65
+#else
+    #define WOLFSPDM_MLDSA_65_SET   0
+#endif
+#ifndef WOLFSSL_NO_ML_DSA_87
+    #define WOLFSPDM_MLDSA_87_SET   SPDM_PQC_ASYM_ALGO_ML_DSA_87
+#else
+    #define WOLFSPDM_MLDSA_87_SET   0
+#endif
+#define WOLFSPDM_MLDSA_SETS (WOLFSPDM_MLDSA_44_SET | WOLFSPDM_MLDSA_65_SET | \
+                             WOLFSPDM_MLDSA_87_SET)
+
+/* wolfCrypt level of an ML-DSA set, 0 if not one this build supports */
+static WC_INLINE byte wolfSPDM_MlDsaLevel(word32 pqcAsymSel)
+{
+    if ((pqcAsymSel & WOLFSPDM_MLDSA_SETS) == 0) {
+        return 0;
+    }
+    switch (pqcAsymSel) {
+        case SPDM_PQC_ASYM_ALGO_ML_DSA_44: return WC_ML_DSA_44;
+        case SPDM_PQC_ASYM_ALGO_ML_DSA_65: return WC_ML_DSA_65;
+        case SPDM_PQC_ASYM_ALGO_ML_DSA_87: return WC_ML_DSA_87;
+        default:                           return 0;
+    }
+}
+#endif /* WOLFSPDM_HAVE_MLDSA */
+
+#ifdef WOLFSPDM_HAVE_MLKEM
+#ifdef WOLFSSL_WC_ML_KEM_512
+    #define WOLFSPDM_MLKEM_512_SET  SPDM_KEM_ALGO_ML_KEM_512
+#else
+    #define WOLFSPDM_MLKEM_512_SET  0
+#endif
+#ifdef WOLFSSL_WC_ML_KEM_768
+    #define WOLFSPDM_MLKEM_768_SET  SPDM_KEM_ALGO_ML_KEM_768
+#else
+    #define WOLFSPDM_MLKEM_768_SET  0
+#endif
+#ifdef WOLFSSL_WC_ML_KEM_1024
+    #define WOLFSPDM_MLKEM_1024_SET SPDM_KEM_ALGO_ML_KEM_1024
+#else
+    #define WOLFSPDM_MLKEM_1024_SET 0
+#endif
+#define WOLFSPDM_MLKEM_SETS ((word16)(WOLFSPDM_MLKEM_512_SET | \
+                             WOLFSPDM_MLKEM_768_SET | WOLFSPDM_MLKEM_1024_SET))
+#endif /* WOLFSPDM_HAVE_MLKEM */
+
+/* wolfCrypt ML-DSA level of the responder key, 0 for ECDSA P-384 */
+static WC_INLINE byte wolfSPDM_RspMlDsaLevel(const WOLFSPDM_CTX* ctx)
+{
+#ifdef WOLFSPDM_HAVE_MLDSA
+    if (!wolfSPDM_IsTcgMode(ctx)) {
+        return wolfSPDM_MlDsaLevel(ctx->pqcAsymSel);
+    }
+#endif
+    (void)ctx;
+    return 0;
+}
+
+/* SigLen of the negotiated responder signature */
+static WC_INLINE word32 wolfSPDM_SigSize(const WOLFSPDM_CTX* ctx)
+{
+#ifdef WOLFSPDM_HAVE_MLDSA
+    switch (wolfSPDM_RspMlDsaLevel(ctx)) {
+        case WC_ML_DSA_44: return WOLFSPDM_MLDSA44_SIG_SIZE;
+        case WC_ML_DSA_65: return WOLFSPDM_MLDSA65_SIG_SIZE;
+        case WC_ML_DSA_87: return WOLFSPDM_MLDSA87_SIG_SIZE;
+        default:           break;
+    }
+#endif
+    (void)ctx;
+    return WOLFSPDM_ECC_SIG_SIZE;
+}
 
 /* ----- Byte-Order Helpers ----- */
 
@@ -391,6 +503,18 @@ WOLFSPDM_TEST_API int wolfSPDM_ExtractEccPoint(const byte* pubKey,
 WOLFSPDM_API int wolfSPDM_VerifySignature(WOLFSPDM_CTX* ctx,
     const byte* hash, word32 hashSz,
     const byte* sig, word32 sigSz);
+WOLFSPDM_API void wolfSPDM_FreeEphemeralKey(WOLFSPDM_CTX* ctx);
+#ifdef WOLFSPDM_HAVE_MLDSA
+WOLFSPDM_API int wolfSPDM_MlDsaVerify(byte level, const byte* pub,
+    word32 pubSz, const byte* context, word32 contextSz,
+    const byte* msg, word32 msgSz, const byte* sig, word32 sigSz);
+#endif
+#ifdef WOLFSPDM_HAVE_MLKEM
+WOLFSPDM_API int wolfSPDM_GenerateMlKemKey(WOLFSPDM_CTX* ctx, byte* ek,
+    word32* ekSz);
+WOLFSPDM_API int wolfSPDM_MlKemDecapsulate(WOLFSPDM_CTX* ctx, const byte* ct,
+    word32 ctSz);
+#endif
 
 /* ----- Internal Function Declarations - Key Derivation ----- */
 
@@ -407,6 +531,11 @@ WOLFSPDM_API int wolfSPDM_ComputeVerifyData(const byte* finishedKey, const byte*
 WOLFSPDM_LOCAL int wolfSPDM_BuildSignedHash(byte spdmVersion,
     const char* contextStr, word32 contextStrLen,
     const byte* inputDigest, byte* outputDigest);
+/* Verify a responder signature over messageHash with the negotiated
+ * algorithm; sigSz must be wolfSPDM_SigSize(ctx) */
+WOLFSPDM_API int wolfSPDM_VerifyRspSig(WOLFSPDM_CTX* ctx,
+    const char* contextStr, word32 contextStrLen, const byte* messageHash,
+    const byte* sig, word32 sigSz);
 
 /* ----- Internal Function Declarations - Message Building ----- */
 
@@ -510,6 +639,8 @@ WOLFSPDM_LOCAL int wolfSPDM_SecuredXfer(WOLFSPDM_CTX* ctx,
 /* Request/response that chunks with CHUNK_SEND and CHUNK_GET as needed */
 WOLFSPDM_TEST_API int wolfSPDM_ChunkExchange(WOLFSPDM_CTX* ctx, int secured,
     const byte* req, word32 reqSz, byte* rsp, word32* rspSz);
+#endif
+#ifndef WOLFSPDM_NO_CERT
 WOLFSPDM_LOCAL int wolfSPDM_ClearExchange(WOLFSPDM_CTX* ctx,
     const byte* req, word32 reqSz, byte* rsp, word32* rspSz);
 #else

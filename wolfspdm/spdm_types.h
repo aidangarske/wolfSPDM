@@ -131,10 +131,6 @@ extern "C" {
  * WOLFSPDM_SECURED_PAD of AppDataLength, MCTP type and padding */
 #define WOLFSPDM_AEAD_OVERHEAD      (32 + WOLFSPDM_SECURED_PAD)
 
-/* ----- Buffer/Message Size Limits ----- */
-
-#define WOLFSPDM_MAX_MSG_SIZE       4096    /* Maximum SPDM message size */
-#define WOLFSPDM_MAX_TRANSCRIPT     4096    /* Maximum transcript buffer */
 #define WOLFSPDM_RANDOM_SIZE        32      /* Random data in KEY_EXCHANGE */
 
 /* ----- MCTP Transport Constants ----- */
@@ -158,12 +154,6 @@ extern "C" {
 
 /* ----- Buffer Size Macros (overridable) ----- */
 
-#ifndef WOLFSPDM_KEY_EX_TX_SZ
-#define WOLFSPDM_KEY_EX_TX_SZ      192  /* KEY_EXCHANGE request (~158 bytes) */
-#endif
-#ifndef WOLFSPDM_KEY_EX_RX_SZ
-#define WOLFSPDM_KEY_EX_RX_SZ      384  /* KEY_EXCHANGE_RSP (~302 bytes) */
-#endif
 #ifndef WOLFSPDM_FINISH_BUF_SZ
 #define WOLFSPDM_FINISH_BUF_SZ     152  /* FINISH mutual auth (~148 bytes) */
 #endif
@@ -221,6 +211,61 @@ extern "C" {
 /* Chunking is negotiated in CAPABILITIES */
 #if defined(WOLFSPDM_NO_CERT) && !defined(WOLFSPDM_NO_CHUNK)
     #define WOLFSPDM_NO_CHUNK
+#endif
+
+/* ----- Post-Quantum Algorithms (DSP0274 1.4) ----- */
+
+/* ML-DSA and ML-KEM follow the linked wolfSSL and ride the certificate flow */
+#if defined(WOLFSSL_HAVE_MLDSA) && !defined(WOLFSPDM_NO_MLDSA) && \
+    !defined(WOLFSPDM_NO_CERT) && !defined(WOLFSPDM_HAVE_MLDSA)
+    #define WOLFSPDM_HAVE_MLDSA
+#endif
+#if defined(WOLFSSL_HAVE_MLKEM) && !defined(WOLFSPDM_NO_MLKEM) && \
+    !defined(WOLFSPDM_NO_CERT) && !defined(WOLFSPDM_HAVE_MLKEM)
+    #define WOLFSPDM_HAVE_MLKEM
+#endif
+
+#ifdef WOLFSPDM_HAVE_MLDSA
+#define WOLFSPDM_MLDSA44_SIG_SIZE   2420
+#define WOLFSPDM_MLDSA65_SIG_SIZE   3309
+#define WOLFSPDM_MLDSA87_SIG_SIZE   4627
+#define WOLFSPDM_MAX_SIG_SIZE       WOLFSPDM_MLDSA87_SIG_SIZE
+#define WOLFSPDM_RSP_PUBKEY_SZ      2592    /* ML-DSA-87 public key */
+#else
+#define WOLFSPDM_MAX_SIG_SIZE       WOLFSPDM_ECC_SIG_SIZE
+#define WOLFSPDM_RSP_PUBKEY_SZ      (WOLFSPDM_PUBKEY_BUF_SZ / 2)
+#endif
+#ifdef WOLFSPDM_HAVE_MLKEM
+/* ExchangeData: the ML-KEM-1024 encapsulation key and ciphertext are largest */
+#define WOLFSPDM_MAX_KEX_DATA       1568
+#else
+#define WOLFSPDM_MAX_KEX_DATA       WOLFSPDM_ECC_POINT_SIZE
+#endif
+
+/* ----- Buffer/Message Size Limits ----- */
+
+#ifndef WOLFSPDM_MAX_MSG_SIZE
+    #ifdef WOLFSPDM_HAVE_MLDSA
+    #define WOLFSPDM_MAX_MSG_SIZE   8192    /* ML-DSA-87 signed responses */
+    #else
+    #define WOLFSPDM_MAX_MSG_SIZE   4096
+    #endif
+#endif
+#ifndef WOLFSPDM_MAX_TRANSCRIPT
+    #if defined(WOLFSPDM_HAVE_MLDSA)
+    #define WOLFSPDM_MAX_TRANSCRIPT 16384
+    #elif defined(WOLFSPDM_HAVE_MLKEM)
+    #define WOLFSPDM_MAX_TRANSCRIPT 8192
+    #else
+    #define WOLFSPDM_MAX_TRANSCRIPT 4096
+    #endif
+#endif
+#ifndef WOLFSPDM_KEY_EX_TX_SZ
+#define WOLFSPDM_KEY_EX_TX_SZ      (96 + WOLFSPDM_MAX_KEX_DATA)
+#endif
+#ifndef WOLFSPDM_KEY_EX_RX_SZ
+#define WOLFSPDM_KEY_EX_RX_SZ      (192 + WOLFSPDM_MAX_KEX_DATA + \
+                                    WOLFSPDM_MAX_SIG_SIZE)
 #endif
 
 /* ----- Session Keep-Alive and Key Rotation ----- */
@@ -284,15 +329,39 @@ extern "C" {
 #define SPDM_ALG_TYPE_AEAD          3
 #define SPDM_ALG_TYPE_REQ_BASE_ASYM 4
 #define SPDM_ALG_TYPE_KEY_SCHEDULE  5
+#define SPDM_ALG_TYPE_KEM           7
+
+/* DSP0274 1.4 PqcAsymAlgo (Tables 19 and 20) and KEMAlg (Table 24) */
+#define SPDM_PQC_ASYM_ALGO_ML_DSA_44 0x00000001
+#define SPDM_PQC_ASYM_ALGO_ML_DSA_65 0x00000002
+#define SPDM_PQC_ASYM_ALGO_ML_DSA_87 0x00000004
+#define SPDM_KEM_ALGO_ML_KEM_512    0x0001
+#define SPDM_KEM_ALGO_ML_KEM_768    0x0002
+#define SPDM_KEM_ALGO_ML_KEM_1024   0x0004
+
+/* NEGOTIATE_ALGORITHMS: 32-byte header and up to five AlgStructs */
+#ifdef WOLFSPDM_HAVE_MLKEM
+#define WOLFSPDM_NEG_ALGO_SZ        52
+#else
+#define WOLFSPDM_NEG_ALGO_SZ        48
+#endif
 
 /* SPDM cert chain header: Length(2) + Reserved(2) + RootHash(48) */
 #define WOLFSPDM_CERT_CHAIN_HDR_SZ  (4 + WOLFSPDM_HASH_SIZE)
 
 #ifndef WOLFSPDM_MAX_CERT_CHAIN
-#define WOLFSPDM_MAX_CERT_CHAIN     4096
+    #ifdef WOLFSPDM_HAVE_MLDSA
+    #define WOLFSPDM_MAX_CERT_CHAIN 24576   /* three ML-DSA-87 certificates */
+    #else
+    #define WOLFSPDM_MAX_CERT_CHAIN 4096
+    #endif
 #endif
 #ifndef WOLFSPDM_MAX_TRUSTED_CA
-#define WOLFSPDM_MAX_TRUSTED_CA     2048
+    #ifdef WOLFSPDM_HAVE_MLDSA
+    #define WOLFSPDM_MAX_TRUSTED_CA 8192
+    #else
+    #define WOLFSPDM_MAX_TRUSTED_CA 2048
+    #endif
 #endif
 #endif /* !WOLFSPDM_NO_CERT */
 

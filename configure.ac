@@ -122,6 +122,82 @@ if test "x$enable_app_data" = "xno"; then
     AC_DEFINE([WOLFSPDM_NO_APP_DATA], [1], [Disable the application data API])
 fi
 
+# ML-DSA (FIPS 204) and ML-KEM (FIPS 203) from DSP0274 1.4 follow the linked
+# wolfSSL by default; both ride the certificate flow
+AC_ARG_ENABLE([mldsa],
+    [AS_HELP_STRING([--disable-mldsa], [Disable ML-DSA signatures even if wolfSSL has them (default: auto)])],
+    [enable_mldsa=$enableval],
+    [enable_mldsa=auto])
+AC_ARG_ENABLE([mlkem],
+    [AS_HELP_STRING([--disable-mlkem], [Disable ML-KEM key exchange even if wolfSSL has it (default: auto)])],
+    [enable_mlkem=$enableval],
+    [enable_mlkem=auto])
+
+have_mldsa_api=no
+if test "x$enable_mldsa" != "xno" && test "x$enable_cert" = "xyes"; then
+    AC_MSG_CHECKING([for the wolfSSL wc_MlDsaKey context API])
+    AC_LINK_IFELSE([AC_LANG_PROGRAM([[
+        #include <wolfssl/options.h>
+        #include <wolfssl/wolfcrypt/settings.h>
+        #ifndef WOLFSSL_HAVE_MLDSA
+        #error "no ML-DSA"
+        #endif
+        #include <wolfssl/wolfcrypt/asn.h>
+        #include <wolfssl/wolfcrypt/wc_mldsa.h>
+    ]], [[
+        MlDsaKey k; int res = 0; word32 oid = ML_DSA_44k + CTC_ML_DSA_87;
+        (void)wc_MlDsaKey_SetParams(&k, WC_ML_DSA_65);
+        (void)wc_MlDsaKey_ImportPubRaw(&k, 0, 0);
+        (void)wc_MlDsaKey_VerifyCtx(&k, 0, 0, 0, 0, 0, 0, &res);
+        (void)oid;
+    ]])],
+    [have_mldsa_api=yes],
+    [have_mldsa_api=no])
+    AC_MSG_RESULT([$have_mldsa_api])
+fi
+if test "x$have_mldsa_api" = "xyes"; then
+    enable_mldsa=yes
+elif test "x$enable_mldsa" = "xyes"; then
+    AC_MSG_ERROR([--enable-mldsa needs the certificate requester and a wolfSSL built with --enable-mldsa that has the wc_MlDsaKey context API])
+else
+    enable_mldsa=no
+    AC_DEFINE([WOLFSPDM_NO_MLDSA], [1], [Disable ML-DSA signatures])
+fi
+
+have_mlkem_api=no
+if test "x$enable_mlkem" != "xno" && test "x$enable_cert" = "xyes"; then
+    AC_MSG_CHECKING([for the wolfSSL wc_MlKemKey API])
+    AC_LINK_IFELSE([AC_LANG_PROGRAM([[
+        #include <wolfssl/options.h>
+        #include <wolfssl/wolfcrypt/settings.h>
+        #ifndef WOLFSSL_HAVE_MLKEM
+        #error "no ML-KEM"
+        #endif
+        #include <wolfssl/wolfcrypt/wc_mlkem.h>
+    ]], [[
+        MlKemKey k; word32 len = 0;
+        (void)wc_MlKemKey_Init(&k, WC_ML_KEM_768, 0, 0);
+        (void)wc_MlKemKey_MakeKey(&k, 0);
+        (void)wc_MlKemKey_EncodePublicKey(&k, 0, 0);
+        (void)wc_MlKemKey_PublicKeySize(&k, &len);
+        (void)wc_MlKemKey_CipherTextSize(&k, &len);
+        (void)wc_MlKemKey_SharedSecretSize(&k, &len);
+        (void)wc_MlKemKey_Decapsulate(&k, 0, 0, 0);
+        (void)wc_MlKemKey_Free(&k);
+    ]])],
+    [have_mlkem_api=yes],
+    [have_mlkem_api=no])
+    AC_MSG_RESULT([$have_mlkem_api])
+fi
+if test "x$have_mlkem_api" = "xyes"; then
+    enable_mlkem=yes
+elif test "x$enable_mlkem" = "xyes"; then
+    AC_MSG_ERROR([--enable-mlkem needs the certificate requester and a wolfSSL built with --enable-mlkem that has the wc_MlKemKey API])
+else
+    enable_mlkem=no
+    AC_DEFINE([WOLFSPDM_NO_MLKEM], [1], [Disable ML-KEM key exchange])
+fi
+
 AC_ARG_ENABLE([chunking],
     [AS_HELP_STRING([--disable-chunking], [Disable CHUNK_SEND/CHUNK_GET large message chunking (default: enabled)])],
     [enable_chunking=$enableval],
@@ -244,6 +320,8 @@ echo "  Dynamic mem: $enable_dynamic_mem"
 echo "  MCTP:        $enable_mctp"
 echo "  Standard:    $enable_cert"
 echo "  App data:    $enable_app_data"
+echo "  ML-DSA:      $enable_mldsa"
+echo "  ML-KEM:      $enable_mlkem"
 echo "  Chunking:    $enable_chunking"
 echo "  Meas:        $enable_meas"
 echo "  Challenge:   $enable_challenge"

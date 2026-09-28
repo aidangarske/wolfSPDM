@@ -53,6 +53,11 @@ int wolfSPDM_Init(WOLFSPDM_CTX* ctx)
 
     /* Set default session ID (0x0001 is valid; 0x0000/0xFFFF are reserved) */
     ctx->reqSessionId = 0x0001;
+#ifdef WOLFSPDM_HAVE_MLKEM
+    /* Offer ECDHE and every built ML-KEM set; the responder picks one */
+    ctx->kexAdvDhe = 1;
+    ctx->kexAdvKem = WOLFSPDM_MLKEM_SETS;
+#endif
 
     ctx->flags.initialized = 1;
     /* isDynamic remains 0, only wolfSPDM_New sets it */
@@ -96,10 +101,7 @@ void wolfSPDM_Free(WOLFSPDM_CTX* ctx)
         wc_FreeRng(&ctx->rng);
     }
 
-    /* Free ephemeral key */
-    if (ctx->flags.ephemeralKeyInit) {
-        wc_ecc_free(&ctx->ephemeralKey);
-    }
+    wolfSPDM_FreeEphemeralKey(ctx);
 #if !defined(WOLFSPDM_NO_MEAS) || !defined(WOLFSPDM_NO_CHALLENGE)
     wolfSPDM_AttestFree(ctx);
 #endif
@@ -223,6 +225,22 @@ int wolfSPDM_SetMaxVersion(WOLFSPDM_CTX* ctx, byte maxVersion)
     return WOLFSPDM_SUCCESS;
 }
 
+int wolfSPDM_SetRequesterSessionId(WOLFSPDM_CTX* ctx, word16 reqSessionId)
+{
+    if (ctx == NULL) {
+        return WOLFSPDM_E_INVALID_ARG;
+    }
+    /* 0x0000/0xFFFF are reserved (DSP0277); a low byte of 0x10-0x1F would
+     * make a secured record look like a clear SPDM message to the TCG
+     * binding */
+    if (reqSessionId == 0x0000 || reqSessionId == 0xFFFF ||
+            ((reqSessionId & 0xFF) >= 0x10 && (reqSessionId & 0xFF) <= 0x1F)) {
+        return WOLFSPDM_E_INVALID_ARG;
+    }
+    ctx->reqSessionId = reqSessionId;
+    return WOLFSPDM_SUCCESS;
+}
+
 byte wolfSPDM_GetLastPeerError(WOLFSPDM_CTX* ctx)
 {
     return (ctx == NULL) ? 0 : ctx->lastPeerErrorCode;
@@ -311,6 +329,11 @@ byte wolfSPDM_GetNegotiatedVersion(WOLFSPDM_CTX* ctx)
         return 0;
     }
     return ctx->spdmVersion;
+}
+
+byte wolfSPDM_GetVersion_Negotiated(WOLFSPDM_CTX* ctx)
+{
+    return wolfSPDM_GetNegotiatedVersion(ctx);
 }
 
 #ifdef WOLFSPDM_TCG
@@ -429,11 +452,7 @@ int wolfSPDM_Disconnect(WOLFSPDM_CTX* ctx)
     ctx->sharedSecretSz = 0;
     wc_ForceZero(ctx->th1, sizeof(ctx->th1));
     wc_ForceZero(ctx->th2, sizeof(ctx->th2));
-    /* Free ephemeral ECC key */
-    if (ctx->flags.ephemeralKeyInit) {
-        wc_ecc_free(&ctx->ephemeralKey);
-        ctx->flags.ephemeralKeyInit = 0;
-    }
+    wolfSPDM_FreeEphemeralKey(ctx);
 
     return rc;
 }

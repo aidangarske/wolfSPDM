@@ -80,7 +80,7 @@ jobs:
       # Standalone builds carry none of the TPM side, pure TCG builds none of
       # the standard requester
       TPM_SYMS: 'wolfSPDM_(TCG_.*|Nuvoton_.*|Nations_.*|Resp[A-Z].*|.*Psk.*|SetPSK|ConnectTCG|.*TcgClear.*|.*VendorDefined|SetRequesterKey.*|SignHash|GetConnectionHandle|GetFipsIndicator)'
-      STD_SYMS: 'wolfSPDM_(GetCapabilities|BuildGetCapabilities|ParseCapabilities|NegotiateAlgorithms|BuildNegotiateAlgorithms|ParseAlgorithms|GetDigests|ParseDigests|GetCertificate|ParseCertificate|ValidateCertChain|SetTrustedCAs|AllowUntrustedCerts|ConnectStandard|.*Measurement.*|.*Challenge.*|M1Start|M1Add|AttestFree|ChunkExchange|ClearExchange|SendData|ReceiveData|EncryptMessage|DecryptMessage)'
+      STD_SYMS: 'wolfSPDM_(GetCapabilities|BuildGetCapabilities|ParseCapabilities|NegotiateAlgorithms|BuildNegotiateAlgorithms|ParseAlgorithms|GetDigests|ParseDigests|GetCertificate|ParseCertificate|ValidateCertChain|SetTrustedCAs|AllowUntrustedCerts|ConnectStandard|.*Measurement.*|.*Challenge.*|M1Start|M1Add|AttestFree|ChunkExchange|ClearExchange|SendData|ReceiveData|EncryptMessage|DecryptMessage|.*MlDsa.*|.*MlKem.*|SetKeyExchangePref)'
     strategy:
       fail-fast: false
       matrix:

@@ -32,7 +32,7 @@
 
 /* OpaqueLength, room for OpaqueData, RequesterContext and the signature */
 #define WOLFSPDM_ATTEST_TAIL_SZ (2 + 512 + SPDM_REQ_CONTEXT_SZ + \
-                                 WOLFSPDM_ECC_SIG_SIZE)
+                                 WOLFSPDM_MAX_SIG_SIZE)
 
 /* 1.3+ requests end with a RequesterContext the response echoes */
 static word32 wolfSPDM_ReqContextSz(const WOLFSPDM_CTX* ctx)
@@ -77,7 +77,6 @@ static int wolfSPDM_RunVerify(WOLFSPDM_CTX* ctx, wc_Sha384* sha, byte* state,
     const byte* rsp, word32 sigOff)
 {
     byte digest[WOLFSPDM_HASH_SIZE];
-    byte signHash[WOLFSPDM_HASH_SIZE];
     int rc;
 
     rc = wolfSPDM_RunAdd(sha, req, reqSz, rsp, sigOff);
@@ -88,13 +87,10 @@ static int wolfSPDM_RunVerify(WOLFSPDM_CTX* ctx, wc_Sha384* sha, byte* state,
     *state = WOLFSPDM_RUN_NONE;
 
     if (rc == WOLFSPDM_SUCCESS) {
-        rc = wolfSPDM_BuildSignedHash(ctx->spdmVersion, label, labelSz,
-            digest, signHash);
+        rc = wolfSPDM_VerifyRspSig(ctx, label, labelSz, digest, rsp + sigOff,
+            wolfSPDM_SigSize(ctx));
     }
-    if (rc == WOLFSPDM_SUCCESS) {
-        rc = wolfSPDM_VerifySignature(ctx, signHash, WOLFSPDM_HASH_SIZE,
-            rsp + sigOff, WOLFSPDM_ECC_SIG_SIZE);
-    }
+    wc_ForceZero(digest, sizeof(digest));
     return rc;
 }
 
@@ -205,7 +201,7 @@ int wolfSPDM_ParseMeasurements(WOLFSPDM_CTX* ctx, const byte* req,
     if (i != buf[4] || off != recordEnd ||
             !wolfSPDM_ParseTail(ctx, req, reqSz, buf, bufSz,
                 recordEnd + SPDM_NONCE_SZ,
-                signedReq ? WOLFSPDM_ECC_SIG_SIZE : 0, sigOff)) {
+                signedReq ? wolfSPDM_SigSize(ctx) : 0, sigOff)) {
         return WOLFSPDM_E_MEASUREMENT;
     }
     return WOLFSPDM_SUCCESS;
@@ -392,7 +388,7 @@ int wolfSPDM_ParseChallengeAuth(WOLFSPDM_CTX* ctx, const byte* req,
             bufSz < off ||
             XMEMCMP(&buf[4], ctx->certChainHash, WOLFSPDM_HASH_SIZE) != 0 ||
             !wolfSPDM_ParseTail(ctx, req, reqSz, buf, bufSz, off,
-                WOLFSPDM_ECC_SIG_SIZE, sigOff)) {
+                wolfSPDM_SigSize(ctx), sigOff)) {
         return WOLFSPDM_E_CHALLENGE;
     }
     return WOLFSPDM_SUCCESS;

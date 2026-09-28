@@ -59,7 +59,7 @@ nobase_include_HEADERS = \
 # Test programs
 check_PROGRAMS = test/unit_test
 
-test_unit_test_SOURCES = test/unit_test.c test/test_certs.h
+test_unit_test_SOURCES = test/unit_test.c test/test_certs.h test/test_certs_mldsa.h
 test_unit_test_CPPFLAGS = -I$(srcdir)/wolfspdm -I$(srcdir)/src
 test_unit_test_LDADD = libwolfspdm.la -lwolfssl
 

@@ -88,41 +88,87 @@ int wolfSPDM_ParseCapabilities(WOLFSPDM_CTX* ctx, const byte* buf,
 int wolfSPDM_BuildNegotiateAlgorithms(WOLFSPDM_CTX* ctx, byte* buf,
     word32* bufSz)
 {
-    SPDM_CHECK_BUILD_ARGS(ctx, buf, bufSz, 48);
+    word32 off = 32;
+    int advDhe = 1;
+#ifdef WOLFSPDM_HAVE_MLKEM
+    int advKem;
+#endif
 
-    XMEMSET(buf, 0, 48);
+    SPDM_CHECK_BUILD_ARGS(ctx, buf, bufSz, WOLFSPDM_NEG_ALGO_SZ);
+
+#ifdef WOLFSPDM_HAVE_MLKEM
+    /* KEMAlg exists from 1.4; a KEM-only preference must not fall back */
+    advDhe = (ctx->kexAdvDhe != 0);
+    advKem = (ctx->spdmVersion >= SPDM_VERSION_14 && ctx->kexAdvKem != 0);
+    if (!advDhe && !advKem) {
+        wolfSPDM_DebugPrint(ctx, "NEGOTIATE_ALGORITHMS: ML-KEM only needs "
+            "SPDM 1.4\n");
+        return WOLFSPDM_E_ALGO_MISMATCH;
+    }
+#endif
+
+    XMEMSET(buf, 0, WOLFSPDM_NEG_ALGO_SZ);
     buf[0] = ctx->spdmVersion;
     buf[1] = SPDM_NEGOTIATE_ALGORITHMS;
-    buf[2] = 4;                     /* AlgStruct count */
-    SPDM_Set16LE(&buf[4], 48);      /* Length */
     buf[6] = 0x01;                  /* MeasurementSpecification = DMTF */
     buf[7] = 0x02;                  /* OtherParams = OpaqueDataFmt1 */
     SPDM_Set32LE(&buf[8], SPDM_ASYM_ALGO_ECDSA_P384);
     SPDM_Set32LE(&buf[12], SPDM_HASH_ALGO_SHA_384);
+#ifdef WOLFSPDM_HAVE_MLDSA
+    /* PqcAsymAlgo, reserved before 1.4 */
+    if (ctx->spdmVersion >= SPDM_VERSION_14) {
+        SPDM_Set32LE(&buf[16], WOLFSPDM_MLDSA_SETS);
+    }
+#endif
 
-    buf[32] = SPDM_ALG_TYPE_DHE;
-    buf[33] = 0x20;
-    SPDM_Set16LE(&buf[34], SPDM_DHE_ALGO_SECP384R1);
-    buf[36] = SPDM_ALG_TYPE_AEAD;
-    buf[37] = 0x20;
-    SPDM_Set16LE(&buf[38], SPDM_AEAD_ALGO_AES_256_GCM);
-    buf[40] = SPDM_ALG_TYPE_REQ_BASE_ASYM;
-    buf[41] = 0x20;
-    SPDM_Set16LE(&buf[42], (word16)SPDM_ASYM_ALGO_ECDSA_P384);
-    buf[44] = SPDM_ALG_TYPE_KEY_SCHEDULE;
-    buf[45] = 0x20;
-    SPDM_Set16LE(&buf[46], SPDM_KEY_SCHEDULE_SPDM);
-    *bufSz = 48;
+    if (advDhe) {
+        buf[off] = SPDM_ALG_TYPE_DHE;
+        buf[off + 1] = 0x20;
+        SPDM_Set16LE(&buf[off + 2], SPDM_DHE_ALGO_SECP384R1);
+        off += 4;
+    }
+    buf[off] = SPDM_ALG_TYPE_AEAD;
+    buf[off + 1] = 0x20;
+    SPDM_Set16LE(&buf[off + 2], SPDM_AEAD_ALGO_AES_256_GCM);
+    off += 4;
+    buf[off] = SPDM_ALG_TYPE_REQ_BASE_ASYM;
+    buf[off + 1] = 0x20;
+    SPDM_Set16LE(&buf[off + 2], (word16)SPDM_ASYM_ALGO_ECDSA_P384);
+    off += 4;
+    buf[off] = SPDM_ALG_TYPE_KEY_SCHEDULE;
+    buf[off + 1] = 0x20;
+    SPDM_Set16LE(&buf[off + 2], SPDM_KEY_SCHEDULE_SPDM);
+    off += 4;
+#ifdef WOLFSPDM_HAVE_MLKEM
+    if (advKem) {
+        buf[off] = SPDM_ALG_TYPE_KEM;
+        buf[off + 1] = 0x20;
+        SPDM_Set16LE(&buf[off + 2], ctx->kexAdvKem);
+        off += 4;
+    }
+#endif
+
+    buf[2] = (byte)((off - 32) / 4);    /* AlgStruct count */
+    SPDM_Set16LE(&buf[4], (word16)off); /* Length */
+    *bufSz = off;
 
     return WOLFSPDM_SUCCESS;
 }
 
+/* The responder picks one signature algorithm across BaseAsymSel and the
+ * 1.4 PqcAsymSel, and one key exchange: a DHE group or a KEM, never both */
 int wolfSPDM_ParseAlgorithms(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufSz)
 {
     word32 off;
+    word32 baseAsymSel;
+    word32 pqcAsymSel = 0;
+#ifdef WOLFSPDM_HAVE_MLKEM
+    word16 kemSel = 0;
+#endif
     byte numAlgs;
     byte i;
     int dheOk = 0;
+    int kemOk = 0;
     int aeadOk = 0;
     int ksOk = 0;
 
@@ -138,8 +184,30 @@ int wolfSPDM_ParseAlgorithms(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufSz)
     if (buf[6] > 0x01 || buf[7] != 0x02) {
         return WOLFSPDM_E_ALGO_MISMATCH;
     }
-    if (SPDM_Get32LE(&buf[12]) != SPDM_ASYM_ALGO_ECDSA_P384 ||
-            SPDM_Get32LE(&buf[16]) != SPDM_HASH_ALGO_SHA_384) {
+    if (SPDM_Get32LE(&buf[16]) != SPDM_HASH_ALGO_SHA_384) {
+        return WOLFSPDM_E_ALGO_MISMATCH;
+    }
+
+#ifdef WOLFSPDM_HAVE_MLDSA
+    ctx->pqcAsymSel = 0;
+#endif
+#ifdef WOLFSPDM_HAVE_MLKEM
+    ctx->kemAlgSel = 0;
+#endif
+    baseAsymSel = SPDM_Get32LE(&buf[12]);
+    if (ctx->spdmVersion >= SPDM_VERSION_14) {
+        pqcAsymSel = SPDM_Get32LE(&buf[20]);
+    }
+    if (pqcAsymSel != 0) {
+#ifdef WOLFSPDM_HAVE_MLDSA
+        if (baseAsymSel != 0 || wolfSPDM_MlDsaLevel(pqcAsymSel) == 0) {
+            return WOLFSPDM_E_ALGO_MISMATCH;
+        }
+#else
+        return WOLFSPDM_E_ALGO_MISMATCH;
+#endif
+    }
+    else if (baseAsymSel != SPDM_ASYM_ALGO_ECDSA_P384) {
         return WOLFSPDM_E_ALGO_MISMATCH;
     }
 
@@ -158,7 +226,24 @@ int wolfSPDM_ParseAlgorithms(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufSz)
         switch (buf[off]) {
             case SPDM_ALG_TYPE_DHE:
                 dheOk = (algSel == SPDM_DHE_ALGO_SECP384R1);
+            #ifdef WOLFSPDM_HAVE_MLKEM
+                /* Zero when the responder picked a KEM instead */
+                if ((algSel != 0 && !dheOk) || (dheOk && !ctx->kexAdvDhe)) {
+                    return WOLFSPDM_E_ALGO_MISMATCH;
+                }
+            #endif
                 break;
+        #ifdef WOLFSPDM_HAVE_MLKEM
+            case SPDM_ALG_TYPE_KEM:
+                if (algSel != 0 && ((algSel & (algSel - 1)) != 0 ||
+                        (algSel & ctx->kexAdvKem & WOLFSPDM_MLKEM_SETS) == 0 ||
+                        ctx->spdmVersion < SPDM_VERSION_14)) {
+                    return WOLFSPDM_E_ALGO_MISMATCH;
+                }
+                kemOk = (algSel != 0);
+                kemSel = algSel;
+                break;
+        #endif
             case SPDM_ALG_TYPE_AEAD:
                 aeadOk = (algSel == SPDM_AEAD_ALGO_AES_256_GCM);
                 break;
@@ -170,11 +255,19 @@ int wolfSPDM_ParseAlgorithms(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufSz)
         }
         off += 4 + extLen;
     }
-    if (!dheOk || !aeadOk || !ksOk) {
+    if (dheOk + kemOk != 1 || !aeadOk || !ksOk) {
         wolfSPDM_DebugPrint(ctx, "ALGORITHMS: not Algorithm Set B "
-            "(dhe=%d aead=%d ks=%d)\n", dheOk, aeadOk, ksOk);
+            "(dhe=%d kem=%d aead=%d ks=%d)\n", dheOk, kemOk, aeadOk, ksOk);
         return WOLFSPDM_E_ALGO_MISMATCH;
     }
+#ifdef WOLFSPDM_HAVE_MLDSA
+    ctx->pqcAsymSel = pqcAsymSel;
+#endif
+#ifdef WOLFSPDM_HAVE_MLKEM
+    ctx->kemAlgSel = kemSel;
+#endif
+    wolfSPDM_DebugPrint(ctx, "ALGORITHMS: asym 0x%08x pqc 0x%08x kem %d\n",
+        baseAsymSel, pqcAsymSel, kemOk);
 
     return WOLFSPDM_SUCCESS;
 }
@@ -193,7 +286,7 @@ int wolfSPDM_GetCapabilities(WOLFSPDM_CTX* ctx)
 
 int wolfSPDM_NegotiateAlgorithms(WOLFSPDM_CTX* ctx)
 {
-    byte txBuf[48];
+    byte txBuf[WOLFSPDM_NEG_ALGO_SZ];
     byte rxBuf[128];
     int rc;
 
@@ -382,24 +475,70 @@ static word32 wolfSPDM_DerSeqLen(const byte* der, word32 derSz)
     return hdr + len;
 }
 
-/* Load the ECC public key of a certificate into an initialized key */
-static int wolfSPDM_CertPubKey(const byte* der, word32 derSz, ecc_key* key,
-    int* isCA)
+/* A certificate's subject key: an ECC SubjectPublicKeyInfo, or a raw ML-DSA
+ * public key */
+#define WOLFSPDM_CERT_KEY_SZ    (WOLFSPDM_RSP_PUBKEY_SZ > 256 ? \
+                                 WOLFSPDM_RSP_PUBKEY_SZ : 256)
+typedef struct {
+    word32 oid;
+    word32 len;
+    byte   der[WOLFSPDM_CERT_KEY_SZ];
+} WOLFSPDM_CERT_KEY;
+
+#ifdef WOLFSPDM_HAVE_MLDSA
+static byte wolfSPDM_KeyOidMlDsaLevel(word32 oid)
+{
+    switch (oid) {
+        case ML_DSA_44k:
+            return wolfSPDM_MlDsaLevel(SPDM_PQC_ASYM_ALGO_ML_DSA_44);
+        case ML_DSA_65k:
+            return wolfSPDM_MlDsaLevel(SPDM_PQC_ASYM_ALGO_ML_DSA_65);
+        case ML_DSA_87k:
+            return wolfSPDM_MlDsaLevel(SPDM_PQC_ASYM_ALGO_ML_DSA_87);
+        default:
+            return 0;
+    }
+}
+
+static byte wolfSPDM_SigOidMlDsaLevel(word32 oid)
+{
+    switch (oid) {
+        case CTC_ML_DSA_44:
+            return wolfSPDM_MlDsaLevel(SPDM_PQC_ASYM_ALGO_ML_DSA_44);
+        case CTC_ML_DSA_65:
+            return wolfSPDM_MlDsaLevel(SPDM_PQC_ASYM_ALGO_ML_DSA_65);
+        case CTC_ML_DSA_87:
+            return wolfSPDM_MlDsaLevel(SPDM_PQC_ASYM_ALGO_ML_DSA_87);
+        default:
+            return 0;
+    }
+}
+#endif /* WOLFSPDM_HAVE_MLDSA */
+
+/* Read the subject key and CA flag of a certificate */
+static int wolfSPDM_CertKey(const byte* der, word32 derSz,
+    WOLFSPDM_CERT_KEY* key, int* isCA)
 {
     DecodedCert cert;
-    word32 idx = 0;
     int rc;
 
     wc_InitDecodedCert(&cert, der, derSz, NULL);
     rc = wc_ParseCert(&cert, CERT_TYPE, NO_VERIFY, NULL);
-    if (rc == 0 && cert.keyOID != ECDSAk) {
+    if (rc == 0 && cert.keyOID != ECDSAk
+    #ifdef WOLFSPDM_HAVE_MLDSA
+            && wolfSPDM_KeyOidMlDsaLevel(cert.keyOID) == 0
+    #endif
+            ) {
+        rc = -1;
+    }
+    if (rc == 0 && (cert.publicKey == NULL ||
+            cert.pubKeySize > sizeof(key->der))) {
         rc = -1;
     }
     if (rc == 0) {
-        rc = wc_EccPublicKeyDecode(cert.publicKey, &idx, key,
-            cert.pubKeySize);
-    }
-    if (rc == 0) {
+        key->oid = cert.keyOID;
+        key->len = cert.pubKeySize;
+        XMEMCPY(key->der, cert.publicKey, cert.pubKeySize);
         *isCA = cert.isCA;
     }
     wc_FreeDecodedCert(&cert);
@@ -407,46 +546,134 @@ static int wolfSPDM_CertPubKey(const byte* der, word32 derSz, ecc_key* key,
     return (rc == 0) ? WOLFSPDM_SUCCESS : WOLFSPDM_E_CERT_PARSE;
 }
 
-/* Verify that the certificate at der is signed by issuer (ECDSA-SHA384) */
-static int wolfSPDM_CertSignedBy(const byte* der, word32 derSz,
-    ecc_key* issuer)
+/* ECDSA verify of hash under an ECC SubjectPublicKeyInfo */
+static int wolfSPDM_EccSpkiVerify(const byte* spki, word32 spkiSz,
+    const byte* sig, word32 sigSz, const byte* hash, word32 hashSz)
 {
-    DecodedCert cert;
-    byte hash[WOLFSPDM_HASH_SIZE];
+    ecc_key key;
+    word32 idx = 0;
     int verified = 0;
     int rc;
 
-    wc_InitDecodedCert(&cert, der, derSz, NULL);
-    rc = wc_ParseCert(&cert, CERT_TYPE, NO_VERIFY, NULL);
-    if (rc == 0 && (cert.signatureOID != CTC_SHA384wECDSA ||
-            cert.sigIndex <= cert.certBegin)) {
-        rc = -1;
-    }
+    rc = wc_ecc_init(&key);
     if (rc == 0) {
-        rc = wolfSPDM_Sha384Hash(hash, cert.source + cert.certBegin,
-            cert.sigIndex - cert.certBegin, NULL, 0, NULL, 0);
+        rc = wc_EccPublicKeyDecode(spki, &idx, &key, spkiSz);
+        if (rc == 0) {
+            rc = wc_ecc_verify_hash(sig, sigSz, hash, hashSz, &verified, &key);
+        }
+        wc_ecc_free(&key);
     }
-    if (rc == 0) {
-        rc = wc_ecc_verify_hash(cert.signature, cert.sigLength, hash,
-            sizeof(hash), &verified, issuer);
-    }
-    wc_FreeDecodedCert(&cert);
 
     return (rc == 0 && verified == 1) ? WOLFSPDM_SUCCESS :
         WOLFSPDM_E_CERT_FAIL;
 }
 
-/* Walk the retrieved chain: each certificate must be signed by the one
- * before it, the first by the trusted root when one is set. The leaf's
- * P-384 key becomes the responder key, or must match a pinned key. */
-int wolfSPDM_ValidateCertChain(WOLFSPDM_CTX* ctx)
+/* Verify that the certificate at der was signed by issuer: ECDSA-SHA384, or
+ * pure ML-DSA with an empty context */
+static int wolfSPDM_CertSignedBy(const byte* der, word32 derSz,
+    const WOLFSPDM_CERT_KEY* issuer)
 {
-    ecc_key key;
-    byte leaf[WOLFSPDM_ECC_POINT_SIZE];
+    DecodedCert cert;
+    byte hash[WOLFSPDM_HASH_SIZE];
+    const byte* tbs;
+    word32 tbsSz;
+    int rc;
+
+    wc_InitDecodedCert(&cert, der, derSz, NULL);
+    rc = wc_ParseCert(&cert, CERT_TYPE, NO_VERIFY, NULL);
+    if (rc == 0 && cert.sigIndex <= cert.certBegin) {
+        rc = -1;
+    }
+    tbs = cert.source + cert.certBegin;
+    tbsSz = cert.sigIndex - cert.certBegin;
+
+    if (rc == 0 && issuer->oid == ECDSAk) {
+        rc = (cert.signatureOID == CTC_SHA384wECDSA) ? 0 : -1;
+        if (rc == 0) {
+            rc = wolfSPDM_Sha384Hash(hash, tbs, tbsSz, NULL, 0, NULL, 0);
+        }
+        if (rc == 0) {
+            rc = wolfSPDM_EccSpkiVerify(issuer->der, issuer->len,
+                cert.signature, cert.sigLength, hash, sizeof(hash));
+        }
+    }
+#ifdef WOLFSPDM_HAVE_MLDSA
+    else if (rc == 0 && wolfSPDM_KeyOidMlDsaLevel(issuer->oid) != 0) {
+        rc = (wolfSPDM_SigOidMlDsaLevel(cert.signatureOID) ==
+                wolfSPDM_KeyOidMlDsaLevel(issuer->oid)) ? 0 : -1;
+        if (rc == 0) {
+            rc = wolfSPDM_MlDsaVerify(wolfSPDM_KeyOidMlDsaLevel(issuer->oid),
+                issuer->der, issuer->len, NULL, 0, tbs, tbsSz, cert.signature,
+                cert.sigLength);
+        }
+    }
+#endif
+    else {
+        rc = -1;
+    }
+    wc_FreeDecodedCert(&cert);
+
+    return (rc == 0) ? WOLFSPDM_SUCCESS : WOLFSPDM_E_CERT_FAIL;
+}
+
+/* The leaf key in the ctx->rspPubKey format: raw P-384 X||Y, or the raw
+ * ML-DSA key of the negotiated set */
+static int wolfSPDM_LeafKey(const WOLFSPDM_CTX* ctx,
+    const WOLFSPDM_CERT_KEY* key, byte* leaf, word32* leafSz)
+{
+    ecc_key eccKey;
+    word32 idx = 0;
     word32 xSz = WOLFSPDM_ECC_KEY_SIZE;
     word32 ySz = WOLFSPDM_ECC_KEY_SIZE;
+    int rc;
+
+#ifdef WOLFSPDM_HAVE_MLDSA
+    if (wolfSPDM_RspMlDsaLevel(ctx) != 0) {
+        if (wolfSPDM_KeyOidMlDsaLevel(key->oid) !=
+                wolfSPDM_RspMlDsaLevel(ctx) || key->len > *leafSz) {
+            return WOLFSPDM_E_CERT_PARSE;
+        }
+        XMEMCPY(leaf, key->der, key->len);
+        *leafSz = key->len;
+        return WOLFSPDM_SUCCESS;
+    }
+#else
+    (void)ctx;
+#endif
+
+    /* Algorithm Set B: the leaf carries a P-384 key */
+    if (key->oid != ECDSAk || *leafSz < WOLFSPDM_ECC_POINT_SIZE ||
+            wc_ecc_init(&eccKey) != 0) {
+        return WOLFSPDM_E_CERT_PARSE;
+    }
+    rc = wc_EccPublicKeyDecode(key->der, &idx, &eccKey, key->len);
+    if (rc == 0 && wc_ecc_get_curve_id(eccKey.idx) != ECC_SECP384R1) {
+        rc = -1;
+    }
+    if (rc == 0) {
+        rc = wc_ecc_export_public_raw(&eccKey, leaf, &xSz,
+            leaf + WOLFSPDM_ECC_KEY_SIZE, &ySz);
+    }
+    if (rc == 0 && (xSz != WOLFSPDM_ECC_KEY_SIZE ||
+            ySz != WOLFSPDM_ECC_KEY_SIZE)) {
+        rc = -1;
+    }
+    wc_ecc_free(&eccKey);
+    *leafSz = WOLFSPDM_ECC_POINT_SIZE;
+
+    return (rc == 0) ? WOLFSPDM_SUCCESS : WOLFSPDM_E_CERT_PARSE;
+}
+
+/* Walk the retrieved chain: each certificate must be signed by the one
+ * before it, the first by the trusted root when one is set. The leaf key
+ * must match the negotiated signature algorithm and becomes the responder
+ * key, or must match a pinned key. */
+int wolfSPDM_ValidateCertChain(WOLFSPDM_CTX* ctx)
+{
+    WOLFSPDM_CERT_KEY key;
+    word32 leafSz = WOLFSPDM_RSP_PUBKEY_SZ;
     word32 pos = WOLFSPDM_CERT_CHAIN_HDR_SZ;
-    int keyInit = 0;
+    int haveKey = 0;
     int isCA = 0;
     int anchored = 0;
     int rc = WOLFSPDM_SUCCESS;
@@ -469,13 +696,9 @@ int wolfSPDM_ValidateCertChain(WOLFSPDM_CTX* ctx)
             rc = WOLFSPDM_E_CERT_FAIL;
         }
         if (rc == WOLFSPDM_SUCCESS) {
-            rc = (wc_ecc_init(&key) == 0) ? WOLFSPDM_SUCCESS :
-                WOLFSPDM_E_CRYPTO_FAIL;
-        }
-        if (rc == WOLFSPDM_SUCCESS) {
-            keyInit = 1;
-            rc = wolfSPDM_CertPubKey(ctx->trustedCA, ctx->trustedCASz, &key,
+            rc = wolfSPDM_CertKey(ctx->trustedCA, ctx->trustedCASz, &key,
                 &isCA);
+            haveKey = (rc == WOLFSPDM_SUCCESS);
         }
         anchored = 1;
     }
@@ -486,52 +709,40 @@ int wolfSPDM_ValidateCertChain(WOLFSPDM_CTX* ctx)
         if (certSz == 0) {
             rc = WOLFSPDM_E_CERT_PARSE;
         }
-        if (rc == WOLFSPDM_SUCCESS && keyInit) {
+        if (rc == WOLFSPDM_SUCCESS && haveKey) {
             rc = isCA ? wolfSPDM_CertSignedBy(ctx->certChain + pos, certSz,
                 &key) : WOLFSPDM_E_CERT_FAIL;
         }
-        if (keyInit) {
-            wc_ecc_free(&key);
-            keyInit = 0;
-        }
         if (rc == WOLFSPDM_SUCCESS) {
-            rc = (wc_ecc_init(&key) == 0) ? WOLFSPDM_SUCCESS :
-                WOLFSPDM_E_CRYPTO_FAIL;
-        }
-        if (rc == WOLFSPDM_SUCCESS) {
-            keyInit = 1;
-            rc = wolfSPDM_CertPubKey(ctx->certChain + pos, certSz, &key,
-                &isCA);
+            rc = wolfSPDM_CertKey(ctx->certChain + pos, certSz, &key, &isCA);
+            haveKey = (rc == WOLFSPDM_SUCCESS);
         }
         pos += certSz;
     }
 
-    /* The leaf must carry a P-384 key (Algorithm Set B) */
-    if (rc == WOLFSPDM_SUCCESS &&
-            (!keyInit || wc_ecc_get_curve_id(key.idx) != ECC_SECP384R1 ||
-             wc_ecc_export_public_raw(&key, leaf, &xSz,
-                leaf + WOLFSPDM_ECC_KEY_SIZE, &ySz) != 0 ||
-             xSz != WOLFSPDM_ECC_KEY_SIZE || ySz != WOLFSPDM_ECC_KEY_SIZE)) {
+    if (rc == WOLFSPDM_SUCCESS && !haveKey) {
         rc = WOLFSPDM_E_CERT_PARSE;
     }
-    if (keyInit) {
-        wc_ecc_free(&key);
-    }
-
     if (rc == WOLFSPDM_SUCCESS && ctx->flags.hasRspPubKey &&
             !ctx->flags.rspKeyFromCert) {
-        if (ctx->rspPubKeyLen != WOLFSPDM_ECC_POINT_SIZE ||
-                XMEMCMP(ctx->rspPubKey, leaf, WOLFSPDM_ECC_POINT_SIZE) != 0) {
+        byte leaf[WOLFSPDM_ECC_POINT_SIZE];
+
+        leafSz = sizeof(leaf);
+        rc = wolfSPDM_LeafKey(ctx, &key, leaf, &leafSz);
+        if (rc == WOLFSPDM_SUCCESS && (ctx->rspPubKeyLen != leafSz ||
+                XMEMCMP(ctx->rspPubKey, leaf, leafSz) != 0)) {
             wolfSPDM_DebugPrint(ctx, "Leaf key does not match pinned key\n");
             rc = WOLFSPDM_E_CERT_FAIL;
         }
         anchored = 1;
     }
     else if (rc == WOLFSPDM_SUCCESS) {
-        XMEMCPY(ctx->rspPubKey, leaf, WOLFSPDM_ECC_POINT_SIZE);
-        ctx->rspPubKeyLen = WOLFSPDM_ECC_POINT_SIZE;
-        ctx->flags.hasRspPubKey = 1;
-        ctx->flags.rspKeyFromCert = 1;
+        rc = wolfSPDM_LeafKey(ctx, &key, ctx->rspPubKey, &leafSz);
+        if (rc == WOLFSPDM_SUCCESS) {
+            ctx->rspPubKeyLen = leafSz;
+            ctx->flags.hasRspPubKey = 1;
+            ctx->flags.rspKeyFromCert = 1;
+        }
     }
 
     if (rc == WOLFSPDM_SUCCESS && !anchored &&
@@ -567,6 +778,25 @@ int wolfSPDM_AllowUntrustedCerts(WOLFSPDM_CTX* ctx, int allow)
         return WOLFSPDM_E_INVALID_ARG;
     }
     ctx->flags.allowUntrustedCert = (allow != 0);
+    return WOLFSPDM_SUCCESS;
+}
+
+int wolfSPDM_SetKeyExchangePref(WOLFSPDM_CTX* ctx, int advDhe, word16 kemMask)
+{
+    if (ctx == NULL || (advDhe == 0 && kemMask == 0)) {
+        return WOLFSPDM_E_INVALID_ARG;
+    }
+#ifdef WOLFSPDM_HAVE_MLKEM
+    if ((kemMask & (word16)~WOLFSPDM_MLKEM_SETS) != 0) {
+        return WOLFSPDM_E_INVALID_ARG;
+    }
+    ctx->kexAdvDhe = (byte)(advDhe != 0);
+    ctx->kexAdvKem = kemMask;
+#else
+    if (kemMask != 0) {
+        return WOLFSPDM_E_INVALID_ARG;
+    }
+#endif
     return WOLFSPDM_SUCCESS;
 }
 

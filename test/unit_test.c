@@ -31,6 +31,9 @@
 #ifndef WOLFSPDM_NO_CERT
     #include "test_certs.h"
 #endif
+#ifdef WOLFSPDM_HAVE_MLDSA
+    #include "test_certs_mldsa.h"
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -518,6 +521,22 @@ static int test_session_state(void)
     ASSERT_EQ(wolfSPDM_IsConnected(ctx), 1, "Should be connected");
     ASSERT_EQ(wolfSPDM_GetSessionId(ctx), (word32)0xAABBCCDD, "SessionId wrong");
     ASSERT_EQ(wolfSPDM_GetNegotiatedVersion(ctx), SPDM_VERSION_12, "Version wrong");
+    ASSERT_EQ(wolfSPDM_GetVersion_Negotiated(ctx), SPDM_VERSION_12,
+        "Old version getter");
+
+    /* Reserved IDs, and low bytes that read as an SPDM version on the wire */
+    ASSERT_EQ(wolfSPDM_SetRequesterSessionId(NULL, 0x0002),
+        WOLFSPDM_E_INVALID_ARG, "NULL ctx");
+    ASSERT_EQ(wolfSPDM_SetRequesterSessionId(ctx, 0x0000),
+        WOLFSPDM_E_INVALID_ARG, "Reserved 0x0000");
+    ASSERT_EQ(wolfSPDM_SetRequesterSessionId(ctx, 0xFFFF),
+        WOLFSPDM_E_INVALID_ARG, "Reserved 0xFFFF");
+    ASSERT_EQ(wolfSPDM_SetRequesterSessionId(ctx, 0x0012),
+        WOLFSPDM_E_INVALID_ARG, "Low byte 0x12");
+    ASSERT_EQ(wolfSPDM_SetRequesterSessionId(ctx, 0xAB1F),
+        WOLFSPDM_E_INVALID_ARG, "Low byte 0x1F");
+    ASSERT_SUCCESS(wolfSPDM_SetRequesterSessionId(ctx, 0x1020));
+    ASSERT_EQ(ctx->reqSessionId, 0x1020, "ReqSessionID stored");
 
     TEST_CTX_FREE();
     TEST_PASS();
@@ -654,7 +673,7 @@ static int test_key_exchange_rsp_hmac_check(void)
      * (e.g. ECC_TIMING_RESISTANT) require an RNG on the ECDH private
      * key for blinding; ensure one is attached for wc_ecc_shared_secret. */
     ASSERT_SUCCESS(wolfSPDM_GenerateEphemeralKey(ctx));
-    ASSERT_SUCCESS(wc_ecc_set_rng(&ctx->ephemeralKey, &ctx->rng));
+    ASSERT_SUCCESS(wc_ecc_set_rng(WOLFSPDM_EPH_ECC(ctx), &ctx->rng));
     ASSERT_SUCCESS(wolfSPDM_ExportEphemeralPubKey(ctx,
         ourPubX, &ourXSz, ourPubY, &ourYSz));
 
@@ -2449,7 +2468,7 @@ static int test_encrypt_internal_null_args(void)
 #ifndef WOLFSPDM_NO_MCTP
 static int test_encrypt_decrypt_roundtrip(void)
 {
-    byte plain[16] = "Hello SPDM test!";
+    byte plain[] = "Hello SPDM test!";
     static byte enc[512];
     static byte dec[256];
     word32 encSz = sizeof(enc);
@@ -2492,7 +2511,7 @@ static int test_encrypt_decrypt_roundtrip(void)
 #ifdef WOLFSPDM_TCG
 static int test_encrypt_decrypt_roundtrip_tcg(void)
 {
-    byte plain[16] = "TCG encrypt tst!";
+    byte plain[] = "TCG encrypt tst!";
     static byte enc[512];
     static byte dec[256];
     word32 encSz = sizeof(enc);
@@ -3205,7 +3224,7 @@ static int test_parse_capabilities(void)
 
 static int test_negotiate_algorithms_roundtrip(void)
 {
-    byte req[48];
+    byte req[WOLFSPDM_NEG_ALGO_SZ];
     byte rsp[52];
     word32 reqSz = sizeof(req);
     TEST_CTX_SETUP_V12();
@@ -3385,6 +3404,447 @@ static int test_validate_cert_chain(void)
     TEST_PASS();
 }
 #endif /* !WOLFSPDM_NO_CERT */
+
+#if defined(WOLFSPDM_HAVE_MLDSA) || defined(WOLFSPDM_HAVE_MLKEM)
+/* ALGORITHMS response: fixed fields, then DHE, AEAD, ReqBaseAsym, KeySchedule
+ * and KEMAlg structs */
+static word32 test_algo_rsp(byte* rsp, byte ver, word32 baseAsym, word32 pqc,
+    word16 dhe, word16 kem)
+{
+    XMEMSET(rsp, 0, 56);
+    rsp[0] = ver;
+    rsp[1] = SPDM_ALGORITHMS;
+    rsp[2] = 5;
+    SPDM_Set16LE(&rsp[4], 56);
+    rsp[6] = 0x01;
+    rsp[7] = 0x02;
+    SPDM_Set32LE(&rsp[12], baseAsym);
+    SPDM_Set32LE(&rsp[16], SPDM_HASH_ALGO_SHA_384);
+    SPDM_Set32LE(&rsp[20], pqc);
+    rsp[36] = SPDM_ALG_TYPE_DHE;
+    rsp[37] = 0x20;
+    SPDM_Set16LE(&rsp[38], dhe);
+    rsp[40] = SPDM_ALG_TYPE_AEAD;
+    rsp[41] = 0x20;
+    SPDM_Set16LE(&rsp[42], SPDM_AEAD_ALGO_AES_256_GCM);
+    rsp[44] = SPDM_ALG_TYPE_REQ_BASE_ASYM;
+    rsp[45] = 0x20;
+    rsp[48] = SPDM_ALG_TYPE_KEY_SCHEDULE;
+    rsp[49] = 0x20;
+    SPDM_Set16LE(&rsp[50], SPDM_KEY_SCHEDULE_SPDM);
+    rsp[52] = SPDM_ALG_TYPE_KEM;
+    rsp[53] = 0x20;
+    SPDM_Set16LE(&rsp[54], kem);
+    return 56;
+}
+
+static int test_negotiate_algorithms_pqc(void)
+{
+    byte req[WOLFSPDM_NEG_ALGO_SZ];
+    byte rsp[56];
+    word32 reqSz = sizeof(req);
+    word32 rspSz;
+#ifdef WOLFSPDM_HAVE_MLKEM
+    /* One ML-KEM set this wolfSSL has */
+    word16 kem = (word16)(WOLFSPDM_MLKEM_SETS & (~WOLFSPDM_MLKEM_SETS + 1));
+#endif
+#ifdef WOLFSPDM_HAVE_MLDSA
+    word32 pqc = WOLFSPDM_MLDSA_SETS & (~WOLFSPDM_MLDSA_SETS + 1);
+#endif
+    TEST_CTX_SETUP();
+
+    printf("test_negotiate_algorithms_pqc...\n");
+
+    /* Before 1.4 the request carries neither PqcAsymAlgo nor KEMAlg */
+    ctx->spdmVersion = SPDM_VERSION_13;
+    ASSERT_SUCCESS(wolfSPDM_BuildNegotiateAlgorithms(ctx, req, &reqSz));
+    ASSERT_EQ(reqSz, (word32)48, "classical request below 1.4");
+    ASSERT_EQ(SPDM_Get32LE(&req[16]), 0, "PqcAsymAlgo reserved below 1.4");
+
+    ctx->spdmVersion = SPDM_VERSION_14;
+    reqSz = sizeof(req);
+    ASSERT_SUCCESS(wolfSPDM_BuildNegotiateAlgorithms(ctx, req, &reqSz));
+    ASSERT_EQ(SPDM_Get32LE(&req[8]), SPDM_ASYM_ALGO_ECDSA_P384,
+        "ECDSA stays on offer");
+#ifdef WOLFSPDM_HAVE_MLDSA
+    ASSERT_EQ(SPDM_Get32LE(&req[16]), WOLFSPDM_MLDSA_SETS,
+        "ML-DSA sets offered at 1.4");
+#endif
+#ifdef WOLFSPDM_HAVE_MLKEM
+    ASSERT_EQ(reqSz, (word32)52, "KEMAlg appended at 1.4");
+    ASSERT_EQ(req[2], 5, "five AlgStructs");
+    ASSERT_EQ(req[32], SPDM_ALG_TYPE_DHE, "DHE on offer");
+    ASSERT_EQ(req[48], SPDM_ALG_TYPE_KEM, "KEMAlg type");
+    ASSERT_EQ(SPDM_Get16LE(&req[50]), WOLFSPDM_MLKEM_SETS,
+        "every built ML-KEM set offered");
+#endif
+
+    ASSERT_EQ(wolfSPDM_SetKeyExchangePref(NULL, 1, 0), WOLFSPDM_E_INVALID_ARG,
+        "NULL ctx");
+    ASSERT_EQ(wolfSPDM_SetKeyExchangePref(ctx, 0, 0), WOLFSPDM_E_INVALID_ARG,
+        "nothing to offer");
+    ASSERT_EQ(wolfSPDM_SetKeyExchangePref(ctx, 1, 0x0008),
+        WOLFSPDM_E_INVALID_ARG, "undefined ML-KEM bit");
+
+    /* ECDSA and ECDHE at 1.4 */
+    rspSz = test_algo_rsp(rsp, SPDM_VERSION_14, SPDM_ASYM_ALGO_ECDSA_P384, 0,
+        SPDM_DHE_ALGO_SECP384R1, 0);
+    ASSERT_SUCCESS(wolfSPDM_ParseAlgorithms(ctx, rsp, rspSz));
+    ASSERT_EQ(wolfSPDM_SigSize(ctx), WOLFSPDM_ECC_SIG_SIZE, "ECDSA SigLen");
+
+#ifdef WOLFSPDM_HAVE_MLDSA
+    rspSz = test_algo_rsp(rsp, SPDM_VERSION_14, 0, pqc,
+        SPDM_DHE_ALGO_SECP384R1, 0);
+    ASSERT_SUCCESS(wolfSPDM_ParseAlgorithms(ctx, rsp, rspSz));
+    ASSERT_EQ(ctx->pqcAsymSel, pqc, "ML-DSA selected");
+    ASSERT_NE(wolfSPDM_SigSize(ctx), WOLFSPDM_ECC_SIG_SIZE, "ML-DSA SigLen");
+
+    /* One signature algorithm across BaseAsymSel and PqcAsymSel */
+    rspSz = test_algo_rsp(rsp, SPDM_VERSION_14, SPDM_ASYM_ALGO_ECDSA_P384,
+        pqc, SPDM_DHE_ALGO_SECP384R1, 0);
+    ASSERT_EQ(wolfSPDM_ParseAlgorithms(ctx, rsp, rspSz),
+        WOLFSPDM_E_ALGO_MISMATCH, "both signature fields set");
+    ASSERT_EQ(ctx->pqcAsymSel, 0, "failed negotiation clears the selection");
+    rspSz = test_algo_rsp(rsp, SPDM_VERSION_14, 0,
+        SPDM_PQC_ASYM_ALGO_ML_DSA_44 | SPDM_PQC_ASYM_ALGO_ML_DSA_65,
+        SPDM_DHE_ALGO_SECP384R1, 0);
+    ASSERT_EQ(wolfSPDM_ParseAlgorithms(ctx, rsp, rspSz),
+        WOLFSPDM_E_ALGO_MISMATCH, "two ML-DSA sets");
+    rspSz = test_algo_rsp(rsp, SPDM_VERSION_14, 0, 0x00000008,
+        SPDM_DHE_ALGO_SECP384R1, 0);
+    ASSERT_EQ(wolfSPDM_ParseAlgorithms(ctx, rsp, rspSz),
+        WOLFSPDM_E_ALGO_MISMATCH, "unknown PQC algorithm");
+
+    /* PqcAsymSel is reserved before 1.4 */
+    ctx->spdmVersion = SPDM_VERSION_13;
+    rspSz = test_algo_rsp(rsp, SPDM_VERSION_13, SPDM_ASYM_ALGO_ECDSA_P384,
+        pqc, SPDM_DHE_ALGO_SECP384R1, 0);
+    ASSERT_SUCCESS(wolfSPDM_ParseAlgorithms(ctx, rsp, rspSz));
+    ASSERT_EQ(ctx->pqcAsymSel, 0, "PqcAsymSel ignored below 1.4");
+    ctx->spdmVersion = SPDM_VERSION_14;
+#endif
+
+#ifdef WOLFSPDM_HAVE_MLKEM
+    rspSz = test_algo_rsp(rsp, SPDM_VERSION_14, SPDM_ASYM_ALGO_ECDSA_P384, 0,
+        0, kem);
+    ASSERT_SUCCESS(wolfSPDM_ParseAlgorithms(ctx, rsp, rspSz));
+    ASSERT_EQ(ctx->kemAlgSel, kem, "ML-KEM selected");
+
+    /* Exactly one key exchange, from what was offered */
+    rspSz = test_algo_rsp(rsp, SPDM_VERSION_14, SPDM_ASYM_ALGO_ECDSA_P384, 0,
+        SPDM_DHE_ALGO_SECP384R1, kem);
+    ASSERT_EQ(wolfSPDM_ParseAlgorithms(ctx, rsp, rspSz),
+        WOLFSPDM_E_ALGO_MISMATCH, "hybrid DHE and KEM");
+    ASSERT_EQ(ctx->kemAlgSel, 0, "failed negotiation clears the KEM");
+    rspSz = test_algo_rsp(rsp, SPDM_VERSION_14, SPDM_ASYM_ALGO_ECDSA_P384, 0,
+        0, 0);
+    ASSERT_EQ(wolfSPDM_ParseAlgorithms(ctx, rsp, rspSz),
+        WOLFSPDM_E_ALGO_MISMATCH, "no key exchange");
+    rspSz = test_algo_rsp(rsp, SPDM_VERSION_14, SPDM_ASYM_ALGO_ECDSA_P384, 0,
+        0, SPDM_KEM_ALGO_ML_KEM_512 | SPDM_KEM_ALGO_ML_KEM_768);
+    ASSERT_EQ(wolfSPDM_ParseAlgorithms(ctx, rsp, rspSz),
+        WOLFSPDM_E_ALGO_MISMATCH, "two ML-KEM sets");
+
+    ASSERT_SUCCESS(wolfSPDM_SetKeyExchangePref(ctx, 1, 0));
+    rspSz = test_algo_rsp(rsp, SPDM_VERSION_14, SPDM_ASYM_ALGO_ECDSA_P384, 0,
+        0, kem);
+    ASSERT_EQ(wolfSPDM_ParseAlgorithms(ctx, rsp, rspSz),
+        WOLFSPDM_E_ALGO_MISMATCH, "ML-KEM not offered");
+
+    /* KEM only: no DHE struct, and no silent fallback below 1.4 */
+    ASSERT_SUCCESS(wolfSPDM_SetKeyExchangePref(ctx, 0, kem));
+    reqSz = sizeof(req);
+    ASSERT_SUCCESS(wolfSPDM_BuildNegotiateAlgorithms(ctx, req, &reqSz));
+    ASSERT_EQ(reqSz, (word32)48, "four AlgStructs");
+    ASSERT_EQ(req[32], SPDM_ALG_TYPE_AEAD, "no DHE struct");
+    rspSz = test_algo_rsp(rsp, SPDM_VERSION_14, SPDM_ASYM_ALGO_ECDSA_P384, 0,
+        SPDM_DHE_ALGO_SECP384R1, 0);
+    ASSERT_EQ(wolfSPDM_ParseAlgorithms(ctx, rsp, rspSz),
+        WOLFSPDM_E_ALGO_MISMATCH, "DHE not offered");
+    ctx->spdmVersion = SPDM_VERSION_13;
+    reqSz = sizeof(req);
+    ASSERT_EQ(wolfSPDM_BuildNegotiateAlgorithms(ctx, req, &reqSz),
+        WOLFSPDM_E_ALGO_MISMATCH, "KEM only below 1.4");
+#else
+    ASSERT_EQ(wolfSPDM_SetKeyExchangePref(ctx, 1, SPDM_KEM_ALGO_ML_KEM_768),
+        WOLFSPDM_E_INVALID_ARG, "ML-KEM not built in");
+#endif
+
+    TEST_CTX_FREE();
+    TEST_PASS();
+}
+#endif /* WOLFSPDM_HAVE_MLDSA || WOLFSPDM_HAVE_MLKEM */
+
+#ifdef WOLFSPDM_HAVE_MLDSA
+#ifndef WOLFSSL_MLDSA_VERIFY_ONLY
+/* Sign M = combined_spdm_prefix || message_hash with an ML-DSA key of the
+ * given set, context = spdm_context, and verify it through the dispatcher */
+static int test_mldsa_verify_one(word32 set, byte level, word32 sigSz)
+{
+    static const char label[] = "responder-key_exchange_rsp signing";
+    static MlDsaKey key;
+    static byte sig[WOLFSPDM_MLDSA87_SIG_SIZE];
+    byte hash[WOLFSPDM_HASH_SIZE];
+    byte m[148];
+    word32 labelSz = (word32)sizeof(label) - 1;
+    word32 pubSz = WOLFSPDM_RSP_PUBKEY_SZ;
+    word32 outSz = sizeof(sig);
+    word32 i;
+    WC_RNG rng;
+    TEST_CTX_SETUP();
+
+    ctx->spdmVersion = SPDM_VERSION_14;
+    ctx->pqcAsymSel = set;
+    ASSERT_SUCCESS(wc_InitRng(&rng));
+    ASSERT_SUCCESS(wc_MlDsaKey_Init(&key, NULL, INVALID_DEVID));
+    ASSERT_SUCCESS(wc_MlDsaKey_SetParams(&key, level));
+    ASSERT_SUCCESS(wc_MlDsaKey_MakeKey(&key, &rng));
+    ASSERT_SUCCESS(wc_MlDsaKey_ExportPubRaw(&key, ctx->rspPubKey, &pubSz));
+    ctx->rspPubKeyLen = pubSz;
+    ctx->flags.hasRspPubKey = 1;
+
+    XMEMSET(hash, 0x5A, sizeof(hash));
+    for (i = 0; i < 4; i++) {
+        XMEMCPY(&m[i * 16], "dmtf-spdm-v1.4.*", 16);
+    }
+    XMEMSET(&m[64], 0, 36 - labelSz);
+    XMEMCPY(&m[100 - labelSz], label, labelSz);
+    XMEMCPY(&m[100], hash, sizeof(hash));
+    ASSERT_SUCCESS(wc_MlDsaKey_SignCtx(&key, (const byte*)label,
+        (byte)labelSz, sig, &outSz, m, sizeof(m), &rng));
+    ASSERT_EQ(outSz, sigSz, "SigLen of the set");
+    ASSERT_EQ(wolfSPDM_SigSize(ctx), sigSz, "negotiated SigLen");
+
+    ASSERT_SUCCESS(wolfSPDM_VerifyRspSig(ctx, label, labelSz, hash, sig,
+        outSz));
+    sig[10] ^= 0x01;
+    ASSERT_EQ(wolfSPDM_VerifyRspSig(ctx, label, labelSz, hash, sig, outSz),
+        WOLFSPDM_E_BAD_SIGNATURE, "tampered signature");
+    sig[10] ^= 0x01;
+    hash[0] ^= 0x01;
+    ASSERT_EQ(wolfSPDM_VerifyRspSig(ctx, label, labelSz, hash, sig, outSz),
+        WOLFSPDM_E_BAD_SIGNATURE, "other transcript");
+    hash[0] ^= 0x01;
+    ASSERT_EQ(wolfSPDM_VerifyRspSig(ctx, "responder-challenge_auth signing",
+        32, hash, sig, outSz), WOLFSPDM_E_BAD_SIGNATURE,
+        "spdm_context binds the signature");
+    ASSERT_EQ(wolfSPDM_VerifyRspSig(ctx, label, labelSz, hash, sig,
+        outSz - 1), WOLFSPDM_E_BAD_SIGNATURE, "short signature");
+#ifdef WOLFSPDM_TCG
+    ctx->mode = WOLFSPDM_MODE_NUVOTON;
+    ASSERT_EQ(wolfSPDM_SigSize(ctx), WOLFSPDM_ECC_SIG_SIZE,
+        "TCG binding is ECDSA only");
+    ctx->mode = WOLFSPDM_MODE_AUTO;
+#endif
+
+    wc_MlDsaKey_Free(&key);
+    wc_FreeRng(&rng);
+    TEST_CTX_FREE();
+    return 0;
+}
+
+static int test_mldsa_verify(void)
+{
+    printf("test_mldsa_verify...\n");
+#ifndef WOLFSSL_NO_ML_DSA_44
+    if (test_mldsa_verify_one(SPDM_PQC_ASYM_ALGO_ML_DSA_44, WC_ML_DSA_44,
+            WOLFSPDM_MLDSA44_SIG_SIZE) != 0) {
+        return -1;
+    }
+#endif
+#ifndef WOLFSSL_NO_ML_DSA_65
+    if (test_mldsa_verify_one(SPDM_PQC_ASYM_ALGO_ML_DSA_65, WC_ML_DSA_65,
+            WOLFSPDM_MLDSA65_SIG_SIZE) != 0) {
+        return -1;
+    }
+#endif
+#ifndef WOLFSSL_NO_ML_DSA_87
+    if (test_mldsa_verify_one(SPDM_PQC_ASYM_ALGO_ML_DSA_87, WC_ML_DSA_87,
+            WOLFSPDM_MLDSA87_SIG_SIZE) != 0) {
+        return -1;
+    }
+#endif
+    TEST_PASS();
+}
+#endif /* !WOLFSSL_MLDSA_VERIFY_ONLY */
+
+/* The KEY_EXCHANGE_RSP bounds come from the negotiated SigLen */
+static int test_key_exchange_rsp_mldsa_sigsize(void)
+{
+    byte buf[300];
+    TEST_CTX_SETUP();
+
+    printf("test_key_exchange_rsp_mldsa_sigsize...\n");
+    ctx->spdmVersion = SPDM_VERSION_14;
+    ctx->pqcAsymSel = WOLFSPDM_MLDSA_SETS & (~WOLFSPDM_MLDSA_SETS + 1);
+    ctx->flags.hasRspPubKey = 1;
+    XMEMSET(buf, 0, sizeof(buf));
+    buf[0] = SPDM_VERSION_14;
+    buf[1] = SPDM_KEY_EXCHANGE_RSP;
+    /* OpaqueLength 0: room for an ECDSA signature and HMAC, not ML-DSA */
+    ASSERT_EQ(wolfSPDM_ParseKeyExchangeRsp(ctx, buf, 138 +
+        WOLFSPDM_ECC_SIG_SIZE + WOLFSPDM_HASH_SIZE), WOLFSPDM_E_BUFFER_SMALL,
+        "ML-DSA SigLen bounds KEY_EXCHANGE_RSP");
+
+    TEST_CTX_FREE();
+    TEST_PASS();
+}
+
+#ifndef WOLFSSL_NO_ML_DSA_44
+static int test_load_mldsa_chain(WOLFSPDM_CTX* ctx)
+{
+    word32 total = WOLFSPDM_CERT_CHAIN_HDR_SZ +
+        (word32)sizeof(test_mldsa44_chain_der);
+
+    if (total > WOLFSPDM_MAX_CERT_CHAIN) {
+        return -1;
+    }
+    SPDM_Set16LE(ctx->certChain, (word16)total);
+    ctx->certChain[2] = 0;
+    ctx->certChain[3] = 0;
+    if (wolfSPDM_Sha384Hash(ctx->certChain + 4, test_mldsa44_chain_der,
+            TEST_MLDSA44_CA_SZ, NULL, 0, NULL, 0) != 0) {
+        return -1;
+    }
+    XMEMCPY(ctx->certChain + WOLFSPDM_CERT_CHAIN_HDR_SZ,
+        test_mldsa44_chain_der, sizeof(test_mldsa44_chain_der));
+    ctx->certChainLen = total;
+    return 0;
+}
+
+/* Every link of an ML-DSA-44 chain verifies up to the root */
+static int test_validate_cert_chain_mldsa(void)
+{
+    TEST_CTX_SETUP();
+
+    printf("test_validate_cert_chain_mldsa...\n");
+    ctx->spdmVersion = SPDM_VERSION_14;
+    ctx->pqcAsymSel = SPDM_PQC_ASYM_ALGO_ML_DSA_44;
+    ASSERT_SUCCESS(test_load_mldsa_chain(ctx));
+    ASSERT_SUCCESS(wolfSPDM_SetTrustedCAs(ctx, test_mldsa44_chain_der,
+        TEST_MLDSA44_CA_SZ));
+    ASSERT_SUCCESS(wolfSPDM_ValidateCertChain(ctx));
+    ASSERT_EQ(ctx->rspPubKeyLen, (word32)sizeof(test_mldsa44_leaf_pub),
+        "ML-DSA-44 leaf key size");
+    ASSERT_EQ(memcmp(ctx->rspPubKey, test_mldsa44_leaf_pub,
+        sizeof(test_mldsa44_leaf_pub)), 0, "leaf key installed");
+
+    /* A forged leaf signature breaks the chain */
+    ctx->certChain[ctx->certChainLen - 2] ^= 0x01;
+    ASSERT_EQ(wolfSPDM_ValidateCertChain(ctx), WOLFSPDM_E_CERT_FAIL,
+        "forged ML-DSA signature");
+    ctx->certChain[ctx->certChainLen - 2] ^= 0x01;
+
+    /* The leaf must carry the negotiated algorithm */
+    ctx->pqcAsymSel = 0;
+    ASSERT_EQ(wolfSPDM_ValidateCertChain(ctx), WOLFSPDM_E_CERT_PARSE,
+        "ML-DSA leaf with ECDSA negotiated");
+#ifndef WOLFSSL_NO_ML_DSA_65
+    ctx->pqcAsymSel = SPDM_PQC_ASYM_ALGO_ML_DSA_65;
+    ASSERT_EQ(wolfSPDM_ValidateCertChain(ctx), WOLFSPDM_E_CERT_PARSE,
+        "ML-DSA-44 leaf with ML-DSA-65 negotiated");
+#endif
+
+    TEST_CTX_FREE();
+    TEST_PASS();
+}
+#endif /* !WOLFSSL_NO_ML_DSA_44 */
+#endif /* WOLFSPDM_HAVE_MLDSA */
+
+#if defined(WOLFSPDM_HAVE_MLKEM) && !defined(WOLFSSL_MLKEM_NO_ENCAPSULATE) && \
+    defined(WOLFSSL_WC_ML_KEM_768)
+/* ML-KEM-768: the request carries ek, the responder encapsulates to it and
+ * decapsulation recovers the same secret */
+static int test_mlkem_key_exchange(void)
+{
+    static MlKemKey peer;
+    byte req[WOLFSPDM_KEY_EX_TX_SZ];
+    byte rsp[300];
+    byte ct[1568];
+    byte ss[32];
+    byte x[WOLFSPDM_ECC_KEY_SIZE];
+    byte y[WOLFSPDM_ECC_KEY_SIZE];
+    word32 xSz = sizeof(x);
+    word32 ySz = sizeof(y);
+    word32 reqSz = sizeof(req);
+    word32 ctSz = 0;
+    WC_RNG rng;
+    TEST_CTX_SETUP();
+
+    printf("test_mlkem_key_exchange...\n");
+    ctx->spdmVersion = SPDM_VERSION_14;
+    ctx->kemAlgSel = SPDM_KEM_ALGO_ML_KEM_768;
+    ASSERT_SUCCESS(wolfSPDM_BuildKeyExchange(ctx, req, &reqSz));
+    ASSERT_EQ(reqSz, (word32)(40 + 1184 + 22), "ek replaces the ECDHE point");
+    ASSERT_EQ(ctx->flags.ephemeralIsKem, 1, "ML-KEM key live");
+    ASSERT_EQ(wolfSPDM_ExportEphemeralPubKey(ctx, x, &xSz, y, &ySz),
+        WOLFSPDM_E_BAD_STATE, "no ECDH point from an ML-KEM key");
+
+    ASSERT_SUCCESS(wc_InitRng(&rng));
+    ASSERT_SUCCESS(wc_MlKemKey_Init(&peer, WC_ML_KEM_768, NULL,
+        INVALID_DEVID));
+    ASSERT_SUCCESS(wc_MlKemKey_DecodePublicKey(&peer, &req[40], 1184));
+    ASSERT_SUCCESS(wc_MlKemKey_CipherTextSize(&peer, &ctSz));
+    ASSERT_SUCCESS(wc_MlKemKey_Encapsulate(&peer, ct, ss, &rng));
+    ASSERT_EQ(wolfSPDM_MlKemDecapsulate(ctx, ct, ctSz - 1),
+        WOLFSPDM_E_KEY_EXCHANGE, "ciphertext size of the set");
+    ASSERT_SUCCESS(wolfSPDM_MlKemDecapsulate(ctx, ct, ctSz));
+    ASSERT_EQ(ctx->sharedSecretSz, (word32)sizeof(ss), "32-byte secret");
+    ASSERT_EQ(memcmp(ctx->sharedSecret, ss, sizeof(ss)), 0, "shared secret");
+
+    /* KEY_EXCHANGE_RSP bounds use the ciphertext size */
+    XMEMSET(rsp, 0, sizeof(rsp));
+    rsp[0] = SPDM_VERSION_14;
+    rsp[1] = SPDM_KEY_EXCHANGE_RSP;
+    ASSERT_EQ(wolfSPDM_ParseKeyExchangeRsp(ctx, rsp, sizeof(rsp)),
+        WOLFSPDM_E_BUFFER_SMALL, "ciphertext past the response");
+
+    /* Renegotiating ECDHE replaces the ML-KEM key */
+    ctx->kemAlgSel = 0;
+    reqSz = sizeof(req);
+    ASSERT_SUCCESS(wolfSPDM_BuildKeyExchange(ctx, req, &reqSz));
+    ASSERT_EQ(reqSz, (word32)(40 + WOLFSPDM_ECC_POINT_SIZE + 22),
+        "ECDHE request");
+    ASSERT_EQ(ctx->flags.ephemeralIsKem, 0, "ECDHE key live");
+    ASSERT_EQ(wolfSPDM_MlKemDecapsulate(ctx, ct, ctSz), WOLFSPDM_E_BAD_STATE,
+        "no decapsulation with an ECDHE key");
+
+    /* A request buffer too small for ek */
+    ctx->kemAlgSel = SPDM_KEM_ALGO_ML_KEM_768;
+    reqSz = 40 + 22 + 512;
+    ASSERT_EQ(wolfSPDM_BuildKeyExchange(ctx, req, &reqSz),
+        WOLFSPDM_E_BUFFER_SMALL, "ek does not fit");
+    ASSERT_EQ(ctx->flags.ephemeralKeyInit, 0, "failed key freed");
+
+    wc_MlKemKey_Free(&peer);
+    wc_FreeRng(&rng);
+    TEST_CTX_FREE();
+    TEST_PASS();
+}
+#endif /* WOLFSPDM_HAVE_MLKEM */
+
+#ifndef WOLFSPDM_NO_CERT
+/* Unchunked, a request larger than the responder's DataTransferSize is
+ * refused before it reaches the transport */
+static int test_clear_exchange_dts(void)
+{
+    byte req[64];
+    byte rsp[16];
+    word32 rspSz = sizeof(rsp);
+    TEST_CTX_SETUP_V12();
+
+    printf("test_clear_exchange_dts...\n");
+    XMEMSET(req, 0, sizeof(req));
+    wolfSPDM_SetIO(ctx, dummy_io_cb, NULL);
+    ctx->dataTransferSize = 42;
+    ctx->rspCaps = 0;
+    ASSERT_EQ(wolfSPDM_ClearExchange(ctx, req, sizeof(req), rsp, &rspSz),
+        WOLFSPDM_E_BUFFER_SMALL, "request over the responder DTS");
+
+    TEST_CTX_FREE();
+    TEST_PASS();
+}
+#endif
 
 #ifndef WOLFSPDM_NO_HEARTBEAT
 static int test_heartbeat_msgs(void)
@@ -4425,9 +4885,13 @@ static int test_chunk_transfers(void)
     ctx->maxSpdmMsgSize = 4096;
 
 #if WOLFSPDM_DATA_TRANSFER_SIZE >= 300
-    /* Without CHUNK_CAP every message goes whole */
+    /* Without CHUNK_CAP every message goes whole, within the responder DTS */
     ctx->rspCaps &= ~(word32)SPDM_CAP_CHUNK_CAP;
+    ctx->dataTransferSize = 200;
+    ASSERT_EQ(test_chunk_echo(ctx, 0, 300), WOLFSPDM_E_BUFFER_SMALL,
+        "Unchunked request above the responder DTS");
     g_peerDts = sizeof(g_peerReq);
+    ctx->dataTransferSize = g_peerDts;
     ASSERT_SUCCESS(test_chunk_echo(ctx, 0, 300));
     ASSERT_SUCCESS(test_chunk_echo(ctx, 1, 300));
 #endif
@@ -4593,6 +5057,23 @@ int main(void)
     test_parse_certificate();
     test_mutual_auth_rejected_in_standard_mode();
     test_validate_cert_chain();
+    test_clear_exchange_dts();
+#endif
+#if defined(WOLFSPDM_HAVE_MLDSA) || defined(WOLFSPDM_HAVE_MLKEM)
+    test_negotiate_algorithms_pqc();
+#endif
+#ifdef WOLFSPDM_HAVE_MLDSA
+#ifndef WOLFSSL_MLDSA_VERIFY_ONLY
+    test_mldsa_verify();
+#endif
+    test_key_exchange_rsp_mldsa_sigsize();
+#ifndef WOLFSSL_NO_ML_DSA_44
+    test_validate_cert_chain_mldsa();
+#endif
+#endif
+#if defined(WOLFSPDM_HAVE_MLKEM) && !defined(WOLFSSL_MLKEM_NO_ENCAPSULATE) && \
+    defined(WOLFSSL_WC_ML_KEM_768)
+    test_mlkem_key_exchange();
 #endif
 #ifdef WOLFSPDM_TCG
     test_encrypt_decrypt_roundtrip_tcg();

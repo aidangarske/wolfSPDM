@@ -105,12 +105,12 @@ static void wolfSPDM_KeyExOpaque(const WOLFSPDM_CTX* ctx,
 int wolfSPDM_BuildKeyExchange(WOLFSPDM_CTX* ctx, byte* buf, word32* bufSz)
 {
     word32 offset = 0;
-    byte pubKeyX[WOLFSPDM_ECC_KEY_SIZE];
-    byte pubKeyY[WOLFSPDM_ECC_KEY_SIZE];
-    word32 pubKeyXSz = sizeof(pubKeyX);
-    word32 pubKeyYSz = sizeof(pubKeyY);
+    word32 exSz = WOLFSPDM_ECC_POINT_SIZE;
+    word32 xSz = WOLFSPDM_ECC_KEY_SIZE;
+    word32 ySz = WOLFSPDM_ECC_KEY_SIZE;
     const byte* opaque;
     word32 opaqueSz;
+    int useKem = 0;
     int rc;
 
     if (ctx == NULL) {
@@ -120,53 +120,61 @@ int wolfSPDM_BuildKeyExchange(WOLFSPDM_CTX* ctx, byte* buf, word32* bufSz)
     if (opaque == NULL) {
         return WOLFSPDM_E_NOT_AVAILABLE;
     }
-
-    /* Require exactly the encoded request size */
-    SPDM_CHECK_BUILD_ARGS(ctx, buf, bufSz, WOLFSPDM_KEYEX_FIXED_SZ + opaqueSz);
-
-    rc = wolfSPDM_GenerateEphemeralKey(ctx);
-    if (rc == WOLFSPDM_SUCCESS)
-        rc = wolfSPDM_ExportEphemeralPubKey(ctx, pubKeyX, &pubKeyXSz,
-            pubKeyY, &pubKeyYSz);
-
-    if (rc == WOLFSPDM_SUCCESS) {
-        XMEMSET(buf, 0, *bufSz);
-
-        /* Use negotiated SPDM version (not hardcoded 1.2) */
-        buf[offset++] = ctx->spdmVersion;
-        buf[offset++] = SPDM_KEY_EXCHANGE;
-        buf[offset++] = 0x00;  /* MeasurementSummaryHashType = None */
-        /* SlotID: 0xFF = provisioned public key (TCG), else the cert slot */
-#ifndef WOLFSPDM_NO_CERT
-        buf[offset++] = wolfSPDM_IsTcgMode(ctx) ? 0xFF : ctx->currentSlotId;
-#else
-        buf[offset++] = wolfSPDM_IsTcgMode(ctx) ? 0xFF : 0x00;
+#ifdef WOLFSPDM_HAVE_MLKEM
+    useKem = (ctx->kemAlgSel != 0 && !wolfSPDM_IsTcgMode(ctx));
 #endif
 
-        /* ReqSessionID (2 LE) */
-        buf[offset++] = (byte)(ctx->reqSessionId & 0xFF);
-        buf[offset++] = (byte)((ctx->reqSessionId >> 8) & 0xFF);
+    /* ECDHE: exactly the encoded request size; ML-KEM bounds its own key */
+    SPDM_CHECK_BUILD_ARGS(ctx, buf, bufSz, WOLFSPDM_KEYEX_FIXED_SZ + opaqueSz -
+        (useKem ? WOLFSPDM_ECC_POINT_SIZE : 0));
+    XMEMSET(buf, 0, *bufSz);
 
-        buf[offset++] = 0x00;  /* SessionPolicy */
-        buf[offset++] = 0x00;  /* Reserved */
+    /* Use negotiated SPDM version (not hardcoded 1.2) */
+    buf[offset++] = ctx->spdmVersion;
+    buf[offset++] = SPDM_KEY_EXCHANGE;
+    buf[offset++] = 0x00;  /* MeasurementSummaryHashType = None */
+    /* SlotID: 0xFF = provisioned public key (TCG), else the cert slot */
+#ifndef WOLFSPDM_NO_CERT
+    buf[offset++] = wolfSPDM_IsTcgMode(ctx) ? 0xFF : ctx->currentSlotId;
+#else
+    buf[offset++] = wolfSPDM_IsTcgMode(ctx) ? 0xFF : 0x00;
+#endif
 
-        /* RandomData (32 bytes) */
-        rc = wolfSPDM_GetRandom(ctx, &buf[offset], WOLFSPDM_RANDOM_SIZE);
+    /* ReqSessionID (2 LE) */
+    buf[offset++] = (byte)(ctx->reqSessionId & 0xFF);
+    buf[offset++] = (byte)((ctx->reqSessionId >> 8) & 0xFF);
+
+    buf[offset++] = 0x00;  /* SessionPolicy */
+    buf[offset++] = 0x00;  /* Reserved */
+
+    /* RandomData (32 bytes) */
+    rc = wolfSPDM_GetRandom(ctx, &buf[offset], WOLFSPDM_RANDOM_SIZE);
+    offset += WOLFSPDM_RANDOM_SIZE;
+
+    /* ExchangeData: the ML-KEM encapsulation key, or ECDHE X || Y */
+#ifdef WOLFSPDM_HAVE_MLKEM
+    if (rc == WOLFSPDM_SUCCESS && useKem) {
+        exSz = *bufSz - offset - opaqueSz;
+        rc = wolfSPDM_GenerateMlKemKey(ctx, &buf[offset], &exSz);
+    }
+    else
+#endif
+    if (rc == WOLFSPDM_SUCCESS) {
+        rc = wolfSPDM_GenerateEphemeralKey(ctx);
         if (rc == WOLFSPDM_SUCCESS) {
-            offset += WOLFSPDM_RANDOM_SIZE;
-
-            /* ExchangeData: X || Y */
-            XMEMCPY(&buf[offset], pubKeyX, WOLFSPDM_ECC_KEY_SIZE);
-            offset += WOLFSPDM_ECC_KEY_SIZE;
-            XMEMCPY(&buf[offset], pubKeyY, WOLFSPDM_ECC_KEY_SIZE);
-            offset += WOLFSPDM_ECC_KEY_SIZE;
-
-            /* OpaqueData for secured message version negotiation */
-            XMEMCPY(&buf[offset], opaque, opaqueSz);
-            offset += opaqueSz;
-
-            *bufSz = offset;
+            rc = wolfSPDM_ExportEphemeralPubKey(ctx, &buf[offset], &xSz,
+                &buf[offset + WOLFSPDM_ECC_KEY_SIZE], &ySz);
         }
+    }
+
+    if (rc == WOLFSPDM_SUCCESS) {
+        offset += exSz;
+
+        /* OpaqueData for secured message version negotiation */
+        XMEMCPY(&buf[offset], opaque, opaqueSz);
+        offset += opaqueSz;
+
+        *bufSz = offset;
     }
 
     return rc;
@@ -174,57 +182,117 @@ int wolfSPDM_BuildKeyExchange(WOLFSPDM_CTX* ctx, byte* buf, word32* bufSz)
 
 /* ----- Shared Signing Helpers ----- */
 
-/* Build SPDM 1.2+ signed hash per DSP0274:
+/* Build the SPDM 1.2+ signing input per DSP0274 (148 bytes at most):
  * M = combined_spdm_prefix || zero_pad || context_str || inputDigest
- * outputDigest = Hash(M)
  *
  * combined_spdm_prefix = "dmtf-spdm-v1.X.*" x4 = 64 bytes
  * zero_pad = (36 - contextStrLen) bytes of 0x00
  * context_str = signing context string (variable length, max 36) */
-int wolfSPDM_BuildSignedHash(byte spdmVersion,
+static int wolfSPDM_BuildSignedMsg(byte spdmVersion,
     const char* contextStr, word32 contextStrLen,
-    const byte* inputDigest, byte* outputDigest)
+    const byte* inputDigest, byte* signMsg, word32* signMsgLen)
 {
-    byte signMsg[200]; /* 64 + 36 + 48 = 148 bytes max */
-    word32 signMsgLen = 0;
-    word32 zeroPadLen;
+    word32 len = 0;
     byte majorVer, minorVer;
-    int i, rc;
+    int i;
+
+    if (contextStrLen > 36) {
+        return WOLFSPDM_E_INVALID_ARG;
+    }
 
     majorVer = (byte)('0' + ((spdmVersion >> 4) & 0xF));
     minorVer = (byte)('0' + (spdmVersion & 0xF));
 
     /* combined_spdm_prefix: "dmtf-spdm-v1.X.*" x4 = 64 bytes */
     for (i = 0; i < 4; i++) {
-        XMEMCPY(&signMsg[signMsgLen], "dmtf-spdm-v1.2.*", 16);
-        signMsg[signMsgLen + 11] = majorVer;
-        signMsg[signMsgLen + 13] = minorVer;
-        signMsg[signMsgLen + 15] = '*';
-        signMsgLen += 16;
+        XMEMCPY(&signMsg[len], "dmtf-spdm-v1.2.*", 16);
+        signMsg[len + 11] = majorVer;
+        signMsg[len + 13] = minorVer;
+        signMsg[len + 15] = '*';
+        len += 16;
     }
 
     /* Zero padding: 36 - contextStrLen bytes */
-    if (contextStrLen > 36) {
-        return WOLFSPDM_E_INVALID_ARG;
-    }
-    zeroPadLen = 36 - contextStrLen;
-    XMEMSET(&signMsg[signMsgLen], 0x00, zeroPadLen);
-    signMsgLen += zeroPadLen;
+    XMEMSET(&signMsg[len], 0x00, 36 - contextStrLen);
+    len += 36 - contextStrLen;
 
     /* Signing context string */
-    XMEMCPY(&signMsg[signMsgLen], contextStr, contextStrLen);
-    signMsgLen += contextStrLen;
+    XMEMCPY(&signMsg[len], contextStr, contextStrLen);
+    len += contextStrLen;
 
     /* Input digest */
-    XMEMCPY(&signMsg[signMsgLen], inputDigest, WOLFSPDM_HASH_SIZE);
-    signMsgLen += WOLFSPDM_HASH_SIZE;
+    XMEMCPY(&signMsg[len], inputDigest, WOLFSPDM_HASH_SIZE);
+    len += WOLFSPDM_HASH_SIZE;
 
-    /* Hash M */
-    rc = wolfSPDM_Sha384Hash(outputDigest, signMsg, signMsgLen,
-        NULL, 0, NULL, 0);
-    if (rc != WOLFSPDM_SUCCESS) return rc;
-
+    *signMsgLen = len;
     return WOLFSPDM_SUCCESS;
+}
+
+/* outputDigest = Hash(M) */
+int wolfSPDM_BuildSignedHash(byte spdmVersion,
+    const char* contextStr, word32 contextStrLen,
+    const byte* inputDigest, byte* outputDigest)
+{
+    byte signMsg[200]; /* 64 + 36 + 48 = 148 bytes max */
+    word32 signMsgLen = 0;
+    int rc;
+
+    rc = wolfSPDM_BuildSignedMsg(spdmVersion, contextStr, contextStrLen,
+        inputDigest, signMsg, &signMsgLen);
+    if (rc == WOLFSPDM_SUCCESS) {
+        rc = wolfSPDM_Sha384Hash(outputDigest, signMsg, signMsgLen,
+            NULL, 0, NULL, 0);
+    }
+    wc_ForceZero(signMsg, sizeof(signMsg));
+    return rc;
+}
+
+/* ECDSA signs Hash(M); ML-DSA signs M itself with spdm_context as its
+ * context string (DSP0274 1.4 Sec. 15) */
+int wolfSPDM_VerifyRspSig(WOLFSPDM_CTX* ctx,
+    const char* contextStr, word32 contextStrLen, const byte* messageHash,
+    const byte* sig, word32 sigSz)
+{
+    byte signHash[WOLFSPDM_HASH_SIZE];
+    int rc;
+
+    if (ctx == NULL || contextStr == NULL || messageHash == NULL ||
+            sig == NULL) {
+        return WOLFSPDM_E_INVALID_ARG;
+    }
+    if (!ctx->flags.hasRspPubKey) {
+        wolfSPDM_DebugPrint(ctx, "No responder public key set\n");
+        return WOLFSPDM_E_BAD_STATE;
+    }
+    if (sigSz != wolfSPDM_SigSize(ctx)) {
+        return WOLFSPDM_E_BAD_SIGNATURE;
+    }
+
+#ifdef WOLFSPDM_HAVE_MLDSA
+    if (wolfSPDM_RspMlDsaLevel(ctx) != 0) {
+        byte signMsg[200];
+        word32 signMsgLen = 0;
+
+        rc = wolfSPDM_BuildSignedMsg(ctx->spdmVersion, contextStr,
+            contextStrLen, messageHash, signMsg, &signMsgLen);
+        if (rc == WOLFSPDM_SUCCESS) {
+            rc = wolfSPDM_MlDsaVerify(wolfSPDM_RspMlDsaLevel(ctx),
+                ctx->rspPubKey, ctx->rspPubKeyLen, (const byte*)contextStr,
+                contextStrLen, signMsg, signMsgLen, sig, sigSz);
+        }
+        wc_ForceZero(signMsg, sizeof(signMsg));
+        return rc;
+    }
+#endif
+
+    rc = wolfSPDM_BuildSignedHash(ctx->spdmVersion, contextStr, contextStrLen,
+        messageHash, signHash);
+    if (rc == WOLFSPDM_SUCCESS) {
+        rc = wolfSPDM_VerifySignature(ctx, signHash, WOLFSPDM_HASH_SIZE, sig,
+            sigSz);
+    }
+    wc_ForceZero(signHash, sizeof(signHash));
+    return rc;
 }
 
 int wolfSPDM_BuildFinish(WOLFSPDM_CTX* ctx, byte* buf, word32* bufSz)
@@ -427,13 +495,11 @@ int wolfSPDM_ParseVersion(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufSz)
 
 int wolfSPDM_ParseKeyExchangeRsp(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufSz)
 {
-    word16 opaqueLen;
+    word32 exSz = WOLFSPDM_ECC_POINT_SIZE;
+    word32 sigSz;
+    word32 opaqueOff;
     word32 sigOffset;
-    word32 keRspPartialLen;
-    byte peerPubKeyX[WOLFSPDM_ECC_KEY_SIZE];
-    byte peerPubKeyY[WOLFSPDM_ECC_KEY_SIZE];
     byte th1SigHash[WOLFSPDM_HASH_SIZE];
-    byte signMsgHash[WOLFSPDM_HASH_SIZE];
     byte expectedHmac[WOLFSPDM_HASH_SIZE];
     const byte* signature;
     const byte* rspVerifyData;
@@ -453,50 +519,52 @@ int wolfSPDM_ParseKeyExchangeRsp(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufS
     wolfSPDM_DebugPrint(ctx, "KEY_EXCHANGE_RSP: MutAuth=0x%02x ReqSlotID=0x%02x\n",
         buf[6], buf[7]);
 
-    /* Extract responder's ephemeral public key (offset 40 = 4+2+1+1+32) */
-    XMEMCPY(peerPubKeyX, &buf[40], WOLFSPDM_ECC_KEY_SIZE);
-    XMEMCPY(peerPubKeyY, &buf[88], WOLFSPDM_ECC_KEY_SIZE);
-
-    /* OpaqueLen at offset 136 */
-    opaqueLen = SPDM_Get16LE(&buf[136]);
-    sigOffset = 138 + opaqueLen;
-    keRspPartialLen = sigOffset;
-
-    if (bufSz < sigOffset + WOLFSPDM_ECC_SIG_SIZE + WOLFSPDM_HASH_SIZE) {
+    /* ExchangeData at offset 40: the ECDHE point, or the ML-KEM ciphertext */
+#ifdef WOLFSPDM_HAVE_MLKEM
+    if (ctx->flags.ephemeralKeyInit && ctx->flags.ephemeralIsKem &&
+            wc_MlKemKey_CipherTextSize(&ctx->ephemeral.mlkem, &exSz) != 0) {
+        return WOLFSPDM_E_CRYPTO_FAIL;
+    }
+#endif
+    sigSz = wolfSPDM_SigSize(ctx);
+    opaqueOff = 40 + exSz;
+    if (bufSz < opaqueOff + 2) {
+        return WOLFSPDM_E_BUFFER_SMALL;
+    }
+    sigOffset = opaqueOff + 2 + SPDM_Get16LE(&buf[opaqueOff]);
+    if (bufSz < sigOffset + sigSz + WOLFSPDM_HASH_SIZE) {
         return WOLFSPDM_E_BUFFER_SMALL;
     }
 
     signature = buf + sigOffset;
-    rspVerifyData = buf + sigOffset + WOLFSPDM_ECC_SIG_SIZE;
+    rspVerifyData = buf + sigOffset + sigSz;
 
     /* Add KEY_EXCHANGE_RSP partial (without sig/verify) to transcript */
-    rc = wolfSPDM_TranscriptAdd(ctx, buf, keRspPartialLen);
+    rc = wolfSPDM_TranscriptAdd(ctx, buf, sigOffset);
 
     /* Verify responder signature over TH1 (DSP0274). Responder public key
      * must be provisioned before KEY_EXCHANGE. */
-    if (rc == WOLFSPDM_SUCCESS && !ctx->flags.hasRspPubKey) {
-        wolfSPDM_DebugPrint(ctx, "No responder public key set\n");
-        rc = WOLFSPDM_E_BAD_STATE;
-    }
     if (rc == WOLFSPDM_SUCCESS) {
         rc = wolfSPDM_TranscriptHash(ctx, th1SigHash);
     }
     if (rc == WOLFSPDM_SUCCESS) {
-        rc = wolfSPDM_BuildSignedHash(ctx->spdmVersion,
-            "responder-key_exchange_rsp signing", 34,
-            th1SigHash, signMsgHash);
-    }
-    if (rc == WOLFSPDM_SUCCESS) {
-        rc = wolfSPDM_VerifySignature(ctx, signMsgHash, WOLFSPDM_HASH_SIZE,
-            signature, WOLFSPDM_ECC_SIG_SIZE);
+        rc = wolfSPDM_VerifyRspSig(ctx, "responder-key_exchange_rsp signing",
+            34, th1SigHash, signature, sigSz);
         if (rc != WOLFSPDM_SUCCESS)
             wolfSPDM_DebugPrint(ctx, "KEY_EXCHANGE_RSP signature INVALID\n");
     }
     if (rc == WOLFSPDM_SUCCESS) {
-        rc = wolfSPDM_TranscriptAdd(ctx, signature, WOLFSPDM_ECC_SIG_SIZE);
+        rc = wolfSPDM_TranscriptAdd(ctx, signature, sigSz);
     }
+#ifdef WOLFSPDM_HAVE_MLKEM
+    if (rc == WOLFSPDM_SUCCESS && ctx->flags.ephemeralIsKem) {
+        rc = wolfSPDM_MlKemDecapsulate(ctx, &buf[40], exSz);
+    }
+    else
+#endif
     if (rc == WOLFSPDM_SUCCESS) {
-        rc = wolfSPDM_ComputeSharedSecret(ctx, peerPubKeyX, peerPubKeyY);
+        rc = wolfSPDM_ComputeSharedSecret(ctx, &buf[40],
+            &buf[40 + WOLFSPDM_ECC_KEY_SIZE]);
     }
     if (rc == WOLFSPDM_SUCCESS) {
         rc = wolfSPDM_TranscriptHash(ctx, ctx->th1);
@@ -533,7 +601,6 @@ int wolfSPDM_ParseKeyExchangeRsp(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufS
 
     wc_ForceZero(expectedHmac, sizeof(expectedHmac));
     wc_ForceZero(th1SigHash, sizeof(th1SigHash));
-    wc_ForceZero(signMsgHash, sizeof(signMsgHash));
     return rc;
 }
 

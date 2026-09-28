@@ -56,11 +56,19 @@ typedef enum {
  *   // ... same as above ...
  *   wolfSPDM_Free(ctx);
  *
- * WOLFSPDM_CTX is ~22KB. Use static global on small-stack systems.
- * SecuredExchange call chain uses ~20KB stack for message buffers. */
+ * WOLFSPDM_CTX is ~17KB (~60KB with ML-DSA). Use static global on
+ * small-stack systems. SecuredExchange call chain uses ~20KB stack for
+ * message buffers. */
 
-/* Compile-time buffer size for static allocation (32KB, runtime-verified) */
-#define WOLFSPDM_CTX_STATIC_SIZE  32768
+/* Compile-time buffer size for static allocation (runtime-verified); ML-DSA
+ * chains and transcripts, and MlKemKey with WOLFSSL_MLKEM_CACHE_A, need more */
+#if defined(WOLFSPDM_HAVE_MLDSA)
+    #define WOLFSPDM_CTX_STATIC_SIZE  73728
+#elif defined(WOLFSPDM_HAVE_MLKEM)
+    #define WOLFSPDM_CTX_STATIC_SIZE  40960
+#else
+    #define WOLFSPDM_CTX_STATIC_SIZE  32768
+#endif
 
 struct WOLFSPDM_CTX;
 typedef struct WOLFSPDM_CTX WOLFSPDM_CTX;
@@ -114,6 +122,10 @@ WOLFSPDM_API int wolfSPDM_SetRequesterKeyPair(WOLFSPDM_CTX* ctx,
 #endif
 /* Cap the negotiated version (0x12-0x14, 0 = build default) */
 WOLFSPDM_API int wolfSPDM_SetMaxVersion(WOLFSPDM_CTX* ctx, byte maxVersion);
+/* ReqSessionID for KEY_EXCHANGE and PSK_EXCHANGE (default 0x0001); rejects
+ * 0x0000, 0xFFFF and low bytes 0x10-0x1F */
+WOLFSPDM_API int wolfSPDM_SetRequesterSessionId(WOLFSPDM_CTX* ctx,
+    word16 reqSessionId);
 
 #ifndef WOLFSPDM_NO_CERT
 /* Standard (certificate) mode, used by Connect when no vendor mode is set.
@@ -122,6 +134,12 @@ WOLFSPDM_API int wolfSPDM_SetMaxVersion(WOLFSPDM_CTX* ctx, byte maxVersion);
 WOLFSPDM_API int wolfSPDM_SetTrustedCAs(WOLFSPDM_CTX* ctx,
     const byte* derCerts, word32 derCertsSz);
 WOLFSPDM_API int wolfSPDM_AllowUntrustedCerts(WOLFSPDM_CTX* ctx, int allow);
+/* Key exchanges offered in NEGOTIATE_ALGORITHMS: ECDHE P-384 when advDhe is
+ * set, plus the SPDM_KEM_ALGO_ML_KEM_* sets in kemMask at SPDM 1.4. The
+ * default offers ECDHE and every ML-KEM set built in; a KEM-only preference
+ * fails below 1.4 rather than falling back. */
+WOLFSPDM_API int wolfSPDM_SetKeyExchangePref(WOLFSPDM_CTX* ctx, int advDhe,
+    word16 kemMask);
 #endif
 
 /* Session establishment */
@@ -195,6 +213,8 @@ WOLFSPDM_API int wolfSPDM_KeyUpdate(WOLFSPDM_CTX* ctx, int updateAll);
 /* Session info */
 WOLFSPDM_API word32 wolfSPDM_GetSessionId(WOLFSPDM_CTX* ctx);
 WOLFSPDM_API byte wolfSPDM_GetNegotiatedVersion(WOLFSPDM_CTX* ctx);
+/* Older name for wolfSPDM_GetNegotiatedVersion */
+WOLFSPDM_API byte wolfSPDM_GetVersion_Negotiated(WOLFSPDM_CTX* ctx);
 /* Param1 of the last SPDM ERROR from the responder, 0 if none */
 WOLFSPDM_API byte wolfSPDM_GetLastPeerError(WOLFSPDM_CTX* ctx);
 #ifdef WOLFSPDM_TCG
