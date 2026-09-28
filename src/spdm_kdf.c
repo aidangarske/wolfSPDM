@@ -25,7 +25,7 @@
 
 #include "spdm_internal.h"
 
-/* SPDM key derivation (DSP0277): HKDF with 
+/* SPDM key derivation (DSP0277): HKDF with
  * info = Length(2,LE) || "spdm1.2 " || Label || Context. */
 
 int wolfSPDM_HkdfExpandLabel(byte spdmVersion, const byte* secret, word32 secretSz,

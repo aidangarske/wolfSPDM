@@ -168,8 +168,10 @@ int wolfSPDM_RespSetPSK(WOLFSPDM_RESP_CTX* ctx,
     if (rc != WOLFSPDM_SUCCESS) {
         return rc;
     }
+    wc_ForceZero(ctx->pskStore, sizeof(ctx->pskStore));
     XMEMCPY(ctx->pskStore, psk, pskSz);
     ctx->pskStoreSz = pskSz;
+    XMEMSET(ctx->pskHintStore, 0, sizeof(ctx->pskHintStore));
     if (hint != NULL && hintSz > 0 && hintSz <= sizeof(ctx->pskHintStore)) {
         XMEMCPY(ctx->pskHintStore, hint, hintSz);
         ctx->pskHintStoreSz = hintSz;

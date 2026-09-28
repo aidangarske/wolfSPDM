@@ -117,4 +117,3 @@ int wolfSPDM_Nuvoton_SetOnlyMode(
 }
 
 #endif /* WOLFSPDM_NUVOTON */
-

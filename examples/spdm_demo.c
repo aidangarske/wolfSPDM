@@ -509,7 +509,8 @@ static int do_app_data(WOLFSPDM_CTX* ctx)
         return rc;
     }
     /* MCTP type, PLDM header (3), completion code, TID */
-    if (rspSz != 6 || rsp[0] != getTid[0] || rsp[2] != getTid[2] ||
+    if (rspSz != 6 || rsp[0] != getTid[0] || rsp[1] != 0x00 ||
+            rsp[2] != getTid[2] ||
             rsp[3] != getTid[3] || rsp[4] != 0x00) {
         fprintf(stderr, "App data: unexpected PLDM GetTID response\n");
         return WOLFSPDM_E_FRAMING;

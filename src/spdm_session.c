@@ -222,6 +222,46 @@ int wolfSPDM_Heartbeat(WOLFSPDM_CTX* ctx)
 #endif /* !WOLFSPDM_NO_HEARTBEAT */
 
 #ifndef WOLFSPDM_NO_KEY_UPDATE
+static void wolfSPDM_KeySnap(byte* snap, byte* key, word32 sz, int save)
+{
+    if (save) {
+        XMEMCPY(snap, key, sz);
+    }
+    else {
+        XMEMCPY(key, snap, sz);
+    }
+}
+
+/* Copy the traffic keys, app secrets and sequence numbers out (save) or
+ * back in */
+static void wolfSPDM_SaveTrafficKeys(WOLFSPDM_CTX* ctx, byte* snap,
+    word64* reqSeq, word64* rspSeq, int save)
+{
+    word32 off = 0;
+
+    wolfSPDM_KeySnap(snap + off, ctx->reqDataKey, WOLFSPDM_AEAD_KEY_SIZE,
+        save);
+    off += WOLFSPDM_AEAD_KEY_SIZE;
+    wolfSPDM_KeySnap(snap + off, ctx->rspDataKey, WOLFSPDM_AEAD_KEY_SIZE,
+        save);
+    off += WOLFSPDM_AEAD_KEY_SIZE;
+    wolfSPDM_KeySnap(snap + off, ctx->reqDataIv, WOLFSPDM_AEAD_IV_SIZE, save);
+    off += WOLFSPDM_AEAD_IV_SIZE;
+    wolfSPDM_KeySnap(snap + off, ctx->rspDataIv, WOLFSPDM_AEAD_IV_SIZE, save);
+    off += WOLFSPDM_AEAD_IV_SIZE;
+    wolfSPDM_KeySnap(snap + off, ctx->reqAppSecret, WOLFSPDM_HASH_SIZE, save);
+    off += WOLFSPDM_HASH_SIZE;
+    wolfSPDM_KeySnap(snap + off, ctx->rspAppSecret, WOLFSPDM_HASH_SIZE, save);
+    if (save) {
+        *reqSeq = ctx->reqSeqNum;
+        *rspSeq = ctx->rspSeqNum;
+    }
+    else {
+        ctx->reqSeqNum = *reqSeq;
+        ctx->rspSeqNum = *rspSeq;
+    }
+}
+
 int wolfSPDM_KeyUpdate(WOLFSPDM_CTX* ctx, int updateAll)
 {
     byte txBuf[4];
@@ -232,6 +272,10 @@ int wolfSPDM_KeyUpdate(WOLFSPDM_CTX* ctx, int updateAll)
     word32 rxSz = sizeof(rxBuf);
     word32 encSz = sizeof(encBuf);
     word32 rawSz = sizeof(rawBuf);
+    byte saved[2 * WOLFSPDM_AEAD_KEY_SIZE + 2 * WOLFSPDM_AEAD_IV_SIZE +
+               2 * WOLFSPDM_HASH_SIZE];
+    word64 savedReqSeq = 0;
+    word64 savedRspSeq = 0;
     byte op;
     byte tag = 0;
     int rotated = 0;
@@ -255,6 +299,8 @@ int wolfSPDM_KeyUpdate(WOLFSPDM_CTX* ctx, int updateAll)
     if (rc == WOLFSPDM_SUCCESS) {
         rc = wolfSPDM_DecryptInternal(ctx, rawBuf, rawSz, rxBuf, &rxSz);
         if (rc != WOLFSPDM_SUCCESS && updateAll) {
+            wolfSPDM_SaveTrafficKeys(ctx, saved, &savedReqSeq, &savedRspSeq,
+                1);
             rotated = 1;
             rc = wolfSPDM_DeriveUpdatedKeys(ctx, 1);
             ctx->reqSeqNum = 0;
@@ -263,6 +309,13 @@ int wolfSPDM_KeyUpdate(WOLFSPDM_CTX* ctx, int updateAll)
             if (rc == WOLFSPDM_SUCCESS) {
                 rc = wolfSPDM_DecryptInternal(ctx, rawBuf, rawSz, rxBuf,
                     &rxSz);
+            }
+            /* Not sealed under the new keys either: the responder did not
+             * rotate, so neither do we */
+            if (rc != WOLFSPDM_SUCCESS) {
+                wolfSPDM_SaveTrafficKeys(ctx, saved, &savedReqSeq,
+                    &savedRspSeq, 0);
+                rotated = 0;
             }
         }
     }
@@ -291,6 +344,7 @@ int wolfSPDM_KeyUpdate(WOLFSPDM_CTX* ctx, int updateAll)
             SPDM_KEY_UPDATE_OP_VERIFY_NEW_KEY, tag);
     }
 
+    wc_ForceZero(saved, sizeof(saved));
     return rc;
 }
 #endif /* !WOLFSPDM_NO_KEY_UPDATE */

@@ -1043,7 +1043,7 @@ static int test_tcg_underflow(void)
     txBuf[3] = 0x00;
 
     rc = wolfSPDM_SendReceive(ctx, txBuf, 4, rxBuf, &rxSz);
-    ASSERT_EQ(rc, WOLFSPDM_E_BUFFER_SMALL, 
+    ASSERT_EQ(rc, WOLFSPDM_E_BUFFER_SMALL,
         "msgSize < 16 must return BUFFER_SMALL");
 
     TEST_CTX_FREE();
@@ -1110,6 +1110,12 @@ static int test_nations_psk_set(void)
     rc = wolfSPDM_SetPSK(ctx, psk, sizeof(psk), hint, sizeof(hint) - 1);
     ASSERT_SUCCESS(rc);
     ASSERT_EQ(ctx->pskHintSz, sizeof(hint) - 1, "hintSz mismatch");
+
+    /* A shorter replacement leaves nothing of the longer PSK behind */
+    rc = wolfSPDM_SetPSK(ctx, psk, 16, NULL, 0);
+    ASSERT_SUCCESS(rc);
+    ASSERT_EQ(ctx->psk[16], 0, "old PSK tail wiped");
+    ASSERT_EQ(ctx->psk[sizeof(psk) - 1], 0, "old PSK tail wiped");
 
     TEST_CTX_FREE();
     TEST_PASS();
@@ -2485,6 +2491,15 @@ static int test_build_finish_format(void)
     ASSERT_EQ(buf[1], 0xE5, "wrong opcode (FINISH)");
     ASSERT_EQ(buf[2], 0, "sigIncluded should be 0");
     ASSERT_EQ(bufSz, 52, "expected 4 header + 48 HMAC");
+
+#ifdef WOLFSPDM_MUTUAL_AUTH
+    /* Mutual auth requested but no requester key: no unsigned FINISH */
+    ctx->mutAuthRequested = 0x01;
+    ctx->flags.hasReqKeyPair = 0;
+    bufSz = sizeof(buf);
+    ASSERT_EQ(wolfSPDM_BuildFinish(ctx, buf, &bufSz), WOLFSPDM_E_BAD_STATE,
+        "mutual auth without a requester key");
+#endif
 
     TEST_CTX_FREE();
     TEST_PASS();
@@ -4311,6 +4326,7 @@ static int test_derive_updated_keys(void)
 /* Loopback responder: a mirrored context that answers requests over MCTP */
 static WOLFSPDM_CTX g_peer;
 static int g_peerRejects;
+static int g_peerGarble;     /* corrupt the next secured response */
 
 #ifndef WOLFSPDM_NO_KEY_UPDATE
 static void test_swap(byte* a, byte* b, word32 sz)
@@ -4789,7 +4805,12 @@ static int test_peer_io_cb(WOLFSPDM_CTX* ctx, const byte* txBuf, word32 txSz,
         *rxSz = rspSz;
         return 0;
     }
-    return wolfSPDM_EncryptInternal(p, rsp, rspSz, rxBuf, rxSz);
+    rc = wolfSPDM_EncryptInternal(p, rsp, rspSz, rxBuf, rxSz);
+    if (rc == 0 && g_peerGarble) {
+        g_peerGarble = 0;
+        rxBuf[*rxSz - 1] ^= 0x01;
+    }
+    return rc;
 }
 
 static void test_session_loopback(WOLFSPDM_CTX* ctx)
@@ -4897,6 +4918,19 @@ static int test_key_update_loopback(void)
         "Rejected update should keep the response key");
     g_peerRejects = 0;
     ASSERT_SUCCESS(wolfSPDM_KeyUpdate(ctx, 1));
+
+    /* An ACK that authenticates under neither key set rotates nothing */
+    XMEMCPY(reqKey, ctx->reqDataKey, sizeof(reqKey));
+    XMEMCPY(rspKey, ctx->rspDataKey, sizeof(rspKey));
+    reqSeq = ctx->reqSeqNum;
+    g_peerGarble = 1;
+    TEST_ASSERT(wolfSPDM_KeyUpdate(ctx, 1) != WOLFSPDM_SUCCESS,
+        "Corrupt UpdateAllKeys ACK should fail");
+    ASSERT_EQ(memcmp(reqKey, ctx->reqDataKey, sizeof(reqKey)), 0,
+        "Corrupt ACK keeps the request key");
+    ASSERT_EQ(memcmp(rspKey, ctx->rspDataKey, sizeof(rspKey)), 0,
+        "Corrupt ACK keeps the response key");
+    ASSERT_EQ(ctx->reqSeqNum, reqSeq + 1, "Sequence kept past the request");
 
 #ifndef WOLFSPDM_NO_CERT
     ctx->rspCaps = 0;

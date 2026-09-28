@@ -48,10 +48,13 @@ int wolfSPDM_SetPSK(WOLFSPDM_CTX* ctx,
         return WOLFSPDM_E_INVALID_ARG;
     }
 
+    /* No tail of a longer earlier PSK survives */
+    wc_ForceZero(ctx->psk, sizeof(ctx->psk));
     XMEMCPY(ctx->psk, psk, pskSz);
     ctx->pskSz = pskSz;
 
     if (hint != NULL && hintSz > 0) {
+        XMEMSET(ctx->pskHint, 0, sizeof(ctx->pskHint));
         XMEMCPY(ctx->pskHint, hint, hintSz);
         ctx->pskHintSz = hintSz;
     } else {
@@ -427,4 +430,3 @@ int wolfSPDM_ConnectPsk(WOLFSPDM_CTX* ctx)
 }
 
 #endif /* WOLFSPDM_PSK */
-

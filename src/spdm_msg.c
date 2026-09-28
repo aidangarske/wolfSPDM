@@ -316,7 +316,12 @@ int wolfSPDM_BuildFinish(WOLFSPDM_CTX* ctx, byte* buf, word32* bufSz)
 #ifdef WOLFSPDM_MUTUAL_AUTH
     /* Mutual auth is enabled when the responder requested it (MutAuthRequested
      * bit 0) AND we have a requester key pair to sign with */
-    if ((ctx->mutAuthRequested & 0x01) && ctx->flags.hasReqKeyPair) {
+    if ((ctx->mutAuthRequested & 0x01) && !ctx->flags.hasReqKeyPair) {
+        wolfSPDM_DebugPrint(ctx, "FINISH: mutual auth requested, no "
+            "requester key\n");
+        return WOLFSPDM_E_BAD_STATE;
+    }
+    if (ctx->mutAuthRequested & 0x01) {
         mutualAuth = 1;
         wolfSPDM_DebugPrint(ctx, "FINISH: Mutual auth ENABLED "
             "(MutAuth=0x%02x ReqSlot=0x%02x)\n",

@@ -33,7 +33,7 @@
 #ifndef WOLFSPDM_TCG_H
 #define WOLFSPDM_TCG_H
 
-#include <wolfspdm/spdm_types.h>
+#include <wolfspdm/spdm.h>
 
 /* Transport framing constants - needed by any SPDM-over-TPM build,
  * not just the TCG cert handshake. */

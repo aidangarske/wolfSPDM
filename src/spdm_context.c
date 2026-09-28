@@ -440,9 +440,6 @@ void wolfSPDM_ResetSession(WOLFSPDM_CTX* ctx)
 int wolfSPDM_Disconnect(WOLFSPDM_CTX* ctx)
 {
     int rc = WOLFSPDM_E_NOT_CONNECTED;
-    byte txBuf[8];
-    byte rxBuf[16];   /* END_SESSION_ACK: 4 bytes */
-    word32 txSz, rxSz;
 
     if (ctx == NULL) {
         return WOLFSPDM_E_INVALID_ARG;
@@ -450,7 +447,11 @@ int wolfSPDM_Disconnect(WOLFSPDM_CTX* ctx)
 
     /* END_SESSION only for a live session; the wipe always runs */
     if (ctx->state == WOLFSPDM_STATE_CONNECTED) {
-        txSz = sizeof(txBuf);
+        byte txBuf[8];
+        byte rxBuf[16];   /* END_SESSION_ACK: 4 bytes */
+        word32 txSz = sizeof(txBuf);
+        word32 rxSz;
+
         rc = wolfSPDM_BuildEndSession(ctx, txBuf, &txSz);
         if (rc == WOLFSPDM_SUCCESS) {
             rxSz = sizeof(rxBuf);
@@ -676,4 +677,3 @@ const char* wolfSPDM_GetErrorString(int error)
         default:                          return "Unknown error";
     }
 }
-

@@ -734,4 +734,3 @@ int wolfSPDM_ConnectTCG(WOLFSPDM_CTX* ctx)
 }
 
 #endif /* WOLFSPDM_TCG */
-

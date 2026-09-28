@@ -167,6 +167,14 @@ extern "C" {
 #define WOLFSPDM_PUBKEY_BUF_SZ     256  /* Public key buffer */
 #endif
 
+/* Spellings used by earlier wolfSPDM releases */
+#if defined(NO_WOLFSPDM_MEAS) && !defined(WOLFSPDM_NO_MEAS)
+    #define WOLFSPDM_NO_MEAS
+#endif
+#if defined(NO_WOLFSPDM_CHALLENGE) && !defined(WOLFSPDM_NO_CHALLENGE)
+    #define WOLFSPDM_NO_CHALLENGE
+#endif
+
 /* ----- TPM Build Profile ----- */
 
 /* Built inside wolfTPM: the TPM only speaks the TCG binding */

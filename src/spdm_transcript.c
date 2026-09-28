@@ -100,4 +100,3 @@ int wolfSPDM_TranscriptHash(WOLFSPDM_CTX* ctx, byte* hash)
     return wolfSPDM_Sha384Hash(hash, ctx->transcript, ctx->transcriptLen,
         NULL, 0, NULL, 0);
 }
-

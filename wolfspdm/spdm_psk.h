@@ -34,7 +34,7 @@
 #ifndef WOLFSPDM_PSK_H
 #define WOLFSPDM_PSK_H
 
-#include <wolfspdm/spdm_types.h>
+#include <wolfspdm/spdm.h>
 
 #ifdef WOLFSPDM_PSK
 

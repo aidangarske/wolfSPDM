@@ -145,11 +145,14 @@ if test "x$enable_mldsa" != "xno" && test "x$enable_cert" = "xyes"; then
         #include <wolfssl/wolfcrypt/asn.h>
         #include <wolfssl/wolfcrypt/wc_mldsa.h>
     ]], [[
-        MlDsaKey k; int res = 0; word32 oid = ML_DSA_44k + CTC_ML_DSA_87;
+        MlDsaKey k; int res = 0; int keyOid = ML_DSA_44k;
+        int sigOid = CTC_ML_DSA_87;
+        (void)wc_MlDsaKey_Init(&k, 0, INVALID_DEVID);
         (void)wc_MlDsaKey_SetParams(&k, WC_ML_DSA_65);
         (void)wc_MlDsaKey_ImportPubRaw(&k, 0, 0);
         (void)wc_MlDsaKey_VerifyCtx(&k, 0, 0, 0, 0, 0, 0, &res);
-        (void)oid;
+        wc_MlDsaKey_Free(&k);
+        (void)keyOid; (void)sigOid;
     ]])],
     [have_mldsa_api=yes],
     [have_mldsa_api=no])

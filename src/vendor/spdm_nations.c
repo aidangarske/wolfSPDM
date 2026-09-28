@@ -179,4 +179,3 @@ int wolfSPDM_Nations_PskClearWithVCA(WOLFSPDM_CTX* ctx,
  * wolfSPDM_ConnectNationsPsk is a backward-compat alias in spdm_psk.h. */
 
 #endif /* WOLFSPDM_NATIONS */
-
