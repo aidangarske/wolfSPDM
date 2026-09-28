@@ -3809,6 +3809,20 @@ static int test_mlkem_key_exchange(void)
     ASSERT_EQ(wolfSPDM_MlKemDecapsulate(ctx, ct, ctSz), WOLFSPDM_E_BAD_STATE,
         "no decapsulation with an ECDHE key");
 
+    /* And back: an ML-KEM exchange replaces the ECDHE key */
+    ctx->kemAlgSel = SPDM_KEM_ALGO_ML_KEM_768;
+    reqSz = sizeof(req);
+    ASSERT_SUCCESS(wolfSPDM_BuildKeyExchange(ctx, req, &reqSz));
+    ASSERT_EQ(ctx->flags.ephemeralIsKem, 1, "ML-KEM key live again");
+
+    /* Key generation arguments */
+    ASSERT_EQ(wolfSPDM_GenerateMlKemKey(NULL, req, &reqSz),
+        WOLFSPDM_E_INVALID_ARG, "NULL ctx");
+    ctx->kemAlgSel = 0x0008;
+    reqSz = sizeof(req);
+    ASSERT_EQ(wolfSPDM_GenerateMlKemKey(ctx, req, &reqSz),
+        WOLFSPDM_E_ALGO_MISMATCH, "unknown ML-KEM set");
+
     /* A request buffer too small for ek */
     ctx->kemAlgSel = SPDM_KEM_ALGO_ML_KEM_768;
     reqSz = 40 + 22 + 512;
@@ -3840,6 +3854,226 @@ static int test_clear_exchange_dts(void)
     ctx->rspCaps = 0;
     ASSERT_EQ(wolfSPDM_ClearExchange(ctx, req, sizeof(req), rsp, &rspSz),
         WOLFSPDM_E_BUFFER_SMALL, "request over the responder DTS");
+
+    TEST_CTX_FREE();
+    TEST_PASS();
+}
+#endif
+
+#ifndef WOLFSPDM_NO_MCTP
+/* Secured record edges: IV layout, sequence limits, session binding and an
+ * empty payload */
+static int test_secured_record_edges(void)
+{
+    byte base[WOLFSPDM_AEAD_IV_SIZE];
+    byte iv[WOLFSPDM_AEAD_IV_SIZE];
+    byte plain[1] = { 0 };
+    byte enc[64];
+    byte dec[16];
+    word32 encSz = sizeof(enc);
+    word32 decSz = sizeof(dec);
+    word32 i;
+    TEST_CTX_SETUP_V12();
+
+    printf("test_secured_record_edges...\n");
+
+    /* DSP0277: the little-endian sequence number XORs the leading IV bytes */
+    XMEMSET(base, 0, sizeof(base));
+    wolfSPDM_BuildIV(iv, base, 0x0102030405060708ULL);
+    for (i = 0; i < 8; i++) {
+        ASSERT_EQ(iv[i], (byte)(8 - i), "sequence byte position");
+    }
+    for (i = 8; i < WOLFSPDM_AEAD_IV_SIZE; i++) {
+        ASSERT_EQ(iv[i], 0, "trailing IV bytes untouched");
+    }
+
+    ctx->sessionId = 0x00020001;
+    XMEMSET(ctx->reqDataKey, 0x11, WOLFSPDM_AEAD_KEY_SIZE);
+    XMEMSET(ctx->rspDataKey, 0x11, WOLFSPDM_AEAD_KEY_SIZE);
+    XMEMSET(ctx->reqDataIv, 0x22, WOLFSPDM_AEAD_IV_SIZE);
+    XMEMSET(ctx->rspDataIv, 0x22, WOLFSPDM_AEAD_IV_SIZE);
+
+    /* An empty message still round trips */
+    ASSERT_SUCCESS(wolfSPDM_EncryptInternal(ctx, plain, 0, enc, &encSz));
+    ASSERT_SUCCESS(wolfSPDM_DecryptInternal(ctx, enc, encSz, dec, &decSz));
+    ASSERT_EQ(decSz, 0, "empty message");
+
+    /* A record for another session is refused */
+    encSz = sizeof(enc);
+    ASSERT_SUCCESS(wolfSPDM_EncryptInternal(ctx, plain, 1, enc, &encSz));
+    ctx->sessionId = 0x00030001;
+    decSz = sizeof(dec);
+    ASSERT_EQ(wolfSPDM_DecryptInternal(ctx, enc, encSz, dec, &decSz),
+        WOLFSPDM_E_SESSION_INVALID, "session ID mismatch");
+    ctx->sessionId = 0x00020001;
+
+    /* MCTP carries 16 sequence bits and must not wrap */
+    ctx->reqSeqNum = 0x10000;
+    encSz = sizeof(enc);
+    ASSERT_EQ(wolfSPDM_EncryptInternal(ctx, plain, 1, enc, &encSz),
+        WOLFSPDM_E_BAD_STATE, "request sequence past 16 bits");
+    ctx->reqSeqNum = 0;
+    encSz = sizeof(enc);
+    ASSERT_SUCCESS(wolfSPDM_EncryptInternal(ctx, plain, 1, enc, &encSz));
+    ctx->rspSeqNum = 0x10000;
+    decSz = sizeof(dec);
+    ASSERT_EQ(wolfSPDM_DecryptInternal(ctx, enc, encSz, dec, &decSz),
+        WOLFSPDM_E_SEQUENCE, "response sequence past 16 bits");
+
+    TEST_CTX_FREE();
+    TEST_PASS();
+}
+#endif /* !WOLFSPDM_NO_MCTP */
+
+static int test_version_and_finish_14(void)
+{
+    byte rsp[16];
+    byte fin[WOLFSPDM_FINISH_BUF_SZ];
+    word32 finSz = sizeof(fin);
+    TEST_CTX_SETUP();
+
+    printf("test_version_and_finish_14...\n");
+
+    /* SetMaxVersion takes 1.2 to 1.4, or 0 for the build default */
+    ASSERT_EQ(wolfSPDM_SetMaxVersion(NULL, SPDM_VERSION_12),
+        WOLFSPDM_E_INVALID_ARG, "NULL ctx");
+    ASSERT_EQ(wolfSPDM_SetMaxVersion(ctx, 0x11), WOLFSPDM_E_INVALID_ARG,
+        "below 1.2");
+    ASSERT_EQ(wolfSPDM_SetMaxVersion(ctx, 0x15), WOLFSPDM_E_INVALID_ARG,
+        "above 1.4");
+    ASSERT_SUCCESS(wolfSPDM_SetMaxVersion(ctx, SPDM_VERSION_13));
+
+    /* VERSION: the highest common entry, capped by SetMaxVersion */
+    XMEMSET(rsp, 0, sizeof(rsp));
+    rsp[0] = SPDM_VERSION_10;
+    rsp[1] = SPDM_VERSION;
+    rsp[5] = 3;
+    rsp[7] = SPDM_VERSION_12;
+    rsp[9] = SPDM_VERSION_13;
+    rsp[11] = SPDM_VERSION_14;
+    ASSERT_SUCCESS(wolfSPDM_ParseVersion(ctx, rsp, 12));
+    ASSERT_EQ(ctx->spdmVersion, SPDM_VERSION_13, "capped at 1.3");
+    ASSERT_SUCCESS(wolfSPDM_SetMaxVersion(ctx, 0));
+    ASSERT_SUCCESS(wolfSPDM_ParseVersion(ctx, rsp, 12));
+    ASSERT_EQ(ctx->spdmVersion, SPDM_VERSION_14, "highest common version");
+    ASSERT_EQ(wolfSPDM_ParseVersion(ctx, rsp, 11), WOLFSPDM_E_VERSION_MISMATCH,
+        "truncated entry list");
+    rsp[7] = 0x10;
+    rsp[9] = 0x11;
+    rsp[11] = 0x11;
+    ASSERT_EQ(wolfSPDM_ParseVersion(ctx, rsp, 12), WOLFSPDM_E_VERSION_MISMATCH,
+        "nothing at 1.2 or above");
+    rsp[5] = 0;
+    ASSERT_EQ(wolfSPDM_ParseVersion(ctx, rsp, 6), WOLFSPDM_E_VERSION_MISMATCH,
+        "no entries");
+
+    /* SPDM 1.4 FINISH and FINISH_RSP carry OpaqueLength */
+    ctx->spdmVersion = SPDM_VERSION_14;
+    ASSERT_SUCCESS(wolfSPDM_BuildFinish(ctx, fin, &finSz));
+    ASSERT_EQ(finSz, (word32)(4 + 2 + WOLFSPDM_HASH_SIZE), "1.4 FINISH size");
+    ASSERT_EQ(fin[0], SPDM_VERSION_14, "FINISH version");
+    ASSERT_EQ(SPDM_Get16LE(&fin[4]), 0, "empty OpaqueData");
+    XMEMSET(rsp, 0, sizeof(rsp));
+    rsp[0] = SPDM_VERSION_14;
+    rsp[1] = SPDM_FINISH_RSP;
+    ASSERT_EQ(wolfSPDM_ParseFinishRsp(ctx, rsp, 4), WOLFSPDM_E_BUFFER_SMALL,
+        "OpaqueLength missing");
+    SPDM_Set16LE(&rsp[4], 4);
+    ASSERT_EQ(wolfSPDM_ParseFinishRsp(ctx, rsp, 8), WOLFSPDM_E_BUFFER_SMALL,
+        "OpaqueData truncated");
+    ASSERT_SUCCESS(wolfSPDM_ParseFinishRsp(ctx, rsp, 10));
+
+    TEST_CTX_FREE();
+    TEST_PASS();
+}
+
+#ifndef WOLFSPDM_NO_CERT
+static int test_standard_request_fields(void)
+{
+    byte buf[WOLFSPDM_KEY_EX_TX_SZ];
+    byte rsp[WOLFSPDM_KEY_EX_RX_SZ];
+    byte dig[4 + WOLFSPDM_HASH_SIZE];
+    word32 bufSz = sizeof(buf);
+    TEST_CTX_SETUP_V12();
+
+    printf("test_standard_request_fields...\n");
+
+    /* KEY_EXCHANGE names the slot whose chain was fetched */
+    ctx->currentSlotId = 2;
+    ASSERT_SUCCESS(wolfSPDM_BuildKeyExchange(ctx, buf, &bufSz));
+    ASSERT_EQ(buf[3], 2, "KEY_EXCHANGE SlotID");
+#ifndef WOLFSPDM_NO_MEAS
+    ctx->currentSlotId = 3;
+    bufSz = sizeof(buf);
+    ASSERT_SUCCESS(wolfSPDM_BuildGetMeasurements(ctx, buf, &bufSz,
+        SPDM_MEAS_OPERATION_ALL, 1));
+    ASSERT_EQ(buf[4 + 32], 3, "GET_MEASUREMENTS SlotIDParam");
+#endif
+
+    /* No responder key: the signature cannot be checked */
+    XMEMSET(rsp, 0, sizeof(rsp));
+    rsp[0] = SPDM_VERSION_12;
+    rsp[1] = SPDM_KEY_EXCHANGE_RSP;
+    ctx->flags.hasRspPubKey = 0;
+    ASSERT_EQ(wolfSPDM_ParseKeyExchangeRsp(ctx, rsp, 138 +
+        WOLFSPDM_ECC_SIG_SIZE + WOLFSPDM_HASH_SIZE), WOLFSPDM_E_BAD_STATE,
+        "KEY_EXCHANGE_RSP without a responder key");
+
+    /* DIGESTS: the slot mask, and an ERROR recorded */
+    XMEMSET(dig, 0, sizeof(dig));
+    dig[0] = SPDM_VERSION_12;
+    dig[1] = SPDM_DIGESTS;
+    dig[3] = 0x05;
+    ASSERT_SUCCESS(wolfSPDM_ParseDigests(ctx, dig, sizeof(dig)));
+    ASSERT_EQ(ctx->slotMask, 0x05, "slot mask");
+    dig[1] = SPDM_ERROR;
+    dig[2] = SPDM_ERROR_UNSUPPORTED_REQUEST;
+    ASSERT_EQ(wolfSPDM_ParseDigests(ctx, dig, sizeof(dig)),
+        WOLFSPDM_E_PEER_ERROR, "DIGESTS error");
+    ASSERT_EQ(wolfSPDM_GetLastPeerError(ctx), SPDM_ERROR_UNSUPPORTED_REQUEST,
+        "peer error recorded");
+
+    /* Trust anchor arguments */
+    ASSERT_EQ(wolfSPDM_SetTrustedCAs(NULL, test_ca_cert_der,
+        sizeof(test_ca_cert_der)), WOLFSPDM_E_INVALID_ARG, "NULL ctx");
+    ASSERT_EQ(wolfSPDM_SetTrustedCAs(ctx, NULL, 16), WOLFSPDM_E_INVALID_ARG,
+        "NULL certificate");
+    ASSERT_EQ(wolfSPDM_SetTrustedCAs(ctx, test_ca_cert_der, 0),
+        WOLFSPDM_E_INVALID_ARG, "empty certificate");
+    ASSERT_EQ(wolfSPDM_SetTrustedCAs(ctx, test_ca_cert_der,
+        WOLFSPDM_MAX_TRUSTED_CA + 1), WOLFSPDM_E_BUFFER_SMALL,
+        "certificate too large");
+
+
+    TEST_CTX_FREE();
+    TEST_PASS();
+}
+#endif /* !WOLFSPDM_NO_CERT */
+
+#if defined(WOLFSPDM_HAVE_MLDSA) && !defined(WOLFSPDM_NO_CHALLENGE)
+/* CHALLENGE_AUTH bounds use the negotiated SigLen */
+static int test_challenge_auth_mldsa_sigsize(void)
+{
+    byte req[4 + 32];
+    byte auth[4 + WOLFSPDM_HASH_SIZE + 32 + 2 + WOLFSPDM_ECC_SIG_SIZE];
+    word32 sigOff = 0;
+    TEST_CTX_SETUP_V12();
+
+    printf("test_challenge_auth_mldsa_sigsize...\n");
+    XMEMSET(req, 0, sizeof(req));
+    req[0] = SPDM_VERSION_12;
+    req[1] = SPDM_CHALLENGE;
+    XMEMSET(auth, 0, sizeof(auth));
+    auth[0] = SPDM_VERSION_12;
+    auth[1] = SPDM_CHALLENGE_AUTH;
+    XMEMSET(&auth[4], 0xCC, WOLFSPDM_HASH_SIZE);
+    XMEMSET(ctx->certChainHash, 0xCC, WOLFSPDM_HASH_SIZE);
+    ASSERT_SUCCESS(wolfSPDM_ParseChallengeAuth(ctx, req, sizeof(req), auth,
+        sizeof(auth), &sigOff));
+    ctx->pqcAsymSel = WOLFSPDM_MLDSA_SETS & (~WOLFSPDM_MLDSA_SETS + 1);
+    ASSERT_EQ(wolfSPDM_ParseChallengeAuth(ctx, req, sizeof(req), auth,
+        sizeof(auth), &sigOff), WOLFSPDM_E_CHALLENGE,
+        "ML-DSA SigLen bounds CHALLENGE_AUTH");
 
     TEST_CTX_FREE();
     TEST_PASS();
@@ -5075,6 +5309,16 @@ int main(void)
     defined(WOLFSSL_WC_ML_KEM_768)
     test_mlkem_key_exchange();
 #endif
+#ifndef WOLFSPDM_NO_CERT
+    test_standard_request_fields();
+#endif
+#if defined(WOLFSPDM_HAVE_MLDSA) && !defined(WOLFSPDM_NO_CHALLENGE)
+    test_challenge_auth_mldsa_sigsize();
+#endif
+#ifndef WOLFSPDM_NO_MCTP
+    test_secured_record_edges();
+#endif
+    test_version_and_finish_14();
 #ifdef WOLFSPDM_TCG
     test_encrypt_decrypt_roundtrip_tcg();
 #endif
