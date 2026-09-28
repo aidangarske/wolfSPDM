@@ -5,7 +5,7 @@ name: Codespell test
 # START OF COMMON SECTION
 on:
   push:
-    branches: [ 'main', 'wolftpm-core', 'release/**' ]
+    branches: [ 'main', 'release/**' ]
   pull_request:
     branches: [ '*' ]
   repository_dispatch:
