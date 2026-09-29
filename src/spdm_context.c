@@ -683,6 +683,8 @@ const char* wolfSPDM_GetErrorString(int error)
         case WOLFSPDM_E_MEASUREMENT:      return "Measurement response invalid";
         case WOLFSPDM_E_CHALLENGE:        return "Challenge response invalid";
         case WOLFSPDM_E_CHUNK:            return "Chunked transfer failed";
+        case WOLFSPDM_E_MEAS_NOT_VERIFIED:
+            return "Measurements not verified (legacy, never returned)";
         default:                          return "Unknown error";
     }
 }
