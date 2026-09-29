@@ -379,7 +379,8 @@ static int test_error_strings(void)
     TEST_ASSERT(strcmp(wolfSPDM_GetErrorString(WOLFSPDM_E_CRYPTO_FAIL),
         "Crypto operation failed") == 0, "CRYPTO_FAIL string wrong");
     TEST_ASSERT(strcmp(wolfSPDM_GetErrorString(WOLFSPDM_E_MEAS_NOT_VERIFIED),
-        "Unknown error") != 0, "legacy MEAS_NOT_VERIFIED string");
+        "Measurements not verified (legacy, never returned)") == 0,
+        "legacy MEAS_NOT_VERIFIED string");
 
     TEST_PASS();
 }
