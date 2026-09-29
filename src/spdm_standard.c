@@ -59,6 +59,9 @@ int wolfSPDM_ParseCapabilities(WOLFSPDM_CTX* ctx, const byte* buf,
 {
     const word32 required = SPDM_CAP_CERT_CAP | SPDM_CAP_ENCRYPT_CAP |
         SPDM_CAP_MAC_CAP | SPDM_CAP_KEY_EX_CAP;
+    word32 caps;
+    word32 dts;
+    word32 maxMsg;
 
     SPDM_CHECK_PARSE_ARGS(ctx, buf, bufSz, 4);
     SPDM_CHECK_RESPONSE(ctx, buf, bufSz, SPDM_CAPABILITIES,
@@ -68,20 +71,20 @@ int wolfSPDM_ParseCapabilities(WOLFSPDM_CTX* ctx, const byte* buf,
         return WOLFSPDM_E_CAPS_MISMATCH;
     }
 
-    ctx->rspCaps = SPDM_Get32LE(&buf[8]);
-    ctx->dataTransferSize = SPDM_Get32LE(&buf[12]);
-    ctx->maxSpdmMsgSize = SPDM_Get32LE(&buf[16]);
+    caps = SPDM_Get32LE(&buf[8]);
+    dts = SPDM_Get32LE(&buf[12]);
+    maxMsg = SPDM_Get32LE(&buf[16]);
 
     /* DSP0274: MinDataTransferSize is 42 */
-    if ((ctx->rspCaps & required) != required ||
-            ctx->dataTransferSize < 42 ||
-            ctx->maxSpdmMsgSize < ctx->dataTransferSize) {
+    if ((caps & required) != required || dts < 42 || maxMsg < dts) {
         wolfSPDM_DebugPrint(ctx, "CAPABILITIES rejected: caps=0x%08x "
-            "dts=%u max=%u\n", ctx->rspCaps, ctx->dataTransferSize,
-            ctx->maxSpdmMsgSize);
+            "dts=%u max=%u\n", caps, dts, maxMsg);
         return WOLFSPDM_E_CAPS_MISMATCH;
     }
 
+    ctx->rspCaps = caps;
+    ctx->dataTransferSize = dts;
+    ctx->maxSpdmMsgSize = maxMsg;
     return WOLFSPDM_SUCCESS;
 }
 

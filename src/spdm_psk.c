@@ -147,10 +147,6 @@ int wolfSPDM_ParsePskExchangeRsp(WOLFSPDM_CTX* ctx, const byte* buf,
     /* Per SPDM 1.3 DSP0274 Table 65:
      * [4-5] RspSessionID, [6] MutAuthRequested, [7] ReqSlotIDParam,
      * [8-9] RspContextLength, [10-11] OpaqueDataLength */
-    ctx->rspSessionId = SPDM_Get16LE(&buf[4]);
-    ctx->sessionId = (word32)ctx->reqSessionId |
-                     ((word32)ctx->rspSessionId << 16);
-
     rspContextLen = SPDM_Get16LE(&buf[8]);
     opaqueLen = SPDM_Get16LE(&buf[10]);
 
@@ -181,16 +177,12 @@ int wolfSPDM_ParsePskExchangeRsp(WOLFSPDM_CTX* ctx, const byte* buf,
             expectedHmac);
     }
     if (rc == WOLFSPDM_SUCCESS) {
-        word32 i;
-        volatile int diff = 0;
         wolfSPDM_DebugHex(ctx, "Expected HMAC", expectedHmac,
             WOLFSPDM_HASH_SIZE);
         wolfSPDM_DebugHex(ctx, "Received HMAC", rspVerifyData,
             WOLFSPDM_HASH_SIZE);
-        for (i = 0; i < WOLFSPDM_HASH_SIZE; i++) {
-            diff |= expectedHmac[i] ^ rspVerifyData[i];
-        }
-        if (diff != 0) {
+        if (wolfSPDM_ConstCompare(expectedHmac, rspVerifyData,
+                WOLFSPDM_HASH_SIZE) != 0) {
             wolfSPDM_DebugPrint(ctx, "PSK ResponderVerifyData MISMATCH\n");
             rc = WOLFSPDM_E_BAD_HMAC;
         }
@@ -199,7 +191,11 @@ int wolfSPDM_ParsePskExchangeRsp(WOLFSPDM_CTX* ctx, const byte* buf,
         wolfSPDM_DebugPrint(ctx, "PSK ResponderVerifyData VERIFIED OK\n");
         rc = wolfSPDM_TranscriptAdd(ctx, rspVerifyData, WOLFSPDM_HASH_SIZE);
     }
+    /* The session exists only once ResponderVerifyData checks out */
     if (rc == WOLFSPDM_SUCCESS) {
+        ctx->rspSessionId = SPDM_Get16LE(&buf[4]);
+        ctx->sessionId = (word32)ctx->reqSessionId |
+                         ((word32)ctx->rspSessionId << 16);
         ctx->state = WOLFSPDM_STATE_KEY_EX;
     }
 

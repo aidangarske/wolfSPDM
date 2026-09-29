@@ -1365,7 +1365,6 @@ static int test_key_zeroing(void)
     ASSERT_EQ(memcmp(ctx->th2, zeros, sizeof(ctx->th2)), 0,
         "th2 not zeroed");
 
-    wolfSPDM_Init(ctx);
     TEST_CTX_FREE();
     TEST_PASS();
 }
@@ -1449,6 +1448,18 @@ static int test_finish_no_io(void)
         "NULL ctx should fail");
     TEST_ASSERT(wolfSPDM_Finish(ctx) != WOLFSPDM_SUCCESS,
         "No session should fail");
+    ctx->state = WOLFSPDM_STATE_CONNECTED;
+    ASSERT_EQ(wolfSPDM_Finish(ctx), WOLFSPDM_E_BAD_STATE,
+        "FINISH twice");
+    ctx->state = WOLFSPDM_STATE_ERROR;
+    ASSERT_EQ(wolfSPDM_Finish(ctx), WOLFSPDM_E_BAD_STATE,
+        "FINISH after a failure");
+
+    /* No trusted responder key: nothing is sent */
+    ctx->state = WOLFSPDM_STATE_INIT;
+    wolfSPDM_SetIO(ctx, dummy_io_cb, NULL);
+    ASSERT_EQ(wolfSPDM_KeyExchange(ctx), WOLFSPDM_E_BAD_STATE,
+        "KEY_EXCHANGE without a responder key");
     TEST_CTX_FREE();
     TEST_PASS();
 }
@@ -1498,8 +1509,18 @@ static int test_disconnect_states(void)
     ctx->reqSeqNum = 1;
     XMEMSET(ctx->reqDataKey, 0x11, WOLFSPDM_AEAD_KEY_SIZE);
     XMEMSET(ctx->handshakeSecret, 0x22, WOLFSPDM_HASH_SIZE);
+#ifndef WOLFSPDM_NO_CERT
+    ctx->dataTransferSize = 3;
+#endif
+#ifndef WOLFSPDM_NO_MEAS
+    ctx->measBlockCount = 2;
+#endif
     ASSERT_EQ(wolfSPDM_SecuredExchange(ctx, cmd, sizeof(cmd), rsp, &rspSz),
         WOLFSPDM_E_NOT_CONNECTED, "secured message after a failure");
+    ctx->state = WOLFSPDM_STATE_KEY_EX;
+    ASSERT_EQ(wolfSPDM_SecuredExchange(ctx, cmd, sizeof(cmd), rsp, &rspSz),
+        WOLFSPDM_E_NOT_CONNECTED, "application request before FINISH");
+    ctx->state = WOLFSPDM_STATE_ERROR;
     ASSERT_EQ(wolfSPDM_Disconnect(ctx), WOLFSPDM_E_NOT_CONNECTED,
         "failed handshake");
     ASSERT_EQ(ctx->state, WOLFSPDM_STATE_INIT, "state reset");
@@ -1508,6 +1529,13 @@ static int test_disconnect_states(void)
     ASSERT_EQ(memcmp(ctx->reqDataKey, zero, sizeof(zero)), 0, "keys wiped");
     ASSERT_EQ(memcmp(ctx->handshakeSecret, zero, sizeof(zero)), 0,
         "secrets wiped");
+#ifndef WOLFSPDM_NO_CERT
+    ASSERT_EQ(ctx->dataTransferSize, 0, "negotiated limits dropped");
+#endif
+#ifndef WOLFSPDM_NO_MEAS
+    ASSERT_EQ(wolfSPDM_GetMeasurementCount(ctx), 0,
+        "previous session's measurements dropped");
+#endif
 
     /* A retry starts from sequence number 0 even if it fails early */
     ctx->reqSeqNum = 5;
@@ -1946,17 +1974,21 @@ static int test_parse_psk_exchange_rsp_hmac_check(void)
     ASSERT_EQ(rc, WOLFSPDM_SUCCESS, "valid PSK HMAC should succeed");
     ASSERT_EQ(ctx->state, WOLFSPDM_STATE_KEY_EX,
         "state should advance to KEY_EX on valid PSK parse");
+    ASSERT_EQ(ctx->rspSessionId, 0x1234, "session ID after verify");
 
     /* Negative: flip one byte — must return BAD_HMAC.
      * Parse scrubs ctx->psk after derivation, so re-set it; also reset
      * transcript because the successful parse appended 60 bytes. */
     wolfSPDM_TranscriptReset(ctx);
     ctx->state = WOLFSPDM_STATE_INIT;
+    ctx->sessionId = 0;
+    ctx->rspSessionId = 0;
     ASSERT_SUCCESS(wolfSPDM_SetPSK(ctx, psk, sizeof(psk), NULL, 0));
     pskRsp[12] ^= 0x01;
     rc = wolfSPDM_ParsePskExchangeRsp(ctx, pskRsp, pskRspLen);
     ASSERT_EQ(rc, WOLFSPDM_E_BAD_HMAC,
         "flipped PSK rspVerifyData byte must return BAD_HMAC");
+    ASSERT_EQ(ctx->sessionId, 0, "no session ID from an unverified reply");
 
     TEST_CTX_FREE();
     TEST_PASS();
@@ -3349,6 +3381,8 @@ static int test_parse_capabilities(void)
     SPDM_Set32LE(&rsp[12], 41);
     ASSERT_EQ(wolfSPDM_ParseCapabilities(ctx, rsp, sizeof(rsp)),
         WOLFSPDM_E_CAPS_MISMATCH, "DataTransferSize < 42 must fail");
+    ASSERT_EQ(ctx->dataTransferSize, (word32)1024,
+        "rejected CAPABILITIES leaves the limits alone");
 
     /* Version must echo the negotiated version */
     SPDM_Set32LE(&rsp[12], 1024);
@@ -4050,7 +4084,7 @@ static int test_secured_record_edges(void)
     ctx->reqSeqNum = 0x10000;
     encSz = sizeof(enc);
     ASSERT_EQ(wolfSPDM_EncryptInternal(ctx, plain, 1, enc, &encSz),
-        WOLFSPDM_E_BAD_STATE, "request sequence past 16 bits");
+        WOLFSPDM_E_SEQUENCE, "request sequence past 16 bits");
     ctx->reqSeqNum = 0;
     encSz = sizeof(enc);
     ASSERT_SUCCESS(wolfSPDM_EncryptInternal(ctx, plain, 1, enc, &encSz));
@@ -4121,6 +4155,9 @@ static int test_version_and_finish_14(void)
     ASSERT_EQ(wolfSPDM_ParseFinishRsp(ctx, rsp, 8), WOLFSPDM_E_BUFFER_SMALL,
         "OpaqueData truncated");
     ASSERT_SUCCESS(wolfSPDM_ParseFinishRsp(ctx, rsp, 10));
+    SPDM_Set16LE(&rsp[4], WOLFSPDM_FINISH_OPAQUE_MAX + 1);
+    ASSERT_EQ(wolfSPDM_ParseFinishRsp(ctx, rsp, 10), WOLFSPDM_E_INVALID_ARG,
+        "OpaqueLength over the cap");
 
     TEST_CTX_FREE();
     TEST_PASS();

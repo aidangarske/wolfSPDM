@@ -157,6 +157,9 @@ extern "C" {
 #ifndef WOLFSPDM_FINISH_BUF_SZ
 #define WOLFSPDM_FINISH_BUF_SZ     152  /* FINISH mutual auth (~148 bytes) */
 #endif
+/* SPDM 1.4 FINISH_RSP: header + OpaqueLength + OpaqueData up to this cap */
+#define WOLFSPDM_FINISH_OPAQUE_MAX  256
+#define WOLFSPDM_FINISH_RSP_MAX     (4 + 2 + WOLFSPDM_FINISH_OPAQUE_MAX)
 #ifndef WOLFSPDM_VENDOR_BUF_SZ
 #define WOLFSPDM_VENDOR_BUF_SZ     256  /* Vendor command message/payload */
 #endif
@@ -461,6 +464,16 @@ extern "C" {
 /* Nations build enables PSK by default; can also be set independently */
 #if defined(WOLFSPDM_NATIONS) && !defined(WOLFSPDM_PSK)
     #define WOLFSPDM_PSK
+#endif
+
+/* wolfTPM guards its SPDM wrappers with its own prefix */
+#ifdef WOLFTPM_SPDM
+    #if defined(WOLFSPDM_TCG) && !defined(WOLFTPM_SPDM_TCG)
+        #define WOLFTPM_SPDM_TCG
+    #endif
+    #if defined(WOLFSPDM_PSK) && !defined(WOLFTPM_SPDM_PSK)
+        #define WOLFTPM_SPDM_PSK
+    #endif
 #endif
 
 /* ----- PSK Message Codes (SPDM 1.2+ DSP0274) ----- */

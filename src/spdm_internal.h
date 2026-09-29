@@ -259,6 +259,19 @@ struct WOLFSPDM_CTX {
 };
 
 /* The vendor modes select TCG binding framing and pinned-key identity */
+/* Constant-time compare of secrets: 0 when equal */
+static WC_INLINE int wolfSPDM_ConstCompare(const byte* a, const byte* b,
+    word32 sz)
+{
+    volatile byte diff = 0;
+    word32 i;
+
+    for (i = 0; i < sz; i++) {
+        diff |= (byte)(a[i] ^ b[i]);
+    }
+    return (int)diff;
+}
+
 static WC_INLINE int wolfSPDM_IsTcgMode(const WOLFSPDM_CTX* ctx)
 {
 #ifdef WOLFSPDM_TCG

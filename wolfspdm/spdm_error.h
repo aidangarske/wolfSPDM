@@ -64,7 +64,6 @@ enum WOLFSPDM_ERROR {
 };
 
 /* Older spellings, kept for source compatibility */
-#define WOLFSPDM_E_MEAS_NOT_VERIFIED    WOLFSPDM_E_MEASUREMENT
 #define WOLFSPDM_E_MEAS_SIG_FAIL        WOLFSPDM_E_BAD_SIGNATURE
 
 /* Get human-readable error string */

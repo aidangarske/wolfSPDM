@@ -2,14 +2,14 @@
  *
  * Copyright (C) 2006-2026 wolfSSL Inc.
  *
- * This file is part of wolfTPM.
+ * This file is part of wolfSPDM.
  *
- * wolfTPM is free software; you can redistribute it and/or modify
+ * wolfSPDM is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 3 of the License, or
  * (at your option) any later version.
  *
- * wolfTPM is distributed in the hope that it will be useful,
+ * wolfSPDM is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
@@ -290,6 +290,10 @@ void wolfSPDM_RespReset(WOLFSPDM_RESP_CTX* ctx)
     ctx->ctx.state = WOLFSPDM_STATE_INIT;
     ctx->flags.sessionAsym = 0;
     ctx->flags.pendingAsym = 0;
+    wc_ForceZero(ctx->secureInPlain, sizeof(ctx->secureInPlain));
+    wc_ForceZero(ctx->secureOutPlain, sizeof(ctx->secureOutPlain));
+    wc_ForceZero(ctx->vdInPayload, sizeof(ctx->vdInPayload));
+    wc_ForceZero(ctx->vdOutPayload, sizeof(ctx->vdOutPayload));
 }
 
 #ifdef WOLFSPDM_TCG
@@ -845,8 +849,6 @@ static int RespHandleFinish(WOLFSPDM_RESP_CTX* rctx,
     byte th2[WOLFSPDM_HASH_SIZE];
     byte expectedHmac[WOLFSPDM_HASH_SIZE];
     int rc;
-    word32 i;
-    volatile int diff = 0;
 
     if (inSz < 4u + WOLFSPDM_HASH_SIZE) {
         return WOLFSPDM_E_FRAMING;
@@ -865,10 +867,8 @@ static int RespHandleFinish(WOLFSPDM_RESP_CTX* rctx,
             expectedHmac);
     }
     if (rc == WOLFSPDM_SUCCESS) {
-        for (i = 0; i < WOLFSPDM_HASH_SIZE; i++) {
-            diff |= expectedHmac[i] ^ in[4 + i];
-        }
-        if (diff != 0) {
+        if (wolfSPDM_ConstCompare(expectedHmac, in + 4,
+                WOLFSPDM_HASH_SIZE) != 0) {
             rc = WOLFSPDM_E_BAD_HMAC;
         }
     }
@@ -901,8 +901,6 @@ static int RespHandlePskFinish(WOLFSPDM_RESP_CTX* rctx,
     byte th2Hash[WOLFSPDM_HASH_SIZE];
     byte expectedHmac[WOLFSPDM_HASH_SIZE];
     int rc;
-    word32 i;
-    volatile int diff = 0;
 
     if (inSz < 4u + WOLFSPDM_HASH_SIZE) {
         return WOLFSPDM_E_FRAMING;
@@ -921,10 +919,8 @@ static int RespHandlePskFinish(WOLFSPDM_RESP_CTX* rctx,
             expectedHmac);
     }
     if (rc == WOLFSPDM_SUCCESS) {
-        for (i = 0; i < WOLFSPDM_HASH_SIZE; i++) {
-            diff |= expectedHmac[i] ^ in[4 + i];
-        }
-        if (diff != 0) {
+        if (wolfSPDM_ConstCompare(expectedHmac, in + 4,
+                WOLFSPDM_HASH_SIZE) != 0) {
             rc = WOLFSPDM_E_BAD_HMAC;
         }
     }
@@ -969,7 +965,7 @@ static int RespBuildEndSessionAck(WOLFSPDM_CTX* ctx,
     return WOLFSPDM_SUCCESS;
 }
 
-static int RespHandleVendorDefined(WOLFSPDM_RESP_CTX* rctx,
+static int RespHandleVendorDefinedInner(WOLFSPDM_RESP_CTX* rctx,
     const byte* in, word32 inSz, byte* out, word32* outSz, int fromSecured,
     char* vdCodeOut)
 {
@@ -1090,16 +1086,10 @@ static int RespHandleVendorDefined(WOLFSPDM_RESP_CTX* rctx,
             return WOLFSPDM_E_BAD_STATE;
         }
         if (rctx->pskStoreSz != 0) {
-            volatile int diff = 0;
-            word32 i;
-
             if (rctx->pskStoreSz != pskLen) {
                 return WOLFSPDM_E_BAD_STATE;
             }
-            for (i = 0; i < pskLen; i++) {
-                diff |= rctx->pskStore[i] ^ payload[i];
-            }
-            if (diff != 0) {
+            if (wolfSPDM_ConstCompare(rctx->pskStore, payload, pskLen) != 0) {
                 return WOLFSPDM_E_BAD_STATE;
             }
         }
@@ -1116,8 +1106,7 @@ static int RespHandleVendorDefined(WOLFSPDM_RESP_CTX* rctx,
     else if (XSTRCMP(vdCode, "PSK_CLR_") == 0) {
         /* Payload: ClearAuth(32 raw bytes). Verify SHA-384 matches stored. */
         byte digest[WOLFSPDM_HASH_SIZE];
-        volatile int diff = 0;
-        word32 i;
+        int diff;
         if (payloadSz != 32 || !rctx->flags.pskProvisioned) {
             return WOLFSPDM_E_INVALID_ARG;
         }
@@ -1127,9 +1116,8 @@ static int RespHandleVendorDefined(WOLFSPDM_RESP_CTX* rctx,
             return rc;
         }
         /* Constant-time compare, matching the FINISH HMAC paths. */
-        for (i = 0; i < WOLFSPDM_HASH_SIZE; i++) {
-            diff |= digest[i] ^ rctx->clearAuthDigest[i];
-        }
+        diff = wolfSPDM_ConstCompare(digest, rctx->clearAuthDigest,
+            WOLFSPDM_HASH_SIZE);
         wc_ForceZero(digest, sizeof(digest));
         if (diff != 0) {
             return WOLFSPDM_E_BAD_HMAC;
@@ -1170,13 +1158,22 @@ static int RespHandleVendorDefined(WOLFSPDM_RESP_CTX* rctx,
         off += respPayloadSz;
     }
     *outSz = off;
-    /* PSK_SET_ payloads and TPM traffic do not linger in scratch */
-    wc_ForceZero(payload, payloadSz);
-    wc_ForceZero(respPayload, respPayloadSz);
     return WOLFSPDM_SUCCESS;
 }
 
-static int RespDispatchSecured(WOLFSPDM_RESP_CTX* rctx,
+/* PSK_SET_ payloads and TPM traffic do not linger in scratch, on any path */
+static int RespHandleVendorDefined(WOLFSPDM_RESP_CTX* rctx,
+    const byte* in, word32 inSz, byte* out, word32* outSz, int fromSecured,
+    char* vdCodeOut)
+{
+    int rc = RespHandleVendorDefinedInner(rctx, in, inSz, out, outSz,
+        fromSecured, vdCodeOut);
+    wc_ForceZero(rctx->vdInPayload, sizeof(rctx->vdInPayload));
+    wc_ForceZero(rctx->vdOutPayload, sizeof(rctx->vdOutPayload));
+    return rc;
+}
+
+static int RespDispatchSecuredInner(WOLFSPDM_RESP_CTX* rctx,
     const byte* securedIn, word32 securedInSz,
     byte* securedOut, word32* securedOutSz)
 {
@@ -1260,6 +1257,18 @@ static int RespDispatchSecured(WOLFSPDM_RESP_CTX* rctx,
     if (sessionEnded && rc == WOLFSPDM_SUCCESS) {
         wolfSPDM_RespReset(rctx);
     }
+    return rc;
+}
+
+/* Decrypted TPM commands and responses are wiped on every path */
+static int RespDispatchSecured(WOLFSPDM_RESP_CTX* rctx,
+    const byte* securedIn, word32 securedInSz,
+    byte* securedOut, word32* securedOutSz)
+{
+    int rc = RespDispatchSecuredInner(rctx, securedIn, securedInSz,
+        securedOut, securedOutSz);
+    wc_ForceZero(rctx->secureInPlain, sizeof(rctx->secureInPlain));
+    wc_ForceZero(rctx->secureOutPlain, sizeof(rctx->secureOutPlain));
     return rc;
 }
 

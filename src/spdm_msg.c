@@ -581,12 +581,8 @@ int wolfSPDM_ParseKeyExchangeRsp(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufS
         rc = wolfSPDM_ComputeVerifyData(ctx->rspFinishedKey, ctx->th1, expectedHmac);
     }
     if (rc == WOLFSPDM_SUCCESS) {
-        word32 i;
-        volatile int diff = 0;
-        for (i = 0; i < WOLFSPDM_HASH_SIZE; i++) {
-            diff |= expectedHmac[i] ^ rspVerifyData[i];
-        }
-        if (diff != 0) {
+        if (wolfSPDM_ConstCompare(expectedHmac, rspVerifyData,
+                WOLFSPDM_HASH_SIZE) != 0) {
             wolfSPDM_DebugPrint(ctx, "ResponderVerifyData MISMATCH\n");
             rc = WOLFSPDM_E_BAD_HMAC;
         }
@@ -624,6 +620,9 @@ int wolfSPDM_ParseFinishRsp(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufSz)
                 return WOLFSPDM_E_BUFFER_SMALL;
             }
             opaqueLen = SPDM_Get16LE(&buf[4]);
+            if (opaqueLen > WOLFSPDM_FINISH_OPAQUE_MAX) {
+                return WOLFSPDM_E_INVALID_ARG;
+            }
             rspMsgLen = 4 + 2 + opaqueLen;
             if (bufSz < rspMsgLen) {
                 return WOLFSPDM_E_BUFFER_SMALL;

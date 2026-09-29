@@ -432,6 +432,15 @@ void wolfSPDM_ResetSession(WOLFSPDM_CTX* ctx)
     wc_ForceZero(ctx->th1, sizeof(ctx->th1));
     wc_ForceZero(ctx->th2, sizeof(ctx->th2));
     wolfSPDM_FreeEphemeralKey(ctx);
+#ifndef WOLFSPDM_NO_CERT
+    ctx->rspCaps = 0;
+    ctx->dataTransferSize = 0;
+    ctx->maxSpdmMsgSize = 0;
+#endif
+#ifndef WOLFSPDM_NO_MEAS
+    ctx->measBlockCount = 0;
+    ctx->measRecordLen = 0;
+#endif
 #if !defined(WOLFSPDM_NO_MEAS) || !defined(WOLFSPDM_NO_CHALLENGE)
     wolfSPDM_AttestFree(ctx);
 #endif

@@ -231,7 +231,7 @@ WOLFSPDM_API word16 wolfSPDM_GetFipsIndicator(WOLFSPDM_CTX* ctx);
 
 /* wolfSPDM_SetPSK declared in spdm_psk.h */
 
-/* Debug */
+/* Debug output exists only in WOLFSPDM_DEBUG (--enable-debug) builds */
 WOLFSPDM_API void wolfSPDM_SetDebug(WOLFSPDM_CTX* ctx, int enable);
 
 #ifdef __cplusplus

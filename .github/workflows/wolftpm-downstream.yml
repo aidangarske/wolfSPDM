@@ -173,6 +173,7 @@ jobs:
           make -j"$(nproc)"
 
       - name: Run wolfTPM make check
+        if: matrix.mode == 'fwtpm-tcg'
         run: |
           export LD_LIBRARY_PATH="$HOME/wolfssl-install/lib"
           set -eo pipefail

@@ -437,8 +437,8 @@ static int do_challenge(WOLFSPDM_CTX* ctx)
     rc = load_trusted_ca(ctx);
     if (rc != 0) { rc = WOLFSPDM_E_INVALID_ARG; goto done; }
 
-    /* wolfSPDM_Challenge internally validates the cert chain against the
-     * loaded CAs when flags.hasTrustedCAs is set. */
+    /* wolfSPDM_Challenge validates the chain against the loaded root CA
+     * before sending CHALLENGE */
     rc = wolfSPDM_Challenge(ctx, 0, SPDM_MEAS_SUMMARY_HASH_ALL);
     if (rc == WOLFSPDM_SUCCESS) {
         printf("Challenge succeeded (signature verified)\n");

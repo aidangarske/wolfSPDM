@@ -33,6 +33,7 @@ endif
 
 libwolfspdm_la_CPPFLAGS = -I$(srcdir)/wolfspdm -I$(srcdir)/src
 libwolfspdm_la_LIBADD = -lwolfssl
+libwolfspdm_la_LDFLAGS = -version-info 1:0:0
 
 # Generate options.h from config.h (propagate WOLFSPDM_ defines to consumers)
 BUILT_SOURCES = wolfspdm/options.h

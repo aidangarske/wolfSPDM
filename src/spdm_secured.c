@@ -124,7 +124,7 @@ static int wolfSPDM_EncryptRecord(WOLFSPDM_CTX* ctx, int appMsg,
         /* MCTP carries a 16-bit sequence number; fail rather than let the wire
          * value and the 64-bit IV counter diverge past 0xFFFF */
         if (ctx->reqSeqNum > 0xFFFF) {
-            return WOLFSPDM_E_BAD_STATE;
+            return WOLFSPDM_E_SEQUENCE;
         }
 
         plainBufSz = encDataLen;
@@ -409,10 +409,12 @@ int wolfSPDM_SecuredExchange(WOLFSPDM_CTX* ctx,
     if (ctx == NULL || cmdPlain == NULL || rspPlain == NULL || rspSz == NULL) {
         return WOLFSPDM_E_INVALID_ARG;
     }
-    /* Session keys exist from KEY_EXCHANGE_RSP on (GIVE_PUB runs before
-     * FINISH); anything earlier would seal with zero keys */
+    /* Session keys exist from KEY_EXCHANGE_RSP on, but only the TCG
+     * binding sends a request (GIVE_PUB) under handshake keys */
     if (ctx->state < WOLFSPDM_STATE_KEY_EX ||
-            ctx->state == WOLFSPDM_STATE_ERROR || ctx->sessionId == 0) {
+            ctx->state == WOLFSPDM_STATE_ERROR || ctx->sessionId == 0 ||
+            (ctx->state == WOLFSPDM_STATE_KEY_EX &&
+             !wolfSPDM_IsTcgMode(ctx))) {
         return WOLFSPDM_E_NOT_CONNECTED;
     }
 #ifndef WOLFSPDM_NO_MEAS

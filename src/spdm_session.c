@@ -81,7 +81,17 @@ int wolfSPDM_KeyExchange(WOLFSPDM_CTX* ctx)
     word32 rxSz = sizeof(rxBuf);
     int rc;
 
-    rc = wolfSPDM_BuildKeyExchange(ctx, txBuf, &txSz);
+    /* The signature in KEY_EXCHANGE_RSP can only be checked against a
+     * trusted responder key: ValidateCertChain or SetResponderPubKey */
+    if (ctx == NULL) {
+        rc = WOLFSPDM_E_INVALID_ARG;
+    }
+    else if (!ctx->flags.hasRspPubKey) {
+        rc = WOLFSPDM_E_BAD_STATE;
+    }
+    else {
+        rc = wolfSPDM_BuildKeyExchange(ctx, txBuf, &txSz);
+    }
 #ifndef WOLFSPDM_NO_CHALLENGE
     /* KEY_EXCHANGE drops DIGESTS and CERTIFICATE from M1 */
     if (rc == WOLFSPDM_SUCCESS && ctx->m1State != WOLFSPDM_RUN_NONE) {
@@ -110,7 +120,7 @@ static int wolfSPDM_FinishXfer(WOLFSPDM_CTX* ctx, const byte* finishBuf,
     word32 finishSz, byte* decBuf, word32* decSz)
 {
     byte encBuf[WOLFSPDM_VENDOR_BUF_SZ];
-    byte rxBuf[128];      /* Encrypted FINISH_RSP: ~94 bytes max */
+    byte rxBuf[WOLFSPDM_FINISH_RSP_MAX + 128]; /* + record and TCG framing */
     word32 encSz = sizeof(encBuf);
     word32 rxSz = sizeof(rxBuf);
     int rc;
@@ -147,14 +157,14 @@ static int wolfSPDM_FinishXfer(WOLFSPDM_CTX* ctx, const byte* finishBuf,
 int wolfSPDM_Finish(WOLFSPDM_CTX* ctx)
 {
     byte finishBuf[WOLFSPDM_FINISH_BUF_SZ];
-    byte decBuf[64];      /* Decrypted FINISH_RSP: 4 hdr + 48 verify = 52 */
+    byte decBuf[WOLFSPDM_FINISH_RSP_MAX];
     word32 finishSz = sizeof(finishBuf);
     word32 decSz = sizeof(decBuf);
     int rc;
 
     /* FINISH is only valid after a successful KEY_EXCHANGE; otherwise the
      * session keys are unestablished (zero-entropy). */
-    if (ctx == NULL || ctx->state < WOLFSPDM_STATE_KEY_EX) {
+    if (ctx == NULL || ctx->state != WOLFSPDM_STATE_KEY_EX) {
         return WOLFSPDM_E_BAD_STATE;
     }
 
