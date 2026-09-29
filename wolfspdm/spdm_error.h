@@ -65,6 +65,9 @@ enum WOLFSPDM_ERROR {
 
 /* Older spellings, kept for source compatibility */
 #define WOLFSPDM_E_MEAS_SIG_FAIL        WOLFSPDM_E_BAD_SIGNATURE
+/* Never returned: unverified measurements are now an error, so an old
+ * "rc != E_MEAS_NOT_VERIFIED" soft-success check can no longer pass one */
+#define WOLFSPDM_E_MEAS_NOT_VERIFIED    (-1000)
 
 /* Get human-readable error string */
 WOLFSPDM_API const char* wolfSPDM_GetErrorString(int error);

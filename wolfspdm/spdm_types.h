@@ -28,7 +28,9 @@
 #endif
 #include <wolfssl/wolfcrypt/settings.h>
 
-#if !defined(HAVE_CONFIG_H) && !defined(WOLFTPM_SPDM) && \
+/* The library build takes its switches from config.h; consumers from the
+ * generated options.h, even when they have a config.h of their own */
+#if !defined(BUILDING_WOLFSPDM) && !defined(WOLFTPM_SPDM) && \
     !defined(WOLFSPDM_USER_SETTINGS)
     #include <wolfspdm/options.h>
 #endif

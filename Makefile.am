@@ -31,7 +31,7 @@ if BUILD_RESPONDER
 libwolfspdm_la_SOURCES += src/spdm_responder.c
 endif
 
-libwolfspdm_la_CPPFLAGS = -I$(srcdir)/wolfspdm -I$(srcdir)/src
+libwolfspdm_la_CPPFLAGS = -I$(srcdir)/wolfspdm -I$(srcdir)/src -DBUILDING_WOLFSPDM
 libwolfspdm_la_LIBADD = -lwolfssl
 libwolfspdm_la_LDFLAGS = -version-info 1:0:0
 
@@ -61,7 +61,7 @@ nobase_include_HEADERS = \
 check_PROGRAMS = test/unit_test
 
 test_unit_test_SOURCES = test/unit_test.c test/test_certs.h test/test_certs_mldsa.h
-test_unit_test_CPPFLAGS = -I$(srcdir)/wolfspdm -I$(srcdir)/src
+test_unit_test_CPPFLAGS = -I$(srcdir)/wolfspdm -I$(srcdir)/src -DBUILDING_WOLFSPDM
 test_unit_test_LDADD = libwolfspdm.la -lwolfssl
 
 TESTS = test/unit_test
