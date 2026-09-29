@@ -33,3 +33,5 @@ body:
     attributes:
       label: Area
       placeholder: "e.g. requester, responder, TCG binding, PQC, wolfTPM integration, CI"
+    validations:
+      required: true

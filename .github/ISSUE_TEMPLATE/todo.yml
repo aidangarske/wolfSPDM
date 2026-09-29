@@ -14,6 +14,8 @@ body:
     attributes:
       label: Origin
       placeholder: "PR, issue, doc section, or scan report"
+    validations:
+      required: true
   - type: textarea
     id: needed
     attributes:

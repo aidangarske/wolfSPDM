@@ -31,6 +31,11 @@ body:
         - Other
     validations:
       required: true
+  - type: input
+    id: target_other
+    attributes:
+      label: Other target details
+      description: Board, TPM part, or environment if you picked Other.
   - type: dropdown
     id: mode
     attributes:
