@@ -1,0 +1,36 @@
+name: Tracked follow-up
+description: Work deferred from a PR, review, or scan that must be done later
+labels: ["todo"]
+body:
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Where this came from and why it was deferred.
+    validations:
+      required: true
+  - type: input
+    id: origin
+    attributes:
+      label: Origin
+      placeholder: "PR, issue, doc section, or scan report"
+    validations:
+      required: true
+  - type: textarea
+    id: needed
+    attributes:
+      label: What is needed
+      description: The concrete work, as a short list.
+    validations:
+      required: true
+  - type: textarea
+    id: blockers
+    attributes:
+      label: Blockers and dependencies
+      description: Hardware, other PRs, or decisions this waits on.
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+    validations:
+      required: true

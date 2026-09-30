@@ -1,0 +1,67 @@
+name: Bug report
+description: Something in wolfSPDM behaves wrongly
+labels: ["bug"]
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What goes wrong, in one or two sentences.
+    validations:
+      required: true
+  - type: input
+    id: commit
+    attributes:
+      label: Commit or release
+      placeholder: "e.g. 5b10254f or v1.0.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: target
+    attributes:
+      label: Target
+      multiple: true
+      options:
+        - Nuvoton NPCT75x (silicon)
+        - Nations NS350 (silicon)
+        - fwTPM responder
+        - DMTF spdm-emu
+        - wolfTPM integration
+        - Host build / unit tests
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: target_other
+    attributes:
+      label: Other target details
+      description: Board, TPM part, or environment if you picked Other.
+  - type: dropdown
+    id: mode
+    attributes:
+      label: SPDM mode
+      options:
+        - Standard (certificates)
+        - TCG identity key
+        - TCG PSK
+        - Not applicable
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Configure flags, SPDM version, and what you ran.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected and actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Console output, with --enable-debug if possible.
+      render: text
