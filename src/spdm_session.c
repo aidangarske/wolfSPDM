@@ -90,6 +90,14 @@ int wolfSPDM_KeyExchange(WOLFSPDM_CTX* ctx)
         rc = WOLFSPDM_E_BAD_STATE;
     }
     else {
+        rc = WOLFSPDM_SUCCESS;
+    #ifndef WOLFSPDM_NO_CERT
+        if (!wolfSPDM_IsTcgMode(ctx) && ctx->flags.rspKeyFromCert) {
+            rc = wolfSPDM_ValidateCertChain(ctx);
+        }
+    #endif
+    }
+    if (rc == WOLFSPDM_SUCCESS) {
         rc = wolfSPDM_BuildKeyExchange(ctx, txBuf, &txSz);
     }
 #ifndef WOLFSPDM_NO_CHALLENGE

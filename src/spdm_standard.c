@@ -397,6 +397,12 @@ int wolfSPDM_GetCertificate(WOLFSPDM_CTX* ctx, int slotId)
     }
     ctx->currentSlotId = (byte)slotId;
     ctx->certChainLen = 0;
+    if (ctx->flags.rspKeyFromCert) {
+        ctx->flags.hasRspPubKey = 0;
+        ctx->flags.rspKeyFromCert = 0;
+        ctx->rspPubKeyLen = 0;
+        wc_ForceZero(ctx->rspPubKey, sizeof(ctx->rspPubKey));
+    }
 
     while (rc == WOLFSPDM_SUCCESS && remainderLen > 0) {
         txBuf[0] = ctx->spdmVersion;
@@ -684,14 +690,15 @@ int wolfSPDM_ValidateCertChain(WOLFSPDM_CTX* ctx)
     if (ctx == NULL) {
         return WOLFSPDM_E_INVALID_ARG;
     }
-    if (ctx->certChainLen <= WOLFSPDM_CERT_CHAIN_HDR_SZ) {
-        return WOLFSPDM_E_CERT_FAIL;
-    }
     /* A key taken from an earlier chain is not an anchor for this one */
     if (ctx->flags.rspKeyFromCert) {
         ctx->flags.hasRspPubKey = 0;
         ctx->flags.rspKeyFromCert = 0;
         ctx->rspPubKeyLen = 0;
+    }
+
+    if (ctx->certChainLen <= WOLFSPDM_CERT_CHAIN_HDR_SZ) {
+        return WOLFSPDM_E_CERT_FAIL;
     }
 
     /* RootHash in the chain header must name the configured root */

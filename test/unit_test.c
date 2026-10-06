@@ -3576,6 +3576,26 @@ static int test_validate_cert_chain(void)
     ASSERT_SUCCESS(wolfSPDM_AllowUntrustedCerts(ctx, 1));
     ASSERT_SUCCESS(wolfSPDM_ValidateCertChain(ctx));
 
+    wolfSPDM_SetIO(ctx, dummy_io_cb, NULL);
+    ASSERT_SUCCESS(wolfSPDM_AllowUntrustedCerts(ctx, 0));
+    ASSERT_EQ(wolfSPDM_KeyExchange(ctx), WOLFSPDM_E_CERT_FAIL,
+        "Certificate-derived key must pass the current trust policy");
+    ASSERT_EQ(ctx->flags.hasRspPubKey, 0,
+        "Rejected certificate key must not remain usable");
+    ASSERT_SUCCESS(wolfSPDM_AllowUntrustedCerts(ctx, 1));
+    ASSERT_SUCCESS(wolfSPDM_ValidateCertChain(ctx));
+    ctx->certChain[ctx->certChainLen - 2] ^= 0x01;
+    ASSERT_EQ(wolfSPDM_KeyExchange(ctx), WOLFSPDM_E_CERT_FAIL,
+        "Certificate-derived key must pass the current chain policy");
+    ctx->certChain[ctx->certChainLen - 2] ^= 0x01;
+    ASSERT_SUCCESS(wolfSPDM_ValidateCertChain(ctx));
+    TEST_ASSERT(wolfSPDM_GetCertificate(ctx, 0) != WOLFSPDM_SUCCESS,
+        "Certificate retrieval without a response fails");
+    ASSERT_EQ(ctx->flags.hasRspPubKey, 0,
+        "Retrieving a chain invalidates its cached key");
+    ASSERT_EQ(wolfSPDM_KeyExchange(ctx), WOLFSPDM_E_BAD_STATE,
+        "Failed retrieval cannot reuse a cached certificate key");
+
     TEST_CTX_FREE();
     TEST_PASS();
 }
