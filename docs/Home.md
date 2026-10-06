@@ -1,10 +1,10 @@
 # wolfSPDM Documentation
 
-Welcome to the wolfSPDM wiki. wolfSPDM implements SPDM over two layers: a
-**wolfTPM-derived TCG binding core** (Nuvoton / Nations Technology TPM
-transport, PSK, identity-key mutual auth, and an SPDM responder) and, layered
-on top of it behind compile-time switches, the **standard DMTF requester**
-(certificates, measurements, challenge, chunking, PQC).
+Welcome to the wolfSPDM wiki. wolfSPDM is a lightweight C SPDM library for
+embedded use. It implements the **standard DMTF requester** (DSP0274
+certificates, measurements, challenge, chunking, post-quantum) and, behind
+compile-time switches, a **wolfTPM-derived TCG binding** (Nuvoton / Nations TPM
+transport, PSK, identity-key mutual auth, and an SPDM responder).
 
 ## What is wolfSPDM?
 
@@ -77,8 +77,8 @@ After `FINISH`, secured messaging and maintenance operations are available.
 
 ## Quick Links
 
-- [GitHub Repository](https://github.com/aidangarske/wolfSPDM)
-- [README](https://github.com/aidangarske/wolfSPDM/blob/main/README.md)
+- [GitHub Repository](https://github.com/wolfSSL/wolfSPDM)
+- [README](https://github.com/wolfSSL/wolfSPDM/blob/main/README.md)
 - [DMTF DSP0274 (SPDM)](https://www.dmtf.org/sites/default/files/standards/documents/DSP0274_1.4.0.pdf)
 - [DMTF DSP0277 (Secured Messages)](https://www.dmtf.org/sites/default/files/standards/documents/DSP0277_1.2.0.pdf)
 - [wolfSSL Website](https://www.wolfssl.com/)

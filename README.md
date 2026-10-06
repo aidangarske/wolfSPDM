@@ -1,22 +1,44 @@
 # wolfSPDM
 
-wolfSPDM is a lightweight C library implementing [SPDM 1.2 / 1.3 / 1.4](https://www.dmtf.org/sites/default/files/standards/documents/DSP0274_1.4.0.pdf) and [Secured Messages over MCTP (DSP0277)](https://www.dmtf.org/sites/default/files/standards/documents/DSP0277_1.2.0.pdf) using [wolfSSL](https://www.wolfssl.com/) as the crypto backend. It is a standalone, requester-only stack designed for embedded use, tested end-to-end against the DMTF [spdm-emu](https://github.com/DMTF/spdm-emu) emulator.
+wolfSPDM is a lightweight C library implementing [SPDM 1.2 / 1.3 / 1.4](https://www.dmtf.org/sites/default/files/standards/documents/DSP0274_1.4.0.pdf) and [Secured Messages over MCTP (DSP0277)](https://www.dmtf.org/sites/default/files/standards/documents/DSP0277_1.2.0.pdf), using [wolfSSL](https://www.wolfssl.com/) as the crypto backend. It provides both the **standard DMTF SPDM requester** for embedded use and the **TCG-spec TPM SPDM binding** that powers wolfTPM, tested end-to-end against the DMTF [spdm-emu](https://github.com/DMTF/spdm-emu) emulator.
+
+## Standard and TCG TPM SPDM
+
+wolfSPDM is one SPDM implementation with a shared core: version, capability, and algorithm negotiation, key exchange, secured sessions, transcript, and crypto. The standard DMTF requester and the TCG TPM binding are closely related modes on that core, selected by build switches:
+
+- **Standard DMTF SPDM** (default): the 1.2 / 1.3 / 1.4 certificate requester (DSP0274 and Secured Messages over MCTP DSP0277), post-quantum ready, for embedded use.
+- **TCG TPM SPDM**: the TCG-spec SPDM binding (TPM transport, identity-key mutual auth, PSK, responder) that provides wolfTPM's SPDM support.
+
+**Standalone (DMTF requester):**
+
+```bash
+./configure
+make
+```
+
+**With wolfTPM (TCG TPM SPDM):** wolfTPM builds wolfSPDM automatically when its SPDM support is enabled (`WOLFTPM_SPDM`). To build the TPM side here, opt into the pieces you need on top of the default:
+
+```bash
+./configure --enable-tcg --enable-psk --enable-responder
+make
+```
+
+Add `--disable-mctp` for a TPM-only build that drops the standard DMTF requester entirely, and `--enable-nuvoton` / `--enable-nations` for vendor TPM commands. Each piece is independent, so you can compose exactly what you want: `--enable-tcg` alone gives just the TCG binding (PSK and the responder stay off until you enable them).
 
 ## Main Features
 
 - **Standard SPDM 1.2 / 1.3 / 1.4 requester** per DMTF DSP0274 and DSP0277
 - **Algorithm Set B fixed:** ECDSA P-384, ECDHE P-384, SHA-384, AES-256-GCM, HKDF-SHA384
-- **Post-quantum signatures (SPDM 1.4):** optional ML-DSA-44 / 65 / 87 (FIPS 204), dual-stacked with ECDSA P-384 — see the [Post-Quantum ML-DSA](https://github.com/aidangarske/wolfSPDM/wiki/Post-Quantum-ML-DSA) wiki page
-- **Post-quantum key exchange (SPDM 1.4):** optional ML-KEM-512 / 768 / 1024 (FIPS 203), advertised alongside ECDHE P-384 — see the [Post-Quantum ML-KEM](https://github.com/aidangarske/wolfSPDM/wiki/Post-Quantum-ML-KEM) wiki page
+- **Post-quantum signatures (SPDM 1.4):** optional ML-DSA-44 / 65 / 87 (FIPS 204), dual-stacked with ECDSA P-384. See the [Post-Quantum ML-DSA](https://github.com/wolfSSL/wolfSPDM/wiki/Post-Quantum-ML-DSA) wiki page.
+- **Post-quantum key exchange (SPDM 1.4):** optional ML-KEM-512 / 768 / 1024 (FIPS 203), advertised alongside ECDHE P-384. See the [Post-Quantum ML-KEM](https://github.com/wolfSSL/wolfSPDM/wiki/Post-Quantum-ML-KEM) wiki page.
 - **Fully post-quantum SPDM handshake:** ML-KEM key exchange + ML-DSA authentication (no classical asymmetric crypto), proven end-to-end against spdm-emu
-- **Zero-malloc by default:** static memory, ~19 KB context (~59 KB with ML-DSA), ideal for constrained/embedded environments
-- **Optional `--enable-dynamic-mem`** for heap-allocated contexts on small-stack platforms
+- **Zero-malloc by default:** static context for constrained targets; optional `--enable-dynamic-mem` for heap-allocated contexts on small-stack platforms
 - **Full session lifecycle:** key exchange, finish, encrypted messaging, heartbeat keep-alive, key update
 - **Device attestation:** signed / unsigned `GET_MEASUREMENTS`, sessionless `CHALLENGE_AUTH`, certificate-chain validation against trusted root CAs
 - **Compatible with DMTF spdm-emu** for interoperability testing (21-test matrix across 1.2 / 1.3 / 1.4)
 - **Path to FIPS 140-3** via wolfCrypt FIPS Certificate #4718 (sole crypto dependency)
 
-## Supported Operations (RFC / DSP0274)
+## Supported Operations (DSP0274 / DSP0277)
 
 | Operation | DSP0274 | wolfSPDM API |
 |---|---|---|
@@ -45,7 +67,7 @@ sudo ldconfig
 
 `--enable-sp` enables Single Precision math with optimized ECC P-384, required for SPDM Algorithm Set B on ARM64 and other constrained targets. `--enable-all` works as a superset.
 
-For post-quantum cryptography, add `--enable-mldsa` (signatures, FIPS 204) and/or `--enable-mlkem` (key exchange, FIPS 203) to wolfSSL — use wolfSSL master (or a release that ships the `wc_MlDsaKey` context API and `wc_MlKemKey` API). wolfSPDM then auto-enables each when the linked wolfSSL provides it; `./configure --disable-mldsa` / `--disable-mlkem` force them off. Enabling both gives a fully post-quantum SPDM handshake (ML-KEM key exchange + ML-DSA authentication).
+For post-quantum support, build wolfSSL with `--enable-mldsa` (FIPS 204) and/or `--enable-mlkem` (FIPS 203). Use wolfSSL master or a release carrying the `wc_MlDsaKey` and `wc_MlKemKey` APIs. wolfSPDM auto-enables each when the linked wolfSSL provides it (`--disable-mldsa` / `--disable-mlkem` force them off); enabling both gives a fully post-quantum handshake (ML-KEM key exchange + ML-DSA authentication).
 
 ## Build
 
@@ -74,7 +96,7 @@ make check
 
 ### Memory Modes
 
-**Static (default):** zero heap allocation. The caller provides a buffer (`WOLFSPDM_CTX_STATIC_SIZE` bytes: 32 KB, 40 KB with ML-KEM, 72 KB with ML-DSA) and wolfSPDM operates entirely within it. Ideal for embedded and constrained environments where malloc is unavailable or undesirable.
+**Static (default):** zero heap allocation. The caller provides a buffer of `WOLFSPDM_CTX_STATIC_SIZE` bytes and wolfSPDM operates entirely within it. Ideal for embedded and constrained environments where malloc is unavailable or undesirable.
 
 ```c
 #include <wolfspdm/spdm.h>
@@ -112,18 +134,7 @@ export SPDM_EMU_PATH=../spdm-emu/build/bin
 ./examples/spdm_test.sh
 ```
 
-The driver starts/stops `spdm_responder_emu` per test and runs seven scenarios — Session, Signed Measurements, Unsigned Measurements, Challenge, Heartbeat, Key Update, Application Data (PLDM GetTID) — across SPDM 1.2, 1.3, and 1.4 (21 tests total).
-
-## Relationship to wolfTPM's SPDM
-
-wolfSPDM is the SPDM stack wolfTPM builds on. Its core is the SPDM code that wolfTPM shipped in `src/spdm/` (TCG binding, Nuvoton NPCT75x and Nations NS350 vendor commands, PSK, the responder), with the standard DMTF requester layered on top. Build switches decide which side is compiled, so a standalone build carries none of the TPM code and a wolfTPM build carries none of the standard requester:
-
-| Build | Compiled in | `sizeof(WOLFSPDM_CTX)` (arm64) |
-|---|---|---|
-| Standalone (default) | Standard DSP0274 / DSP0277 requester: certificates, attestation, heartbeat, key update, chunking, application data; ML-DSA / ML-KEM when wolfSSL has them | ~19 KB classical, ~59 KB with ML-DSA |
-| Standalone + TPM side | Adds `--enable-tcg` / `--enable-nuvoton` / `--enable-nations` / `--enable-psk` / `--enable-responder` | ~19 KB classical |
-| Pure TCG (`--disable-mctp`) | TCG binding, vendors, PSK and responder only | ~9.6 KB |
-| wolfTPM (`WOLFTPM_SPDM`, profile `WOLFSPDM_PROFILE_TPM`) | What wolfTPM needs: TCG binding, vendors, PSK, responder | ~9.5 KB |
+The driver starts/stops `spdm_responder_emu` per test and runs seven scenarios across SPDM 1.2, 1.3, and 1.4 (21 tests total): Session, Signed Measurements, Unsigned Measurements, Challenge, Heartbeat, Key Update, and Application Data (PLDM GetTID).
 
 ## CI / Testing
 
@@ -138,32 +149,25 @@ Runs on every push and PR:
 - **SPDM Emulator Integration**: 21-test matrix (7 scenarios x SPDM 1.2 / 1.3 / 1.4) across ubuntu-22.04 x64, ubuntu-24.04 x64, and ubuntu-24.04-arm aarch64, plus chunking against small-buffer responders
 - **SPDM Emulator PQC**: ML-DSA-44 / 65 / 87, ML-KEM-512 / 768 / 1024 and the fully post-quantum handshake against spdm-emu on OpenSSL
 - **wolfTPM downstream**: wolfTPM master built with this wolfSPDM in its 14 SPDM configurations, its unit tests, and the fwTPM TCG and PSK end-to-end runs; the standard requester must stay compiled out
-- **Skoll review**: wolfSSL deep-review pipeline, pre-merge security and code review
 
-<a href="https://github.com/aidangarske/wolfSPDM/actions">
-  <img src="https://img.shields.io/github/actions/workflow/status/aidangarske/wolfSPDM/build-test.yml?label=CI&logo=github">
-</a>
-<a href="https://github.com/wolfssl/skoll">
-  <img src="https://img.shields.io/badge/skoll-passed-blue">
-</a>
-<a href="https://github.com/wolfssl/fenrir">
-  <img src="https://img.shields.io/badge/fenrir-passed-blueviolet">
+<a href="https://github.com/wolfSSL/wolfSPDM/actions">
+  <img src="https://img.shields.io/github/actions/workflow/status/wolfSSL/wolfSPDM/build-test.yml?label=CI&logo=github">
 </a>
 
 ## Documentation
 
-Full documentation is available in the [GitHub Wiki](https://github.com/aidangarske/wolfSPDM/wiki):
+Full documentation is available in the [GitHub Wiki](https://github.com/wolfSSL/wolfSPDM/wiki):
 
-- [Getting Started](https://github.com/aidangarske/wolfSPDM/wiki/Getting-Started): Build instructions, prerequisites, memory modes, and first connection steps
-- [Supported Operations](https://github.com/aidangarske/wolfSPDM/wiki/Supported-Operations): SPDM operation coverage and API mapping
-- [API Reference](https://github.com/aidangarske/wolfSPDM/wiki/API-Reference): Public function groups and common error-code references
-- [Configuration and Macros](https://github.com/aidangarske/wolfSPDM/wiki/Configuration-and-Macros): Configure flags and compile-time feature controls
-- [Post-Quantum ML-DSA](https://github.com/aidangarske/wolfSPDM/wiki/Post-Quantum-ML-DSA): Post-quantum signatures (FIPS 204)
-- [Post-Quantum ML-KEM](https://github.com/aidangarske/wolfSPDM/wiki/Post-Quantum-ML-KEM): Post-quantum key exchange (FIPS 203) and the fully post-quantum handshake
-- [Message Chunking](https://github.com/aidangarske/wolfSPDM/wiki/Message-Chunking): SPDM 1.2 CHUNK_GET reassembly for large responses
-- [Testing and CI](https://github.com/aidangarske/wolfSPDM/wiki/Testing-and-CI): Unit tests, emulator integration tests, and CI workflow coverage
-- [Project Structure](https://github.com/aidangarske/wolfSPDM/wiki/Project-Structure): Source layout and module responsibilities
-- [Attestation Notes](https://github.com/aidangarske/wolfSPDM/wiki/Attestation-Notes): Measurement and challenge attestation behavior
+- [Getting Started](https://github.com/wolfSSL/wolfSPDM/wiki/Getting-Started): Build instructions, prerequisites, memory modes, and first connection steps
+- [Supported Operations](https://github.com/wolfSSL/wolfSPDM/wiki/Supported-Operations): SPDM operation coverage and API mapping
+- [API Reference](https://github.com/wolfSSL/wolfSPDM/wiki/API-Reference): Public function groups and common error-code references
+- [Configuration and Macros](https://github.com/wolfSSL/wolfSPDM/wiki/Configuration-and-Macros): Configure flags and compile-time feature controls
+- [Post-Quantum ML-DSA](https://github.com/wolfSSL/wolfSPDM/wiki/Post-Quantum-ML-DSA): Post-quantum signatures (FIPS 204)
+- [Post-Quantum ML-KEM](https://github.com/wolfSSL/wolfSPDM/wiki/Post-Quantum-ML-KEM): Post-quantum key exchange (FIPS 203) and the fully post-quantum handshake
+- [Message Chunking](https://github.com/wolfSSL/wolfSPDM/wiki/Message-Chunking): SPDM 1.2 CHUNK_GET reassembly for large responses
+- [Testing and CI](https://github.com/wolfSSL/wolfSPDM/wiki/Testing-and-CI): Unit tests, emulator integration tests, and CI workflow coverage
+- [Project Structure](https://github.com/wolfSSL/wolfSPDM/wiki/Project-Structure): Source layout and module responsibilities
+- [Attestation Notes](https://github.com/wolfSSL/wolfSPDM/wiki/Attestation-Notes): Measurement and challenge attestation behavior
 
 ## License
 
@@ -172,7 +176,5 @@ wolfSPDM is free software licensed under the [GPLv3](https://www.gnu.org/license
 Copyright (C) 2006-2026 wolfSSL Inc.
 
 ## Support
-
-> **Note:** wolfSPDM is currently maintained by wolfSSL developers but is not yet classified as an officially supported product. It was designed from the ground up to meet the same quality standards as the rest of the wolfSSL suite with future adoption in mind. We are eager to transition this to a fully supported product as demand grows; if your organization requires official support, has specific feature requirements, or just has general questions or guidance with the product, please reach out.
 
 For commercial licensing, professional support contracts, or to discuss moving wolfSPDM into your production environment, contact [wolfSSL](https://www.wolfssl.com/contact/).

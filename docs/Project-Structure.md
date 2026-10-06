@@ -25,7 +25,7 @@
 | `src/spdm_session.c` | Handshake exchange helper, `KeyExchange`/`Finish`, `Heartbeat`, `KeyUpdate` |
 | `src/spdm_internal.h` | Internal types, constants, and internal APIs shared across `src/` |
 
-## Standard (certificate) requester modules — built with `BUILD_CERT`
+## Standard (certificate) requester modules: built with `BUILD_CERT`
 
 Compiled when the standard requester is enabled (`--disable-cert` removes
 these; requires `WOLFSPDM_NO_CERT` not set):
