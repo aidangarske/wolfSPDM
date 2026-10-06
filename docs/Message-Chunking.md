@@ -3,8 +3,8 @@
 SPDM 1.2 added a *Large SPDM message transfer mechanism* (DSP0274 Sec. 10.27):
 when a message is larger than a peer's `DataTransferSize`, it is split into
 pieces and reassembled on the other end. wolfSPDM implements **both**
-directions — `CHUNK_SEND` for large outbound requests and `CHUNK_GET` for
-large inbound responses — in the clear and inside secured sessions, once both
+directions: `CHUNK_SEND` for large outbound requests and `CHUNK_GET` for
+large inbound responses, in the clear and inside secured sessions, once both
 sides negotiate `CHUNK_CAP`.
 
 This is what lets ML-DSA-87 and ML-KEM work over the wire: ML-DSA-87 signed
@@ -44,7 +44,7 @@ carries a multi-hundred-byte encapsulation key. See
 against the responder's negotiated `DataTransferSize` even when
 `WOLFSPDM_NO_CHUNK` is defined or `CHUNK_CAP` was not negotiated: a clear
 request larger than that limit is refused locally with
-`WOLFSPDM_E_BUFFER_SMALL` — wolfSPDM never emits an oversized, non-conformant
+`WOLFSPDM_E_BUFFER_SMALL`; wolfSPDM never emits an oversized, non-conformant
 message.
 
 ## Compile-time configuration
@@ -73,7 +73,7 @@ The configure summary prints `Chunking: yes|no`.
 
 ## References
 
-- DMTF DSP0274 1.4.0 — Sec. 10.27 (Large SPDM message transfer)
+- DMTF DSP0274 1.4.0: Sec. 10.27 (Large SPDM message transfer)
 - `ERROR(LargeResponse)` = error code `0x0F`; `CHUNK_SEND` = `0x85`,
   `CHUNK_GET` = `0x86`, `CHUNK_SEND_ACK` = `0x05`, `CHUNK_RESPONSE` = `0x06`;
   `CHUNK_CAP` = `0x00020000`

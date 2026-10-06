@@ -6,7 +6,7 @@ From `configure.ac`:
 
 | Option | Default | Defines | Effect |
 |--------|---------|---------|--------|
-| `--with-wolfssl=PATH` | system paths | — | Adds wolfSSL include/library search paths |
+| `--with-wolfssl=PATH` | system paths | None | Adds wolfSSL include/library search paths |
 | `--enable-debug` | off | `WOLFSPDM_DEBUG` | Debug output, `-g -O0` |
 | `--enable-dynamic-mem` | off | `WOLFSPDM_DYNAMIC_MEMORY` | Heap-allocated context, enables `wolfSPDM_New` |
 | `--disable-cert` | enabled | `WOLFSPDM_NO_CERT` | Drops the standard certificate-based requester |
@@ -17,8 +17,8 @@ From `configure.ac`:
 | `--disable-challenge` | enabled | `WOLFSPDM_NO_CHALLENGE` | Drops CHALLENGE |
 | `--disable-heartbeat` | enabled | `WOLFSPDM_NO_HEARTBEAT` | Drops HEARTBEAT |
 | `--disable-key-update` | enabled | `WOLFSPDM_NO_KEY_UPDATE` | Drops KEY_UPDATE |
-| `--disable-mldsa` | auto | `WOLFSPDM_NO_MLDSA` | Force ML-DSA off (default follows wolfSSL — see [[Post-Quantum ML-DSA]]) |
-| `--disable-mlkem` | auto | `WOLFSPDM_NO_MLKEM` | Force ML-KEM off (default follows wolfSSL — see [[Post-Quantum ML-KEM]]) |
+| `--disable-mldsa` | auto | `WOLFSPDM_NO_MLDSA` | Force ML-DSA off (default follows wolfSSL; see [[Post-Quantum ML-DSA]]) |
+| `--disable-mlkem` | auto | `WOLFSPDM_NO_MLKEM` | Force ML-KEM off (default follows wolfSSL; see [[Post-Quantum ML-KEM]]) |
 | `--enable-tcg` | off | `WOLFSPDM_TCG` | TCG SPDM binding (TPM transport) |
 | `--enable-nuvoton` | off | `WOLFSPDM_NUVOTON` | Nuvoton NPCT75x vendor commands (implies `--enable-tcg`) |
 | `--enable-nations` | off | `WOLFSPDM_NATIONS` | Nations NS350 vendor commands (implies `--enable-tcg` and `--enable-psk`) |
@@ -68,10 +68,10 @@ Defined in `wolfspdm/spdm.h` depending on build flags:
 - `WOLFSPDM_HAS_HEARTBEAT` *(not defined if `WOLFSPDM_NO_HEARTBEAT`)*
 - `WOLFSPDM_HAS_KEY_UPDATE` *(not defined if `WOLFSPDM_NO_KEY_UPDATE`)*
 - `WOLFSPDM_HAVE_MLDSA` *(defined when ML-DSA is built in; follows wolfSSL's
-  `WOLFSSL_HAVE_MLDSA`, suppress with `WOLFSPDM_NO_MLDSA`)* — see
+  `WOLFSSL_HAVE_MLDSA`, suppress with `WOLFSPDM_NO_MLDSA`)*; see
   [[Post-Quantum ML-DSA]]
 - `WOLFSPDM_HAVE_MLKEM` *(defined when ML-KEM is built in; follows wolfSSL's
-  `WOLFSSL_HAVE_MLKEM`, suppress with `WOLFSPDM_NO_MLKEM`)* — see
+  `WOLFSSL_HAVE_MLKEM`, suppress with `WOLFSPDM_NO_MLKEM`)*; see
   [[Post-Quantum ML-KEM]]. The advertised key-exchange methods are chosen at
   runtime with `wolfSPDM_SetKeyExchangePref(ctx, advDhe, kemMask)` (default:
   ECDHE + every ML-KEM set built in).
@@ -93,9 +93,8 @@ defaults grow when ML-DSA or ML-KEM is built in (all are overridable with
 | `WOLFSPDM_MAX_TRUSTED_CA` | `4096` | `4096` | `8192` |
 | `WOLFSPDM_MAX_TRANSCRIPT` | `4096` | `8192` | `16384` |
 
-Measured `sizeof(WOLFSPDM_CTX)` on arm64: ~19 KB classical, ~24 KB ML-KEM
-only, ~59 KB with ML-DSA, ~9.5 KB in the TPM profile (well under the
-corresponding `WOLFSPDM_CTX_STATIC_SIZE`).
+Each build's `sizeof(WOLFSPDM_CTX)` stays within the corresponding
+`WOLFSPDM_CTX_STATIC_SIZE` shown above.
 
 Other overridable size macros (`wolfspdm/spdm_types.h`):
 `WOLFSPDM_DATA_TRANSFER_SIZE` (default `WOLFSPDM_MAX_MSG_SIZE`, floor 42),

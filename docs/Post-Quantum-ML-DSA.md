@@ -37,7 +37,7 @@ chain link by link:
 - If a trusted root CA is configured (`wolfSPDM_SetTrustedCAs`), its SHA-384
   hash must match the chain header's `RootHash`, and the root itself signs
   the next certificate in the chain.
-- Each subsequent certificate must be signed by the one before it — either
+- Each subsequent certificate must be signed by the one before it: either
   ECDSA-SHA384 (`ECDSAk`), or pure ML-DSA (`wc_MlDsaKey_VerifyCtx` with an
   empty context) when the issuer carries an ML-DSA key.
 - The leaf key must match the negotiated signature algorithm: for ML-DSA, its
@@ -80,7 +80,7 @@ ML-DSA follows the linked wolfSSL automatically: it is enabled when wolfSSL
 reports `WOLFSSL_HAVE_MLDSA` and provides the `wc_MlDsaKey` context API
 (build wolfSSL with `--enable-mldsa`), the standard requester is built
 (not `WOLFSPDM_NO_CERT`), and `--disable-mldsa` was not passed. The
-capability is detected at configure time — wolfSPDM does not gate on a
+capability is detected at configure time; wolfSPDM does not gate on a
 wolfSSL version number.
 
 ```sh
@@ -100,15 +100,15 @@ The configure summary prints `ML-DSA: yes|no`.
 
 PQC signatures, public keys, and certificate chains are multi-kilobyte, so
 `WOLFSPDM_CTX_STATIC_SIZE` grows to 73728 bytes when ML-DSA is built in (32768
-classical, 40960 ML-KEM only — see [[Configuration and Macros]]). Measured
-`sizeof(WOLFSPDM_CTX)` on arm64 is roughly 59 KB with ML-DSA, well under that
-cap. ML-DSA-44 and ML-DSA-65 responses fit a single SPDM message at common
+classical, 40960 ML-KEM only; see [[Configuration and Macros]]). The measured
+`sizeof(WOLFSPDM_CTX)` stays well under that cap. ML-DSA-44 and ML-DSA-65
+responses fit a single SPDM message at common
 `DataTransferSize` values; ML-DSA-87 responses (sig 4627 B) typically exceed
 it, so the responder chunks them and wolfSPDM reassembles via
-`CHUNK_GET` — see [[Message Chunking]].
+`CHUNK_GET`. See [[Message Chunking]].
 
 ## References
 
-- DMTF DSP0274 1.4.0 — SPDM Specification (§15 SPDMsign, §15.5 ML-DSA, Tables 19/20)
-- NIST FIPS 204 — ML-DSA; FIPS 203 — ML-KEM
-- wolfSSL `wc_mldsa.h` — `wc_MlDsaKey_*` API
+- DMTF DSP0274 1.4.0: SPDM Specification (§15 SPDMsign, §15.5 ML-DSA, Tables 19/20)
+- NIST FIPS 204: ML-DSA; FIPS 203: ML-KEM
+- wolfSSL `wc_mldsa.h`: `wc_MlDsaKey_*` API

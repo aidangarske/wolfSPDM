@@ -6,7 +6,7 @@ alongside the classical ECDHE P-384 group so the responder selects one.
 ML-KEM rides the certificate flow, so it is only available when the standard
 requester is built (not `WOLFSPDM_NO_CERT`).
 
-ML-KEM in SPDM 1.4 is **standalone, not hybrid** — DSP0274 §23.5 states "key
+ML-KEM in SPDM 1.4 is **standalone, not hybrid**: DSP0274 §23.5 states "key
 encapsulation (ML-KEM) for session establishment. **No support for hybrid
 algorithms.**" When ML-KEM is negotiated it *replaces* the DHE group, and its
 decapsulated 32-byte shared secret feeds the existing key schedule in place of
@@ -18,7 +18,7 @@ post-quantum SPDM handshake**.
 1. The requester generates an ephemeral ML-KEM key pair and sends the
    **encapsulation key `ek`** as the `KEY_EXCHANGE` `ExchangeData` (replacing
    the 96-byte ECDHE X‖Y point). The ephemeral key lives in the context as a
-   union of `ecc_key` and `MlKemKey` (`ctx->ephemeral`) — only one is ever
+   union of `ecc_key` and `MlKemKey` (`ctx->ephemeral`); only one is ever
    live per session.
 2. The responder encapsulates, returning the **ciphertext `c`** as the
    `KEY_EXCHANGE_RSP` `ExchangeData` (alongside its signature and HMAC).
@@ -36,7 +36,7 @@ failure.
 In `NEGOTIATE_ALGORITHMS`, wolfSPDM advertises a `KEMAlg` `AlgStruct`
 (`AlgType = 0x07`, DSP0274 1.4 Table 24) with the ML-KEM sets the linked
 wolfSSL was built with, dual-stack alongside the DHE group. The responder
-selects **exactly one** key-exchange method — a DHE group **or** a KEM, never
+selects **exactly one** key-exchange method: a DHE group **or** a KEM, never
 both (no hybrid). wolfSPDM enforces that mutual exclusivity when parsing
 `ALGORITHMS`.
 
@@ -95,25 +95,25 @@ unchanged. Two size effects:
 - **Larger KEY_EXCHANGE request.** The `ek` (up to 1568 B for ML-KEM-1024)
   makes the request larger than the ~158 B classical ECDHE request. If it
   exceeds the negotiated `DataTransferSize`, wolfSPDM sends it with
-  `CHUNK_SEND` when the responder has negotiated `CHUNK_CAP` — see
+  `CHUNK_SEND` when the responder has negotiated `CHUNK_CAP`; see
   [[Message Chunking]]. Without chunking support on either side, a request
   that exceeds `DataTransferSize` is refused locally with
   `WOLFSPDM_E_BUFFER_SMALL` rather than sent oversized.
 - **Static context.** The ephemeral ML-KEM key lives in the context (a union
   with the classical `ecc_key`; only one is ever live), so ML-KEM-only builds
   use a larger `WOLFSPDM_CTX_STATIC_SIZE` (40960) than the classical profile
-  (32768) — see [[Configuration and Macros]]. A fully post-quantum
+  (32768); see [[Configuration and Macros]]. A fully post-quantum
   (ML-KEM + ML-DSA) build uses the ML-DSA budget (73728), which already
   covers it.
 
 When ML-KEM and ML-DSA are combined, an ML-DSA-87 signed response plus the
 ML-KEM ciphertext can exceed the `DataTransferSize`, so the responder chunks
-it and wolfSPDM reassembles via `CHUNK_GET` — the full-PQ path exercises
+it and wolfSPDM reassembles via `CHUNK_GET`; the full-PQ path exercises
 ML-KEM, ML-DSA, and chunking together.
 
 ## References
 
-- DMTF DSP0274 1.4.0 — §10.17.2 (ML-KEM scheme), §10.17.3 (message formats,
+- DMTF DSP0274 1.4.0: §10.17.2 (ML-KEM scheme), §10.17.3 (message formats,
   Table 77), §12.2 (KEM K/K′ computation), Table 24 (KEMAlg), §23.5 (no hybrid)
-- NIST FIPS 203 — ML-KEM
-- wolfSSL `wc_mlkem.h` — `wc_MlKemKey_*` API
+- NIST FIPS 203: ML-KEM
+- wolfSSL `wc_mlkem.h`: `wc_MlKemKey_*` API
