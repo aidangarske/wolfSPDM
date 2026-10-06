@@ -19,13 +19,13 @@ otherwise; failures are negative error codes from `wolfspdm/spdm_error.h`.
 
 - `wolfSPDM_SetIO`
 - `wolfSPDM_SetMode` / `wolfSPDM_GetMode` *(`WOLFSPDM_MODE_AUTO` / `_NUVOTON` / `_NATIONS` / `_NATIONS_PSK`)*
-- `wolfSPDM_SetResponderPubKey` — pin the responder key (96-byte P-384 X‖Y) for cert-less operation
-- `wolfSPDM_SetRequesterKeyPair` *(`WOLFSPDM_MUTUAL_AUTH` builds — TCG or TPM profile)*
-- `wolfSPDM_SetMaxVersion` — cap the negotiated version (0x12-0x14)
-- `wolfSPDM_SetRequesterSessionId` — rejects `0x0000`, `0xFFFF`, and low bytes `0x10`-`0x1F`
+- `wolfSPDM_SetResponderPubKey`: pin the responder key (96-byte P-384 X‖Y) for cert-less operation
+- `wolfSPDM_SetRequesterKeyPair` *(`WOLFSPDM_MUTUAL_AUTH` builds, TCG or TPM profile)*
+- `wolfSPDM_SetMaxVersion`: cap the negotiated version (0x12-0x14)
+- `wolfSPDM_SetRequesterSessionId`: rejects `0x0000`, `0xFFFF`, and low bytes `0x10`-`0x1F`
 - `wolfSPDM_SetTrustedCAs` *(not with `WOLFSPDM_NO_CERT`)*
 - `wolfSPDM_AllowUntrustedCerts` *(not with `WOLFSPDM_NO_CERT`)*
-- `wolfSPDM_SetKeyExchangePref` *(not with `WOLFSPDM_NO_CERT`)* — see [[Post-Quantum ML-KEM]]
+- `wolfSPDM_SetKeyExchangePref` *(not with `WOLFSPDM_NO_CERT`)*; see [[Post-Quantum ML-KEM]]
 - `wolfSPDM_SetDebug`
 
 ## Session establishment and state
@@ -36,7 +36,7 @@ otherwise; failures are negative error codes from `wolfspdm/spdm_error.h`.
 - `wolfSPDM_GetSessionId`
 - `wolfSPDM_GetNegotiatedVersion`
 - `wolfSPDM_GetVersion_Negotiated` *(older name for `wolfSPDM_GetNegotiatedVersion`)*
-- `wolfSPDM_GetLastPeerError` — Param1 of the last SPDM ERROR, 0 if none
+- `wolfSPDM_GetLastPeerError`: Param1 of the last SPDM ERROR, 0 if none
 - `wolfSPDM_GetConnectionHandle` / `wolfSPDM_GetFipsIndicator` *(`WOLFSPDM_TCG` only)*
 
 ## Fine-grained handshake (standard requester)
@@ -101,7 +101,7 @@ otherwise; failures are negative error codes from `wolfspdm/spdm_error.h`.
 - `wolfSPDM_RespInit` / `wolfSPDM_RespFree` / `wolfSPDM_RespGetCtxSize`
 - `wolfSPDM_RespSetMode`, `wolfSPDM_RespSetPSK`, `wolfSPDM_RespSetIdentityKey`
 - `wolfSPDM_RespSetTpmCallback`, `wolfSPDM_RespSetDebug`
-- `wolfSPDM_RespHandleMessage` — returns `WOLFSPDM_E_FRAMING` on a non-TCG
+- `wolfSPDM_RespHandleMessage`: returns `WOLFSPDM_E_FRAMING` on a non-TCG
   inbound frame; callers must drop the connection rather than fall through to
   the TPM parser
 - `wolfSPDM_RespReset`, `wolfSPDM_RespIsLocked`, `wolfSPDM_RespIsSessionActive`
@@ -121,6 +121,6 @@ Defined in `wolfspdm/spdm_error.h`:
 - `WOLFSPDM_E_IO_FAIL`, `WOLFSPDM_E_TIMEOUT`, `WOLFSPDM_E_PEER_ERROR`, `WOLFSPDM_E_SEQUENCE`
 - `WOLFSPDM_E_NOT_CONNECTED`, `WOLFSPDM_E_ALREADY_INIT`, `WOLFSPDM_E_NO_MEMORY`
 - `WOLFSPDM_E_SESSION_INVALID`, `WOLFSPDM_E_KEY_EXCHANGE`, `WOLFSPDM_E_NOT_AVAILABLE`
-- `WOLFSPDM_E_FRAMING` — frame did not parse (e.g. plaintext TPM2 while SPDM mode is active)
+- `WOLFSPDM_E_FRAMING`: frame did not parse (e.g. plaintext TPM2 while SPDM mode is active)
 - `WOLFSPDM_E_NOT_IMPL`, `WOLFSPDM_E_CERT_FAIL`, `WOLFSPDM_E_CERT_PARSE`
 - `WOLFSPDM_E_KEY_UPDATE`, `WOLFSPDM_E_MEASUREMENT`, `WOLFSPDM_E_CHALLENGE`, `WOLFSPDM_E_CHUNK`

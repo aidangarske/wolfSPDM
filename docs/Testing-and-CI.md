@@ -44,7 +44,7 @@ Documented workflows include:
 - wolfTPM downstream: wolfTPM master built with this wolfSPDM in its 14 SPDM
   configurations, its SPDM unit tests, and the fwTPM TCG and PSK end-to-end
   runs; the standard requester symbols must stay out of `libwolftpm`
-- SPDM Emulator PQC Test — wolfSSL master + spdm-emu (OpenSSL backend) on the
+- SPDM Emulator PQC Test: wolfSSL master + spdm-emu (OpenSSL backend) on the
   full x64 + aarch64 matrix. Builds wolfSPDM ML-KEM-only as well as the combined
   config, then runs over the wire: ML-DSA-44/65/87 (signatures), ML-KEM-512/768/1024
   (key exchange), and a **fully post-quantum** leg (ML-KEM-768 + ML-DSA-65/87) for
@@ -75,7 +75,7 @@ See `.github/workflows/README.md` for workflow inventory details.
   unchunked request above the responder's DataTransferSize.
 - **Over-the-wire (CI):** ML-KEM-512/768/1024 against spdm-emu (`--dhe NONE
   --kem ML_KEM_*`), and a **fully post-quantum** leg pairing ML-KEM-768 with
-  ML-DSA-65/87 — the ML-DSA-87 case also exercises chunking, so ML-KEM + ML-DSA +
+  ML-DSA-65/87; the ML-DSA-87 case also exercises chunking, so ML-KEM + ML-DSA +
   CHUNK_GET reassembly all run in a single handshake.
 - **Config coverage (CI):** an ML-KEM-only build (`--disable-mldsa
   --enable-mlkem`) exercises the ML-KEM-only `WOLFSPDM_CTX_STATIC_SIZE` budget.

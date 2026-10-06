@@ -32,19 +32,19 @@ signature over it; an unsigned request adds itself to the hash and leaves the
 run open for the next call.
 
 Signature verification (measurements and `CHALLENGE_AUTH`) uses whichever
-asymmetric algorithm was negotiated — ECDSA P-384 or, on SPDM 1.4 with ML-DSA
+asymmetric algorithm was negotiated: ECDSA P-384 or, on SPDM 1.4 with ML-DSA
 built in, ML-DSA-44/65/87. See [[Post-Quantum ML-DSA]].
 
 Result access:
 - `wolfSPDM_GetMeasurementCount`
-- `wolfSPDM_GetMeasurementBlock` — `valueSz` is in/out; `measType` is the DMTF
+- `wolfSPDM_GetMeasurementBlock`: `valueSz` is in/out; `measType` is the DMTF
   value type, 0 for raw (non-DMTF-spec) blocks
 
 Relevant return codes:
 - `WOLFSPDM_SUCCESS`
-- `WOLFSPDM_E_CAPS_MISMATCH` — signed/unsigned measurement capability not negotiated
-- `WOLFSPDM_E_MEASUREMENT` — malformed or inconsistent `MEASUREMENTS` response
-- `WOLFSPDM_E_BAD_SIGNATURE` / `WOLFSPDM_E_CRYPTO_FAIL` — signature length mismatch or verification failure
+- `WOLFSPDM_E_CAPS_MISMATCH`: signed/unsigned measurement capability not negotiated
+- `WOLFSPDM_E_MEASUREMENT`: malformed or inconsistent `MEASUREMENTS` response
+- `WOLFSPDM_E_BAD_SIGNATURE` / `WOLFSPDM_E_CRYPTO_FAIL`: signature length mismatch or verification failure
 
 ## Sessionless challenge attestation (`CHALLENGE_AUTH`)
 
@@ -62,8 +62,7 @@ Prerequisite state (checked, returns `WOLFSPDM_E_BAD_STATE` otherwise):
 
 **M1 running hash.** M1 starts at the VCA transcript when the certificate
 chain is fetched and accumulates through `CHALLENGE`/`CHALLENGE_AUTH`.
-`wolfSPDM_KeyExchange` restarts M1 at the VCA before building its request —
-`KEY_EXCHANGE` drops `GET_DIGESTS`/`GET_CERTIFICATE` from its own M1 — and a
+`wolfSPDM_KeyExchange` restarts M1 at the VCA before building its request (`KEY_EXCHANGE` drops `GET_DIGESTS`/`GET_CERTIFICATE` from its own M1) and a
 successful `CHALLENGE` restarts M1 again afterward, so the next M1 is the VCA
 plus only the messages that follow.
 
@@ -72,9 +71,9 @@ plus only the messages that follow.
 
 Relevant return codes:
 - `WOLFSPDM_E_BAD_STATE`, `WOLFSPDM_E_CAPS_MISMATCH`
-- `WOLFSPDM_E_CERT_FAIL` — chain validation failed
-- `WOLFSPDM_E_CHALLENGE` — malformed or mismatched `CHALLENGE_AUTH`
-- `WOLFSPDM_E_BAD_SIGNATURE` / `WOLFSPDM_E_CRYPTO_FAIL` — signature failure
+- `WOLFSPDM_E_CERT_FAIL`: chain validation failed
+- `WOLFSPDM_E_CHALLENGE`: malformed or mismatched `CHALLENGE_AUTH`
+- `WOLFSPDM_E_BAD_SIGNATURE` / `WOLFSPDM_E_CRYPTO_FAIL`: signature failure
 
 ## Signature context strings
 
