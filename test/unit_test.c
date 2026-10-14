@@ -175,11 +175,15 @@ static int test_context_set_io(void)
 
     printf("test_context_set_io...\n");
 
+    ASSERT_EQ(wolfSPDM_HasIO(NULL), 0, "NULL ctx has no IO");
+    ASSERT_EQ(wolfSPDM_HasIO(ctx), 0, "fresh ctx has no IO");
     ASSERT_SUCCESS(wolfSPDM_SetIO(ctx, dummy_io_cb, &dummy));
     ASSERT_EQ(ctx->ioCb, dummy_io_cb, "IO callback not set");
     ASSERT_EQ(ctx->ioUserCtx, &dummy, "User context not set");
+    ASSERT_EQ(wolfSPDM_HasIO(ctx), 1, "IO must be reported after SetIO");
     ASSERT_EQ(wolfSPDM_SetIO(ctx, NULL, NULL), WOLFSPDM_E_INVALID_ARG,
         "NULL callback should fail");
+    ASSERT_EQ(wolfSPDM_HasIO(ctx), 1, "a refused SetIO must not clear IO");
 
     TEST_CTX_FREE();
     TEST_PASS();
@@ -1201,6 +1205,159 @@ static int test_nations_psk_message_format(void)
     TEST_PASS();
 }
 #endif /* WOLFSPDM_NATIONS */
+
+#ifdef WOLFSPDM_INFINEON
+/* Mock responder for the Infineon vendor commands. It records the VdCode and
+ * payload the requester sent so a test can assert the wire form, and replies
+ * with a caller-supplied payload so short and unexpected GET_STS_ responses
+ * are reachable without a part. */
+typedef struct INFINEON_IO_CTX {
+    const byte* rspPayload;
+    word32      rspPayloadSz;
+    int         failIo;
+    char        reqVdCode[WOLFSPDM_VDCODE_LEN + 1];
+    byte        reqPayload[160];
+    word32      reqPayloadSz;
+    int         calls;
+} INFINEON_IO_CTX;
+
+static int infineon_io_cb(WOLFSPDM_CTX* ctx, const byte* txBuf,
+    word32 txSz, byte* rxBuf, word32* rxSz, void* userCtx)
+{
+    INFINEON_IO_CTX* ioCtx = (INFINEON_IO_CTX*)userCtx;
+    byte spdmRsp[WOLFSPDM_VENDOR_BUF_SZ];
+    word32 totalSz;
+    int spdmRspSz;
+
+    if (ctx == NULL || rxBuf == NULL || rxSz == NULL || ioCtx == NULL) {
+        return -1;
+    }
+    ioCtx->calls++;
+    if (ioCtx->failIo) {
+        return -1;
+    }
+
+    /* The requester wraps every clear message in a TCG header. */
+    if (txSz <= WOLFSPDM_TCG_HEADER_SIZE) {
+        return -1;
+    }
+    ioCtx->reqPayloadSz = sizeof(ioCtx->reqPayload);
+    if (wolfSPDM_ParseVendorDefined(txBuf + WOLFSPDM_TCG_HEADER_SIZE,
+            txSz - WOLFSPDM_TCG_HEADER_SIZE, ioCtx->reqVdCode,
+            ioCtx->reqPayload, &ioCtx->reqPayloadSz) < 0) {
+        return -1;
+    }
+
+    spdmRspSz = wolfSPDM_BuildVendorDefined(SPDM_VERSION_13,
+        ioCtx->reqVdCode, ioCtx->rspPayload, ioCtx->rspPayloadSz,
+        spdmRsp, sizeof(spdmRsp));
+    if (spdmRspSz < 0) {
+        return -1;
+    }
+    spdmRsp[1] = SPDM_TEST_VENDOR_DEFINED_RSP;
+
+    totalSz = WOLFSPDM_TCG_HEADER_SIZE + (word32)spdmRspSz;
+    if (*rxSz < totalSz) {
+        return -1;
+    }
+    wolfSPDM_WriteTcgHeader(rxBuf, WOLFSPDM_TCG_TAG_CLEAR, totalSz,
+        ctx->connectionHandle, ctx->fipsIndicator);
+    XMEMCPY(rxBuf + WOLFSPDM_TCG_HEADER_SIZE, spdmRsp, (word32)spdmRspSz);
+    *rxSz = totalSz;
+
+    return 0;
+}
+
+static int test_infineon_get_status(void)
+{
+    /* TCG Table 15: SpecMajor, SpecMinor, PSKSet, SPDMOnly */
+    static const byte stsClear[4]   = { 0x01, 0x00, 0x00, 0x00 };
+    static const byte stsSet[4]     = { 0x01, 0x00, 0x01, 0x01 };
+    static const byte stsPending[4] = { 0x01, 0x00, 0x01, 0x81 };
+    static const byte stsShort[3]   = { 0x01, 0x00, 0x01 };
+    WOLFSPDM_INFINEON_STATUS status;
+    INFINEON_IO_CTX ioCtx;
+    int rc;
+    TEST_CTX_SETUP();
+
+    printf("test_infineon_get_status...\n");
+
+    XMEMSET(&ioCtx, 0, sizeof(ioCtx));
+    ASSERT_SUCCESS(wolfSPDM_SetMode(ctx, WOLFSPDM_MODE_TCG));
+    ASSERT_SUCCESS(wolfSPDM_SetIO(ctx, infineon_io_cb, &ioCtx));
+
+    rc = wolfSPDM_Infineon_GetStatus(NULL, &status);
+    ASSERT_EQ(rc, WOLFSPDM_E_INVALID_ARG, "NULL ctx must be refused");
+    rc = wolfSPDM_Infineon_GetStatus(ctx, NULL);
+    ASSERT_EQ(rc, WOLFSPDM_E_INVALID_ARG, "NULL status must be refused");
+
+    ioCtx.rspPayload = stsClear;
+    ioCtx.rspPayloadSz = sizeof(stsClear);
+    ASSERT_SUCCESS(wolfSPDM_Infineon_GetStatus(ctx, &status));
+    ASSERT_EQ(XMEMCMP(ioCtx.reqVdCode, WOLFSPDM_VDCODE_GET_STS,
+        WOLFSPDM_VDCODE_LEN), 0, "request VdCode must be GET_STS_");
+    ASSERT_EQ(ioCtx.reqPayloadSz, 0, "GET_STS_ carries no payload");
+    ASSERT_EQ(status.pskProvisioned, 0, "PSKSet 0 means not provisioned");
+    ASSERT_EQ(status.spdmOnlyLocked, 0, "SPDMOnly 0 means unlocked");
+    ASSERT_EQ(status.spdmOnlyPending, 0, "SPDMOnly 0 is not pending");
+
+    ioCtx.rspPayload = stsSet;
+    ioCtx.rspPayloadSz = sizeof(stsSet);
+    ASSERT_SUCCESS(wolfSPDM_Infineon_GetStatus(ctx, &status));
+    ASSERT_EQ(status.pskProvisioned, 1, "PSKSet 1 means provisioned");
+    ASSERT_EQ(status.spdmOnlyLocked, 1, "SPDMOnly 1 means locked");
+    ASSERT_EQ(status.spdmOnlyPending, 0, "SPDMOnly 1 is not pending");
+
+    /* 0x81 is locked AND pending disable, not a third state */
+    ioCtx.rspPayload = stsPending;
+    ioCtx.rspPayloadSz = sizeof(stsPending);
+    ASSERT_SUCCESS(wolfSPDM_Infineon_GetStatus(ctx, &status));
+    ASSERT_EQ(status.spdmOnlyLocked, 1, "SPDMOnly 0x81 is still locked");
+    ASSERT_EQ(status.spdmOnlyPending, 1, "SPDMOnly 0x81 is pending");
+
+    /* A truncated report must not be read as a cleared status */
+    XMEMSET(&status, 0xFF, sizeof(status));
+    ioCtx.rspPayload = stsShort;
+    ioCtx.rspPayloadSz = sizeof(stsShort);
+    rc = wolfSPDM_Infineon_GetStatus(ctx, &status);
+    ASSERT_EQ(rc, WOLFSPDM_E_FRAMING, "short GET_STS_ must be refused");
+    ASSERT_EQ(status.pskProvisioned, 0, "status must be cleared on failure");
+    ASSERT_EQ(status.spdmOnlyLocked, 0, "status must be cleared on failure");
+
+    ioCtx.failIo = 1;
+    rc = wolfSPDM_Infineon_GetStatus(ctx, &status);
+    ASSERT_EQ(rc, WOLFSPDM_E_IO_FAIL, "transport failure must propagate");
+
+    TEST_CTX_FREE();
+    TEST_PASS();
+}
+
+static int test_infineon_set_only_mode(void)
+{
+    INFINEON_IO_CTX ioCtx;
+    int rc;
+    TEST_CTX_SETUP();
+
+    printf("test_infineon_set_only_mode...\n");
+
+    XMEMSET(&ioCtx, 0, sizeof(ioCtx));
+    ASSERT_SUCCESS(wolfSPDM_SetMode(ctx, WOLFSPDM_MODE_TCG));
+    ASSERT_SUCCESS(wolfSPDM_SetIO(ctx, infineon_io_cb, &ioCtx));
+
+    rc = wolfSPDM_Infineon_SetOnlyMode(NULL, 1);
+    ASSERT_EQ(rc, WOLFSPDM_E_INVALID_ARG, "NULL ctx must be refused");
+
+    /* SPDMONLY travels in a secured record, so it needs a session first */
+    rc = wolfSPDM_Infineon_SetOnlyMode(ctx, 1);
+    ASSERT_EQ(rc, WOLFSPDM_E_NOT_CONNECTED,
+        "SPDMONLY before a session must be refused");
+    ASSERT_EQ(ioCtx.calls, 0, "nothing may go on the wire unconnected");
+
+    TEST_CTX_FREE();
+    TEST_PASS();
+}
+
+#endif /* WOLFSPDM_INFINEON */
 
 #ifndef WOLFSPDM_NO_MCTP
 static int test_decrypt_overflow(void)
@@ -2364,6 +2521,20 @@ static int test_build_key_exchange_format(void)
 }
 #endif
 
+#ifdef WOLFSPDM_TCG
+/* The plain TCG binding block, asserted whole rather than by length alone: a
+ * part that follows the binding rejects the standard version list, and on
+ * that path the only symptom is an InvalidRequest from the device. */
+static const byte tcgKeyExOpaque[] = {
+    0x10, 0x00,             /* OpaqueLength = 16 */
+    0x01, 0x00, 0x00, 0x00, /* one element */
+    0x00, 0x00, 0x05, 0x00, /* DMTF, no vendor ID */
+    0x01, 0x01, 0x01,       /* SMDataVersion, ID, count */
+    0x00, 0x10,             /* secured message version 1.0 */
+    0x00, 0x00, 0x00        /* alignment */
+};
+#endif
+
 static int test_build_key_exchange_mode_opaque(void)
 {
     byte buf[256];
@@ -2397,6 +2568,15 @@ static int test_build_key_exchange_mode_opaque(void)
     ASSERT_EQ(buf[3], 0xFF, "Nations SlotID must be 0xFF");
     ASSERT_EQ(bufSz, (word32)(136 + 2), "Nations KEY_EXCHANGE size");
     ASSERT_EQ(buf[136] | buf[137], 0, "Nations OpaqueLength must be 0");
+#endif
+#ifdef WOLFSPDM_TCG
+    ASSERT_SUCCESS(wolfSPDM_SetMode(ctx, WOLFSPDM_MODE_TCG));
+    bufSz = sizeof(buf);
+    ASSERT_SUCCESS(wolfSPDM_BuildKeyExchange(ctx, buf, &bufSz));
+    ASSERT_EQ(buf[3], 0xFF, "TCG SlotID must be 0xFF");
+    ASSERT_EQ(bufSz, (word32)(136 + 18), "TCG KEY_EXCHANGE size");
+    ASSERT_EQ(XMEMCMP(buf + 136, tcgKeyExOpaque, sizeof(tcgKeyExOpaque)), 0,
+        "TCG OpaqueData must be the 18-byte binding block");
 #endif
 
     TEST_CTX_FREE();
@@ -3253,6 +3433,73 @@ static int test_responder_identity_roundtrip(void)
     TEST_ASSERT(rc == WOLFSPDM_SUCCESS, "identity ConnectTCG failed");
     ASSERT_EQ(wolfSPDM_IsConnected(&req), 1, "Requester not connected");
 
+    XMEMSET(cmd, 0, sizeof(cmd));
+    cmd[0] = 0x80; cmd[1] = 0x01;
+    cmd[5] = 0x0A;
+    cmd[8] = 0x01; cmd[9] = 0x44;
+    rc = wolfSPDM_TCG_VendorCmdSecured(&req, WOLFSPDM_VDCODE_TPM2_CMD,
+        cmd, sizeof(cmd));
+    TEST_ASSERT(rc == WOLFSPDM_SUCCESS, "TPM2_CMD passthrough failed");
+    ASSERT_EQ(g_tpmCbInvocations, 1, "TPM stub must have run once");
+
+    ASSERT_SUCCESS(wolfSPDM_Disconnect(&req));
+
+    wc_ForceZero(idPriv, sizeof(idPriv));
+    wolfSPDM_RespFree(rctx);
+    wolfSPDM_Free(&req);
+    TEST_PASS();
+}
+
+/* The same handshake reached through wolfSPDM_Connect in WOLFSPDM_MODE_TCG,
+ * which is the mode a part with no vendor adapter uses. The roundtrip above
+ * names the Nuvoton mode and calls wolfSPDM_ConnectTCG directly, so neither
+ * the dispatch nor the adapter-less path is covered by it. */
+static int test_tcg_mode_connect_roundtrip(void)
+{
+    WOLFSPDM_CTX req;
+    byte rctxBuf[WOLFSPDM_RESP_CTX_STATIC_SIZE];
+    WOLFSPDM_RESP_CTX* rctx = (WOLFSPDM_RESP_CTX*)rctxBuf;
+    ecc_key idKey;
+    byte idPriv[WOLFSPDM_ECC_KEY_SIZE];
+    byte idPubX[WOLFSPDM_ECC_KEY_SIZE];
+    byte idPubY[WOLFSPDM_ECC_KEY_SIZE];
+    byte idPub[WOLFSPDM_ECC_POINT_SIZE];
+    byte cmd[10];
+    word32 idPrivSz = sizeof(idPriv);
+    word32 idPubXSz = sizeof(idPubX);
+    word32 idPubYSz = sizeof(idPubY);
+    int rc;
+
+    printf("test_tcg_mode_connect_roundtrip...\n");
+
+    ASSERT_SUCCESS(wolfSPDM_Init(&req));
+    ASSERT_SUCCESS(wolfSPDM_RespInit(rctx));
+    ASSERT_SUCCESS(wc_ecc_init(&idKey));
+    ASSERT_SUCCESS(wc_ecc_make_key(&req.rng, WOLFSPDM_ECC_KEY_SIZE, &idKey));
+    ASSERT_SUCCESS(wc_ecc_export_private_only(&idKey, idPriv, &idPrivSz));
+    ASSERT_SUCCESS(wc_ecc_export_public_raw(&idKey, idPubX, &idPubXSz,
+        idPubY, &idPubYSz));
+    wc_ecc_free(&idKey);
+    XMEMCPY(idPub, idPubX, sizeof(idPubX));
+    XMEMCPY(idPub + sizeof(idPubX), idPubY, sizeof(idPubY));
+
+    ASSERT_SUCCESS(wolfSPDM_SetMode(&req, WOLFSPDM_MODE_TCG));
+    ASSERT_EQ(wolfSPDM_GetMode(&req), WOLFSPDM_MODE_TCG, "mode must be TCG");
+    ASSERT_SUCCESS(wolfSPDM_SetResponderPubKey(&req, idPub, sizeof(idPub)));
+    ASSERT_SUCCESS(wolfSPDM_RespSetMode(rctx, 1, 0));
+    ASSERT_SUCCESS(wolfSPDM_RespSetIdentityKey(rctx, idPriv, sizeof(idPriv),
+        idPub, sizeof(idPub)));
+    g_tpmCbInvocations = 0;
+    ASSERT_SUCCESS(wolfSPDM_RespSetTpmCallback(rctx, responder_tpm_stub,
+        NULL));
+    ASSERT_SUCCESS(wolfSPDM_SetIO(&req, requester_to_responder_iocb, rctx));
+
+    /* Dispatch, not wolfSPDM_ConnectTCG: TCG mode must reach the TCG flow */
+    rc = wolfSPDM_Connect(&req);
+    TEST_ASSERT(rc == WOLFSPDM_SUCCESS, "TCG-mode Connect failed");
+    ASSERT_EQ(wolfSPDM_IsConnected(&req), 1, "Requester not connected");
+
+    /* One encrypted command over the session the handshake produced */
     XMEMSET(cmd, 0, sizeof(cmd));
     cmd[0] = 0x80; cmd[1] = 0x01;
     cmd[5] = 0x0A;
@@ -5419,6 +5666,10 @@ int main(void)
     test_nations_psk_kdf();
     test_nations_psk_message_format();
 #endif
+#ifdef WOLFSPDM_INFINEON
+    test_infineon_get_status();
+    test_infineon_set_only_mode();
+#endif
 #ifndef WOLFSPDM_NO_MCTP
     test_decrypt_overflow();
 #endif
@@ -5582,6 +5833,7 @@ int main(void)
     test_responder_configured_psk();
 #endif
     test_responder_identity_roundtrip();
+    test_tcg_mode_connect_roundtrip();
 #endif
 #if defined(WOLFSPDM_PSK) && defined(WOLFSPDM_TCG)
     test_responder_psk_roundtrip();

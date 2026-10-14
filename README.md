@@ -2,6 +2,16 @@
 
 wolfSPDM is a lightweight C library implementing [SPDM 1.2 / 1.3 / 1.4](https://www.dmtf.org/sites/default/files/standards/documents/DSP0274_1.4.0.pdf) and [Secured Messages over MCTP (DSP0277)](https://www.dmtf.org/sites/default/files/standards/documents/DSP0277_1.2.0.pdf), using [wolfSSL](https://www.wolfssl.com/) as the crypto backend. It provides both the **standard DMTF SPDM requester** for embedded use and the **TCG-spec TPM SPDM binding** that powers wolfTPM, tested end-to-end against the DMTF [spdm-emu](https://github.com/DMTF/spdm-emu) emulator.
 
+## Supported TPM hardware
+
+| Part | Configure | Session type | Vendor commands on top of the binding |
+|---|---|---|---|
+| Nuvoton NPCT75x | `--enable-nuvoton` | Identity key | `wolfSPDM_Nuvoton_*` |
+| Nations NS350 | `--enable-nations` | Identity key, PSK | `wolfSPDM_Nations_*`, including PSK provisioning |
+| Infineon OPTIGA SLB9678 | `--enable-infineon` | Identity key | `wolfSPDM_Infineon_GetStatus`, `wolfSPDM_Infineon_SetOnlyMode` |
+
+Every one of these speaks the same TCG TPM SPDM binding, and a part that implements that binding with no vendor extensions needs only `--enable-tcg`. The vendor switch adds that part's own commands on top; it is not what makes the session work. Build details and the per-part notes are below.
+
 ## Standard and TCG TPM SPDM
 
 wolfSPDM is one SPDM implementation with a shared core: version, capability, and algorithm negotiation, key exchange, secured sessions, transcript, and crypto. The standard DMTF requester and the TCG TPM binding are closely related modes on that core, selected by build switches:
@@ -23,7 +33,20 @@ make
 make
 ```
 
-Add `--disable-mctp` for a TPM-only build that drops the standard DMTF requester entirely, and `--enable-nuvoton` / `--enable-nations` for vendor TPM commands. Each piece is independent, so you can compose exactly what you want: `--enable-tcg` alone gives just the TCG binding (PSK and the responder stay off until you enable them).
+Add `--disable-mctp` for a TPM-only build that drops the standard DMTF requester entirely, and `--enable-nuvoton` / `--enable-nations` / `--enable-infineon` for vendor TPM commands. Each piece is independent, so you can compose exactly what you want: `--enable-tcg` alone gives just the TCG binding (PSK and the responder stay off until you enable them).
+
+### Infineon OPTIGA SLB9678
+
+The SLB9678 is the part that needs the least from this library. Its identity handshake is the plain TCG binding, so `WOLFSPDM_MODE_TCG` connects to it with no vendor adapter at all:
+
+```bash
+./configure --enable-tcg --enable-infineon
+make
+```
+
+`--enable-infineon` adds only the two vendor commands above; drop it and `wolfSPDM_Connect` in `WOLFSPDM_MODE_TCG` still completes the handshake. The mode uses Algorithm Set B like every other TCG session: ECDHE and ECDSA P-384, SHA-384, AES-256-GCM. Trust comes from pinning the responder's P-384 public key with `wolfSPDM_SetResponderPubKey`, 96 bytes of X followed by Y, since the part presents a raw key rather than a certificate chain. Note that `WOLFSPDM_MODE_TCG` has to be set explicitly: `WOLFSPDM_MODE_AUTO` selects the standard DMTF requester, not the TCG binding.
+
+Asymmetric sessions need firmware advertising `KEY_EX_CAP` and `PUB_KEY_ID_CAP`. Do not infer that from the part number: read the capabilities before relying on the mode.
 
 ## Main Features
 
@@ -89,7 +112,7 @@ make check
 | `--disable-meas` / `--disable-challenge` | Compile out GET_MEASUREMENTS / CHALLENGE (default: enabled) |
 | `--disable-heartbeat` / `--disable-key-update` | Compile out HEARTBEAT / KEY_UPDATE (default: enabled) |
 | `--disable-app-data` | Compile out `SendData`/`ReceiveData` MCTP application messages and `Encrypt`/`DecryptMessage` (default: enabled) |
-| `--enable-tcg` / `--enable-nuvoton` / `--enable-nations` / `--enable-psk` / `--enable-responder` | TPM side: TCG SPDM binding, vendor commands, PSK and the responder (default: all disabled, so a standalone build carries none of it) |
+| `--enable-tcg` / `--enable-nuvoton` / `--enable-nations` / `--enable-infineon` / `--enable-psk` / `--enable-responder` | TPM side: TCG SPDM binding, vendor commands, PSK and the responder (default: all disabled, so a standalone build carries none of it) |
 | `--disable-mctp` | Pure TCG build: drops MCTP secured messages and the whole standard requester (needs `--enable-tcg` or a vendor) |
 | `--with-wolfssl=PATH` | wolfSSL installation path |
 | `CFLAGS=-DWOLFSPDM_DATA_TRANSFER_SIZE=N` | Largest single SPDM message, 42 to 4096 (default 4096). Smaller values shrink the per-message transport buffers; larger messages then travel in CHUNK_SEND/CHUNK_GET pieces when the responder supports chunking |

@@ -47,7 +47,7 @@ make check
 | `--disable-meas` / `--disable-challenge` | Disables GET_MEASUREMENTS / CHALLENGE |
 | `--disable-heartbeat` / `--disable-key-update` | Disables HEARTBEAT / KEY_UPDATE |
 | `--disable-mldsa` / `--disable-mlkem` | Forces ML-DSA / ML-KEM off (default auto-follows wolfSSL) |
-| `--enable-tcg` / `--enable-nuvoton` / `--enable-nations` / `--enable-psk` / `--enable-responder` | TPM side: TCG SPDM binding, vendor commands, PSK, responder (default: all off) |
+| `--enable-tcg` / `--enable-nuvoton` / `--enable-nations` / `--enable-infineon` / `--enable-psk` / `--enable-responder` | TPM side: TCG SPDM binding, vendor commands, PSK, responder (default: all off) |
 
 See [[Configuration and Macros]] for the full option-to-macro mapping and
 their implications.

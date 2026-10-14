@@ -258,12 +258,18 @@ AC_ARG_ENABLE([nations],
     [enable_nations=$enableval],
     [enable_nations=no])
 
+AC_ARG_ENABLE([infineon],
+    [AS_HELP_STRING([--enable-infineon], [Enable Infineon OPTIGA SLB9678 SPDM vendor commands (default: disabled)])],
+    [enable_infineon=$enableval],
+    [enable_infineon=no])
+
 AC_ARG_ENABLE([responder],
     [AS_HELP_STRING([--enable-responder], [Enable the SPDM responder (default: disabled)])],
     [enable_responder=$enableval],
     [enable_responder=no])
 
-if test "x$enable_nuvoton" = "xyes" || test "x$enable_nations" = "xyes"; then
+if test "x$enable_nuvoton" = "xyes" || test "x$enable_nations" = "xyes" \
+        || test "x$enable_infineon" = "xyes"; then
     enable_tcg=yes
 fi
 if test "x$enable_nations" = "xyes"; then
@@ -294,6 +300,9 @@ fi
 if test "x$enable_nations" = "xyes"; then
     AC_DEFINE([WOLFSPDM_NATIONS], [1], [Enable Nations SPDM vendor commands])
 fi
+if test "x$enable_infineon" = "xyes"; then
+    AC_DEFINE([WOLFSPDM_INFINEON], [1], [Enable Infineon SPDM vendor commands])
+fi
 if test "x$enable_responder" = "xyes"; then
     AC_DEFINE([WOLFSPDM_RESPONDER], [1], [Enable the SPDM responder])
 fi
@@ -302,6 +311,7 @@ AM_CONDITIONAL([BUILD_TCG], [test "x$enable_tcg" = "xyes"])
 AM_CONDITIONAL([BUILD_PSK], [test "x$enable_psk" = "xyes"])
 AM_CONDITIONAL([BUILD_NUVOTON], [test "x$enable_nuvoton" = "xyes"])
 AM_CONDITIONAL([BUILD_NATIONS], [test "x$enable_nations" = "xyes"])
+AM_CONDITIONAL([BUILD_INFINEON], [test "x$enable_infineon" = "xyes"])
 AM_CONDITIONAL([BUILD_RESPONDER], [test "x$enable_responder" = "xyes"])
 
 # Output files
@@ -334,6 +344,7 @@ echo "  TCG:         $enable_tcg"
 echo "  PSK:         $enable_psk"
 echo "  Nuvoton:     $enable_nuvoton"
 echo "  Nations:     $enable_nations"
+echo "  Infineon:    $enable_infineon"
 echo "  Responder:   $enable_responder"
 echo "  wolfSSL:     ${WOLFSSL_DIR:-system}"
 echo ""

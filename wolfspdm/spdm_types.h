@@ -437,9 +437,12 @@ extern "C" {
 
 /* ----- TCG Build Option ----- */
 
-/* Nuvoton or Nations enables TCG SPDM binding; future chips can set directly */
-#if (defined(WOLFSPDM_NUVOTON) || defined(WOLFSPDM_NATIONS)) && \
-    !defined(WOLFSPDM_TCG)
+/* A vendor adapter enables the TCG SPDM binding; future chips can set it
+ * directly. The same implication is in configure.ac, and it has to be here
+ * too for a build that defines the vendor macro without using configure:
+ * without it the vendor header hides the TCG types it needs. */
+#if (defined(WOLFSPDM_NUVOTON) || defined(WOLFSPDM_NATIONS) || \
+     defined(WOLFSPDM_INFINEON)) && !defined(WOLFSPDM_TCG)
     #define WOLFSPDM_TCG
 #endif
 

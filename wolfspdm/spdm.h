@@ -35,7 +35,13 @@ typedef enum {
     WOLFSPDM_MODE_AUTO        = 0,
     WOLFSPDM_MODE_NUVOTON     = 1,
     WOLFSPDM_MODE_NATIONS     = 2,
-    WOLFSPDM_MODE_NATIONS_PSK = 3
+    WOLFSPDM_MODE_NATIONS_PSK = 3,
+    /* PSK is not specific to one vendor; the name above is kept so existing
+     * callers still compile. */
+    WOLFSPDM_MODE_PSK         = WOLFSPDM_MODE_NATIONS_PSK,
+    /* TCG binding with no vendor commands, which is what a part using only
+     * the TCG "TPM Communication over SPDM" identity flow needs. */
+    WOLFSPDM_MODE_TCG         = 4
 } WOLFSPDM_MODE;
 
 /* wolfSPDM: Lightweight SPDM requester using wolfCrypt.
@@ -82,6 +88,9 @@ typedef struct WOLFSPDM_CTX WOLFSPDM_CTX;
 #ifdef WOLFSPDM_NATIONS
     #include <wolfspdm/spdm_nations.h>
 #endif
+#ifdef WOLFSPDM_INFINEON
+    #include <wolfspdm/spdm_infineon.h>
+#endif
 #ifdef WOLFSPDM_PSK
     #include <wolfspdm/spdm_psk.h>
 #endif
@@ -108,6 +117,7 @@ WOLFSPDM_API int wolfSPDM_GetCtxSize(void);
 WOLFSPDM_API int wolfSPDM_InitStatic(WOLFSPDM_CTX* ctx, int size);
 
 /* Configuration */
+WOLFSPDM_API int wolfSPDM_HasIO(WOLFSPDM_CTX* ctx);
 WOLFSPDM_API int wolfSPDM_SetIO(WOLFSPDM_CTX* ctx, WOLFSPDM_IO_CB ioCb,
     void* userCtx);
 WOLFSPDM_API int wolfSPDM_SetMode(WOLFSPDM_CTX* ctx, WOLFSPDM_MODE mode);
