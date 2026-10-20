@@ -25,10 +25,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
-      - name: Checkout wolfSPDM with submodules
+      - name: Checkout wolfSPDM with direct submodules
         uses: actions/checkout@v4
         with:
-          submodules: recursive
+          submodules: true
 
       - name: Install build deps
         run: |

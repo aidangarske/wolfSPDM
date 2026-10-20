@@ -76,9 +76,10 @@ Asymmetric sessions need firmware advertising `KEY_EX_CAP` and `PUB_KEY_ID_CAP`.
 ## Prerequisites (wolfSSL)
 
 wolfSPDM links against [wolfSSL](https://www.wolfssl.com/). wolfSSL is bundled as
-the `lib/wolfssl` submodule at a known-good commit, so clone wolfSPDM with
-`--recursive` (or run `git submodule update --init lib/wolfssl`) and build it
-from there. **`--enable-wolftpm` is required** on the wolfSSL build (it turns on
+the `lib/wolfssl` submodule at a known-good commit. For a standalone build,
+run `git submodule update --init lib/wolfssl` and build it from there, or use
+an existing installation as described below. **`--enable-wolftpm` is required**
+on the wolfSSL build (it turns on
 the wolfCrypt features wolfSPDM relies on); the remaining flags select the SPDM
 algorithm set.
 
@@ -132,6 +133,29 @@ The pinned wolfSSL submodule can be updated like any checkout: `cd lib/wolfssl`,
 check out or rebuild whatever you need (at or above the floors above), then
 reinstall. `git submodule update` restores the pin. To build against your own
 installed wolfSSL instead, pass `--with-wolfssl=PATH` to wolfSPDM.
+
+### Sharing wolfSSL with wolfTPM
+
+When wolfSPDM is embedded as `wolfTPM/lib/wolfSPDM`, wolfTPM compiles its sources
+directly against wolfTPM's selected wolfSSL. The nested `lib/wolfssl` submodule
+does not need to be initialized or built. Initialize wolfTPM's direct dependencies
+with `git submodule update --init lib/wolfSPDM lib/wolfssl`, without `--recursive`.
+
+For separate wolfTPM and wolfSPDM builds, install wolfSSL once with the features
+required by both consumers, then select that installation in each checkout:
+
+```sh
+# In the wolfSPDM checkout, after ./autogen.sh:
+./configure --with-wolfssl=/path/to/wolfssl-install
+
+# In the wolfTPM checkout, after ./autogen.sh:
+./configure --with-wolfcrypt=/path/to/wolfssl-install --enable-spdm
+```
+
+With an existing installation, neither bundled wolfSSL checkout is required.
+Use the matching wolfSSL headers and library for both builds. Each project's
+submodule pin remains available for standalone builds; the integrating project
+chooses the shared version and configuration.
 
 ## Build
 
