@@ -71,6 +71,9 @@
 /* Enable dynamic memory allocation */
 #undef WOLFSPDM_DYNAMIC_MEMORY
 
+/* Enable Infineon SPDM vendor commands */
+#undef WOLFSPDM_INFINEON
+
 /* Enable Nations SPDM vendor commands */
 #undef WOLFSPDM_NATIONS
 

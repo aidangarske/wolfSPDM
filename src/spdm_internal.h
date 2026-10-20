@@ -275,7 +275,8 @@ static WC_INLINE int wolfSPDM_ConstCompare(const byte* a, const byte* b,
 static WC_INLINE int wolfSPDM_IsTcgMode(const WOLFSPDM_CTX* ctx)
 {
 #ifdef WOLFSPDM_TCG
-    return ctx->mode == WOLFSPDM_MODE_NUVOTON ||
+    return ctx->mode == WOLFSPDM_MODE_TCG ||
+           ctx->mode == WOLFSPDM_MODE_NUVOTON ||
            ctx->mode == WOLFSPDM_MODE_NATIONS ||
            ctx->mode == WOLFSPDM_MODE_NATIONS_PSK;
 #else

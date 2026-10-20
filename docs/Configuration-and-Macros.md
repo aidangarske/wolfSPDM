@@ -22,6 +22,7 @@ From `configure.ac`:
 | `--enable-tcg` | off | `WOLFSPDM_TCG` | TCG SPDM binding (TPM transport) |
 | `--enable-nuvoton` | off | `WOLFSPDM_NUVOTON` | Nuvoton NPCT75x vendor commands (implies `--enable-tcg`) |
 | `--enable-nations` | off | `WOLFSPDM_NATIONS` | Nations NS350 vendor commands (implies `--enable-tcg` and `--enable-psk`) |
+| `--enable-infineon` | off | `WOLFSPDM_INFINEON` | Infineon OPTIGA SLB9678 vendor commands (implies `--enable-tcg`; PSK stays opt-in) |
 | `--enable-psk` | off | `WOLFSPDM_PSK` | SPDM PSK_EXCHANGE/PSK_FINISH (requires `--enable-tcg`) |
 | `--enable-responder` | off | `WOLFSPDM_RESPONDER` | SPDM responder (requires `--enable-tcg`) |
 
@@ -52,7 +53,7 @@ matching `WOLFSPDM_*` macro. `WOLFSPDM_PROFILE_TPM` implies:
   above) and `WOLFSPDM_NO_APP_DATA`.
 - `WOLFSPDM_PROFILE_TPM` implies `WOLFSPDM_NO_CERT`, `WOLFSPDM_NO_HEARTBEAT`,
   `WOLFSPDM_NO_KEY_UPDATE`, `WOLFSPDM_NO_APP_DATA`.
-- `WOLFSPDM_NUVOTON` or `WOLFSPDM_NATIONS` implies `WOLFSPDM_TCG`.
+- `WOLFSPDM_NUVOTON`, `WOLFSPDM_NATIONS` or `WOLFSPDM_INFINEON` implies `WOLFSPDM_TCG`.
 - `WOLFSPDM_NATIONS` implies `WOLFSPDM_PSK`.
 - `WOLFSPDM_TCG` or `WOLFSPDM_PROFILE_TPM` implies `WOLFSPDM_MUTUAL_AUTH`
   (requester identity-key API for TCG GIVE_PUB).

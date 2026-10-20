@@ -150,6 +150,14 @@ int wolfSPDM_SetIO(WOLFSPDM_CTX* ctx, WOLFSPDM_IO_CB ioCb, void* userCtx)
     return WOLFSPDM_SUCCESS;
 }
 
+/* Whether a transport is already installed. A caller that wants to supply a
+ * default transport needs to know, so it can leave an I/O callback the
+ * application set alone rather than replacing it. */
+int wolfSPDM_HasIO(WOLFSPDM_CTX* ctx)
+{
+    return ctx != NULL && ctx->ioCb != NULL;
+}
+
 int wolfSPDM_SetResponderPubKey(WOLFSPDM_CTX* ctx,
     const byte* pubKey, word32 pubKeySz)
 {
@@ -260,8 +268,19 @@ int wolfSPDM_SetMode(WOLFSPDM_CTX* ctx, WOLFSPDM_MODE mode)
     }
 
 #if !defined(WOLFSPDM_NUVOTON) && !defined(WOLFSPDM_NATIONS) && \
-    !defined(WOLFSPDM_PSK)
+    !defined(WOLFSPDM_PSK) && !defined(WOLFSPDM_TCG)
     (void)mode;
+#endif
+
+#ifdef WOLFSPDM_TCG
+    /* The TCG binding with no vendor commands, for a part that uses only the
+     * identity flow of "TPM Communication over SPDM". */
+    if (mode == WOLFSPDM_MODE_TCG) {
+        ctx->mode = WOLFSPDM_MODE_TCG;
+        ctx->connectionHandle = 0;
+        ctx->fipsIndicator = WOLFSPDM_FIPS_NON_FIPS;
+        return WOLFSPDM_SUCCESS;
+    }
 #endif
 
 #ifdef WOLFSPDM_NUVOTON
@@ -381,7 +400,8 @@ int wolfSPDM_Connect(WOLFSPDM_CTX* ctx)
     wolfSPDM_ResetSession(ctx);
 
 #ifdef WOLFSPDM_TCG
-    if (ctx->mode == WOLFSPDM_MODE_NUVOTON ||
+    if (ctx->mode == WOLFSPDM_MODE_TCG ||
+        ctx->mode == WOLFSPDM_MODE_NUVOTON ||
         ctx->mode == WOLFSPDM_MODE_NATIONS) {
         return wolfSPDM_ConnectTCG(ctx);
     }

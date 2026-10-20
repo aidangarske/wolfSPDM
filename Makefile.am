@@ -27,6 +27,9 @@ endif
 if BUILD_NATIONS
 libwolfspdm_la_SOURCES += src/vendor/spdm_nations.c
 endif
+if BUILD_INFINEON
+libwolfspdm_la_SOURCES += src/vendor/spdm_infineon.c
+endif
 if BUILD_RESPONDER
 libwolfspdm_la_SOURCES += src/spdm_responder.c
 endif
@@ -54,6 +57,7 @@ nobase_include_HEADERS = \
     wolfspdm/spdm_psk.h \
     wolfspdm/spdm_nuvoton.h \
     wolfspdm/spdm_nations.h \
+    wolfspdm/spdm_infineon.h \
     wolfspdm/spdm_responder.h \
     wolfspdm/options.h
 

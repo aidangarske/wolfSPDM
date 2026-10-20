@@ -74,6 +74,19 @@ static const byte kexOpaqueNuvoton[] = {
 /* Nations only accepts OpaqueLength=0 */
 static const byte kexOpaqueNations[] = { 0x00, 0x00 };
 #endif
+#ifdef WOLFSPDM_TCG
+/* TCG binding version 1.0 in DSP0274 opaque format 1. A part that follows
+ * the TCG binding and offers no secured message version list of its own
+ * rejects the standard list above with InvalidRequest. */
+static const byte kexOpaqueTcg[] = {
+    0x10, 0x00,             /* OpaqueLength */
+    0x01, 0x00, 0x00, 0x00, /* one element */
+    0x00, 0x00, 0x05, 0x00, /* DMTF, no vendor ID */
+    0x01, 0x01, 0x01,       /* SMDataVersion, ID, count */
+    0x00, 0x10,             /* version 1.0 */
+    0x00, 0x00, 0x00        /* alignment */
+};
+#endif
 
 static void wolfSPDM_KeyExOpaque(const WOLFSPDM_CTX* ctx,
     const byte** opaque, word32* opaqueSz)
@@ -84,6 +97,12 @@ static void wolfSPDM_KeyExOpaque(const WOLFSPDM_CTX* ctx,
 #else
     *opaque = NULL;
     *opaqueSz = 0;
+#endif
+#ifdef WOLFSPDM_TCG
+    if (ctx->mode == WOLFSPDM_MODE_TCG) {
+        *opaque = kexOpaqueTcg;
+        *opaqueSz = (word32)sizeof(kexOpaqueTcg);
+    }
 #endif
 #ifdef WOLFSPDM_NUVOTON
     if (ctx->mode == WOLFSPDM_MODE_NUVOTON) {
@@ -97,7 +116,8 @@ static void wolfSPDM_KeyExOpaque(const WOLFSPDM_CTX* ctx,
         *opaqueSz = (word32)sizeof(kexOpaqueNations);
     }
 #endif
-#if !defined(WOLFSPDM_NUVOTON) && !defined(WOLFSPDM_NATIONS)
+#if !defined(WOLFSPDM_NUVOTON) && !defined(WOLFSPDM_NATIONS) && \
+    !defined(WOLFSPDM_TCG)
     (void)ctx;
 #endif
 }
