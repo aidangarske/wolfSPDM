@@ -30,6 +30,12 @@ jobs:
         with:
           submodules: true
 
+      - name: Test submodule checkout policy
+        run: sh scripts/test-submodule-policy.sh
+
+      - name: Opt in to the standalone wolfSSL checkout
+        run: git submodule update --init --checkout lib/wolfssl
+
       - name: Install build deps
         run: |
           sudo apt-get update

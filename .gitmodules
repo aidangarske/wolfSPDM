@@ -3,3 +3,5 @@
 	url = https://github.com/wolfSSL/wolfssl.git
 	branch = master
 	ignore = dirty
+	# Opt in explicitly for standalone builds; skip nested recursive checkouts.
+	update = none

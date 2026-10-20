@@ -77,11 +77,17 @@ Asymmetric sessions need firmware advertising `KEY_EX_CAP` and `PUB_KEY_ID_CAP`.
 
 wolfSPDM links against [wolfSSL](https://www.wolfssl.com/). wolfSSL is bundled as
 the `lib/wolfssl` submodule at a known-good commit. For a standalone build,
-run `git submodule update --init lib/wolfssl` and build it from there, or use
-an existing installation as described below. **`--enable-wolftpm` is required**
+run `git submodule update --init --checkout lib/wolfssl` and build it from
+there, or use an existing installation as described below. **`--enable-wolftpm` is required**
 on the wolfSSL build (it turns on
 the wolfCrypt features wolfSPDM relies on); the remaining flags select the SPDM
 algorithm set.
+
+The bundled wolfSSL is opt-in: `.gitmodules` sets `update = none`, so ordinary
+recursive clones and submodule updates skip it, including when wolfSPDM is
+embedded in another project. `--checkout` explicitly overrides that policy for
+a standalone build. Existing local `submodule.lib/wolfssl.update` settings take
+precedence; this default does not remove a copy you already initialized.
 
 **Supported wolfSSL versions:**
 
@@ -131,8 +137,9 @@ wolfSPDM auto-enables each when the linked wolfSSL provides it (`--disable-mldsa
 
 The pinned wolfSSL submodule can be updated like any checkout: `cd lib/wolfssl`,
 check out or rebuild whatever you need (at or above the floors above), then
-reinstall. `git submodule update` restores the pin. To build against your own
-installed wolfSSL instead, pass `--with-wolfssl=PATH` to wolfSPDM.
+reinstall. `git submodule update --checkout lib/wolfssl` restores the pin. To
+build against your own installed wolfSSL instead, pass `--with-wolfssl=PATH`
+to wolfSPDM.
 
 ### Sharing wolfSSL with wolfTPM
 
