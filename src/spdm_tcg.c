@@ -364,6 +364,16 @@ int wolfSPDM_TCG_GetPubKey(
         return WOLFSPDM_E_INVALID_ARG;
     }
 
+    /* Responders reject GET_PUBK with UnexpectedRequest before GET_VERSION */
+    if (ctx->state == WOLFSPDM_STATE_INIT) {
+        wolfSPDM_TranscriptReset(ctx);
+        rc = wolfSPDM_GetVersion(ctx);
+        if (rc != WOLFSPDM_SUCCESS) {
+            wolfSPDM_DebugPrint(ctx, "GET_PUBK: GET_VERSION failed %d\n", rc);
+            return rc;
+        }
+    }
+
     wolfSPDM_DebugPrint(ctx, "TCG: GET_PUBK\n");
 
     rc = wolfSPDM_TCG_VendorCmdClear(ctx, WOLFSPDM_VDCODE_GET_PUBK,

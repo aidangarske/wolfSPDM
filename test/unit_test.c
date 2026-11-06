@@ -849,30 +849,56 @@ static int test_extract_ecc_point(void)
 typedef struct TCG_GET_PUB_KEY_IO_CTX {
     const byte* pubKey;
     word32 pubKeySz;
+    int versionReqs;
+    int pubKeyReqs;
+    int versionFails;
 } TCG_GET_PUB_KEY_IO_CTX;
 
+/* Mimics Nuvoton: GET_PUBK before GET_VERSION gets UnexpectedRequest */
 static int tcg_get_pub_key_io_cb(WOLFSPDM_CTX* ctx, const byte* txBuf,
     word32 txSz, byte* rxBuf, word32* rxSz, void* userCtx)
 {
     TCG_GET_PUB_KEY_IO_CTX* ioCtx = (TCG_GET_PUB_KEY_IO_CTX*)userCtx;
+    static const byte versionRsp[] = {
+        SPDM_VERSION_10, SPDM_VERSION, 0x00, 0x00, 0x00, 0x01,
+        0x00, SPDM_VERSION_13
+    };
+    static const byte unexpectedRsp[] = {
+        SPDM_VERSION_13, SPDM_ERROR, SPDM_ERROR_UNEXPECTED_REQUEST, 0x00
+    };
     byte spdmRsp[WOLFSPDM_VENDOR_BUF_SZ];
     word32 totalSz;
     int spdmRspSz;
 
-    (void)txBuf;
-    (void)txSz;
-
-    if (ctx == NULL || rxBuf == NULL || rxSz == NULL || ioCtx == NULL) {
+    if (ctx == NULL || txBuf == NULL || rxBuf == NULL || rxSz == NULL ||
+            ioCtx == NULL || txSz < WOLFSPDM_TCG_HEADER_SIZE + 2) {
         return -1;
     }
 
-    spdmRspSz = wolfSPDM_BuildVendorDefined(SPDM_VERSION_13,
-        WOLFSPDM_VDCODE_GET_PUBK, ioCtx->pubKey, ioCtx->pubKeySz,
-        spdmRsp, sizeof(spdmRsp));
-    if (spdmRspSz < 0) {
-        return -1;
+    if (txBuf[WOLFSPDM_TCG_HEADER_SIZE + 1] == SPDM_GET_VERSION) {
+        ioCtx->versionReqs++;
+        if (ioCtx->versionFails > 0) {
+            ioCtx->versionFails--;
+            return -1;
+        }
+        XMEMCPY(spdmRsp, versionRsp, sizeof(versionRsp));
+        spdmRspSz = (int)sizeof(versionRsp);
     }
-    spdmRsp[1] = SPDM_TEST_VENDOR_DEFINED_RSP;
+    else if (ioCtx->versionReqs == 0) {
+        ioCtx->pubKeyReqs++;
+        XMEMCPY(spdmRsp, unexpectedRsp, sizeof(unexpectedRsp));
+        spdmRspSz = (int)sizeof(unexpectedRsp);
+    }
+    else {
+        ioCtx->pubKeyReqs++;
+        spdmRspSz = wolfSPDM_BuildVendorDefined(SPDM_VERSION_13,
+            WOLFSPDM_VDCODE_GET_PUBK, ioCtx->pubKey, ioCtx->pubKeySz,
+            spdmRsp, sizeof(spdmRsp));
+        if (spdmRspSz < 0) {
+            return -1;
+        }
+        spdmRsp[1] = SPDM_TEST_VENDOR_DEFINED_RSP;
+    }
 
     totalSz = WOLFSPDM_TCG_HEADER_SIZE + (word32)spdmRspSz;
     if (*rxSz < totalSz) {
@@ -900,6 +926,7 @@ static int test_tcg_get_pub_key_preserves_pin(void)
 
     printf("test_tcg_get_pub_key_preserves_pin...\n");
 
+    XMEMSET(&ioCtx, 0, sizeof(ioCtx));
     XMEMSET(trustedKey, 0xA5, sizeof(trustedKey));
     XMEMSET(differentKey, 0x5A, sizeof(differentKey));
     ctx->mode = WOLFSPDM_MODE_NUVOTON;
@@ -976,6 +1003,7 @@ static int test_tcg_get_pub_key_discovery_is_not_trusted(void)
 
     printf("test_tcg_get_pub_key_discovery_is_not_trusted...\n");
 
+    XMEMSET(&ioCtx, 0, sizeof(ioCtx));
     XMEMSET(discoveredKey, 0x3C, sizeof(discoveredKey));
     ioCtx.pubKey = discoveredKey;
     ioCtx.pubKeySz = sizeof(discoveredKey);
@@ -988,6 +1016,77 @@ static int test_tcg_get_pub_key_discovery_is_not_trusted(void)
         "cleartext discovery must not configure trust");
     ASSERT_EQ(ctx->rspPubKeyLen, 0,
         "cleartext discovery must not store responder key");
+
+    TEST_CTX_FREE();
+    TEST_PASS();
+}
+
+static int test_tcg_get_pub_key_negotiates_version(void)
+{
+    byte rspKey[WOLFSPDM_ECC_POINT_SIZE];
+    byte pubKey[WOLFSPDM_ECC_POINT_SIZE];
+    word32 pubKeySz = sizeof(pubKey);
+    TCG_GET_PUB_KEY_IO_CTX ioCtx;
+    TEST_CTX_SETUP();
+
+    printf("test_tcg_get_pub_key_negotiates_version...\n");
+
+    XMEMSET(&ioCtx, 0, sizeof(ioCtx));
+    XMEMSET(rspKey, 0x6B, sizeof(rspKey));
+    ioCtx.pubKey = rspKey;
+    ioCtx.pubKeySz = sizeof(rspKey);
+    ctx->mode = WOLFSPDM_MODE_NUVOTON;
+    ASSERT_SUCCESS(wolfSPDM_SetIO(ctx, tcg_get_pub_key_io_cb, &ioCtx));
+    ASSERT_EQ(ctx->state, WOLFSPDM_STATE_INIT, "fresh context state");
+
+    ASSERT_SUCCESS(wolfSPDM_TCG_GetPubKey(ctx, pubKey, &pubKeySz));
+    ASSERT_EQ(ioCtx.versionReqs, 1, "GET_VERSION must precede GET_PUBK");
+    ASSERT_EQ(ioCtx.pubKeyReqs, 1, "one GET_PUBK expected");
+    ASSERT_EQ(ctx->spdmVersion, SPDM_VERSION_13, "negotiated version");
+    ASSERT_EQ(ctx->state, WOLFSPDM_STATE_VERSION, "version state");
+    ASSERT_EQ(pubKeySz, sizeof(rspKey), "key size mismatch");
+    TEST_ASSERT(XMEMCMP(pubKey, rspKey, sizeof(rspKey)) == 0,
+        "key output mismatch");
+
+    pubKeySz = sizeof(pubKey);
+    ASSERT_SUCCESS(wolfSPDM_TCG_GetPubKey(ctx, pubKey, &pubKeySz));
+    ASSERT_EQ(ioCtx.versionReqs, 1, "negotiated version must be reused");
+    ASSERT_EQ(ioCtx.pubKeyReqs, 2, "second GET_PUBK expected");
+
+    TEST_CTX_FREE();
+    TEST_PASS();
+}
+
+static int test_tcg_get_pub_key_version_failure(void)
+{
+    int rc;
+    byte rspKey[WOLFSPDM_ECC_POINT_SIZE];
+    byte pubKey[WOLFSPDM_ECC_POINT_SIZE];
+    word32 pubKeySz = sizeof(pubKey);
+    TCG_GET_PUB_KEY_IO_CTX ioCtx;
+    TEST_CTX_SETUP();
+
+    printf("test_tcg_get_pub_key_version_failure...\n");
+
+    XMEMSET(&ioCtx, 0, sizeof(ioCtx));
+    XMEMSET(rspKey, 0x6B, sizeof(rspKey));
+    ioCtx.pubKey = rspKey;
+    ioCtx.pubKeySz = sizeof(rspKey);
+    ioCtx.versionFails = 1;
+    ctx->mode = WOLFSPDM_MODE_NUVOTON;
+    ASSERT_SUCCESS(wolfSPDM_SetIO(ctx, tcg_get_pub_key_io_cb, &ioCtx));
+
+    rc = wolfSPDM_TCG_GetPubKey(ctx, pubKey, &pubKeySz);
+    ASSERT_EQ(rc, WOLFSPDM_E_IO_FAIL, "GET_VERSION error must propagate");
+    ASSERT_EQ(ioCtx.versionReqs, 1, "one GET_VERSION attempt expected");
+    ASSERT_EQ(ioCtx.pubKeyReqs, 0, "GET_PUBK must not follow a failure");
+
+    pubKeySz = sizeof(pubKey);
+    ASSERT_SUCCESS(wolfSPDM_TCG_GetPubKey(ctx, pubKey, &pubKeySz));
+    ASSERT_EQ(ioCtx.versionReqs, 2, "retry must renegotiate");
+    ASSERT_EQ(ioCtx.pubKeyReqs, 1, "one GET_PUBK expected on retry");
+    TEST_ASSERT(XMEMCMP(pubKey, rspKey, sizeof(rspKey)) == 0,
+        "key output mismatch");
 
     TEST_CTX_FREE();
     TEST_PASS();
@@ -5657,6 +5756,8 @@ int main(void)
 #ifdef WOLFSPDM_TCG
     test_tcg_get_pub_key_preserves_pin();
     test_tcg_get_pub_key_discovery_is_not_trusted();
+    test_tcg_get_pub_key_negotiates_version();
+    test_tcg_get_pub_key_version_failure();
     test_tcg_connect_requires_responder_key();
     test_tcg_underflow();
 #endif
