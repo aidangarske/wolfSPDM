@@ -872,11 +872,6 @@ static int RespHandleFinish(WOLFSPDM_RESP_CTX* rctx,
         *outSz = 4;
         rc = wolfSPDM_TranscriptAdd(ctx, out, 4);
     }
-    if (rc == WOLFSPDM_SUCCESS) {
-        ctx->state = WOLFSPDM_STATE_CONNECTED;
-        rctx->flags.sessionAsym = 1;
-    }
-
     wc_ForceZero(expectedHmac, sizeof(expectedHmac));
     wc_ForceZero(th2, sizeof(th2));
     return rc;
@@ -924,14 +919,6 @@ static int RespHandlePskFinish(WOLFSPDM_RESP_CTX* rctx,
         *outSz = 4;
         rc = wolfSPDM_TranscriptAdd(ctx, out, 4);
     }
-    /* App-key derivation runs in the caller AFTER PSK_FINISH_RSP is
-     * encrypted with the still-current handshake keys (otherwise the
-     * requester decrypts with handshake keys but we wrote with app keys). */
-    if (rc == WOLFSPDM_SUCCESS) {
-        ctx->state = WOLFSPDM_STATE_CONNECTED;
-        rctx->flags.sessionAsym = 0;
-    }
-
     wc_ForceZero(expectedHmac, sizeof(expectedHmac));
     wc_ForceZero(th2Hash, sizeof(th2Hash));
     return rc;
@@ -1174,7 +1161,7 @@ static int RespDispatchSecuredInner(WOLFSPDM_RESP_CTX* rctx,
     byte code;
     int rc;
     int sessionEnded = 0;
-    int derivedAppKeys = 0;
+    int finishAccepted = 0;
 
     /* KEY_EX has handshake traffic keys; CONNECTED has application traffic
      * keys. In every other state, decryption would use unestablished key
@@ -1207,7 +1194,7 @@ static int RespDispatchSecuredInner(WOLFSPDM_RESP_CTX* rctx,
             }
             rc = RespHandlePskFinish(rctx, plain, plainSz,
                 respPlain, &respPlainSz);
-            derivedAppKeys = (rc == WOLFSPDM_SUCCESS) ? 1 : 0;
+            finishAccepted = (rc == WOLFSPDM_SUCCESS) ? 1 : 0;
             break;
 #endif
         case SPDM_FINISH:
@@ -1217,7 +1204,7 @@ static int RespDispatchSecuredInner(WOLFSPDM_RESP_CTX* rctx,
             }
             rc = RespHandleFinish(rctx, plain, plainSz,
                 respPlain, &respPlainSz);
-            derivedAppKeys = (rc == WOLFSPDM_SUCCESS) ? 1 : 0;
+            finishAccepted = (rc == WOLFSPDM_SUCCESS) ? 1 : 0;
             break;
         case SPDM_END_SESSION:
             rc = RespBuildEndSessionAck(ctx, plain, plainSz,
@@ -1239,8 +1226,17 @@ static int RespDispatchSecuredInner(WOLFSPDM_RESP_CTX* rctx,
         rc = RespEncrypt(ctx, respPlain, respPlainSz,
             securedOut, securedOutSz);
     }
-    if (rc == WOLFSPDM_SUCCESS && derivedAppKeys) {
-        rc = wolfSPDM_DeriveAppDataKeys(ctx);
+    if (finishAccepted) {
+        if (rc == WOLFSPDM_SUCCESS) {
+            rc = wolfSPDM_DeriveAppDataKeys(ctx);
+        }
+        if (rc == WOLFSPDM_SUCCESS) {
+            ctx->state = WOLFSPDM_STATE_CONNECTED;
+            rctx->flags.sessionAsym = rctx->flags.pendingAsym;
+        }
+        else {
+            wolfSPDM_RespReset(rctx);
+        }
     }
 
     if (sessionEnded && rc == WOLFSPDM_SUCCESS) {

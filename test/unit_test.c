@@ -3731,6 +3731,20 @@ static int requester_to_responder_iocb(WOLFSPDM_CTX* spdmCtx,
     return wolfSPDM_RespHandleMessage(rctx, txBuf, txSz, rxBuf, rxSz);
 }
 
+static int test_responder_reply_capacity_io(WOLFSPDM_CTX* ctx,
+    const byte* txBuf, word32 txSz, byte* rxBuf, word32* rxSz, void* userCtx)
+{
+    if (txSz >= WOLFSPDM_TCG_HEADER_SIZE &&
+            SPDM_Get16BE(txBuf) == WOLFSPDM_TCG_TAG_SECURED) {
+        word32 limitedSz = WOLFSPDM_TCG_HEADER_SIZE;
+        int rc = requester_to_responder_iocb(ctx, txBuf, txSz, rxBuf,
+            &limitedSz, userCtx);
+        ASSERT_EQ(rc, WOLFSPDM_E_BUFFER_SMALL, "Reply needs more space");
+        return rc;
+    }
+    return requester_to_responder_iocb(ctx, txBuf, txSz, rxBuf, rxSz, userCtx);
+}
+
 static int test_tcg_handshake_io_failure(WOLFSPDM_CTX* ctx,
     const byte* txBuf, word32 txSz, byte* rxBuf, word32* rxSz, void* userCtx)
 {
@@ -3816,7 +3830,18 @@ static int test_responder_identity_roundtrip(int fineGrained)
     if (fineGrained) {
         byte wireKey[WOLFSPDM_PUBKEY_BUF_SZ];
         word32 wireKeySz = sizeof(wireKey);
+        const byte* publishedKey = NULL;
 
+        ASSERT_SUCCESS(wolfSPDM_SetIO(&req, test_responder_reply_capacity_io,
+            rctx));
+        ASSERT_EQ(wolfSPDM_ConnectTCG(&req), WOLFSPDM_E_IO_FAIL,
+            "A FINISH reply must fit before the session is established");
+        ASSERT_EQ(wolfSPDM_RespIsSessionActive(rctx), 0,
+            "A failed FINISH reply leaves no active session");
+        ASSERT_EQ(wolfSPDM_RespGetIdentityKey(rctx, &publishedKey), 0,
+            "A failed FINISH reply leaves no session identity");
+        ASSERT_SUCCESS(wolfSPDM_SetIO(&req, requester_to_responder_iocb,
+            rctx));
         ASSERT_SUCCESS(wolfSPDM_GetVersion(&req));
         ASSERT_SUCCESS(wolfSPDM_TCG_GetPubKey(&req, wireKey, &wireKeySz));
         ASSERT_SUCCESS(wolfSPDM_Sha384Hash(req.certChainHash, wireKey,
@@ -3994,6 +4019,13 @@ static int test_responder_psk_roundtrip(void)
     g_tpmCbInvocations = 0;
     ASSERT_SUCCESS(wolfSPDM_RespSetTpmCallback(rctx, responder_tpm_stub,
         NULL));
+    ASSERT_SUCCESS(wolfSPDM_SetIO(&req, test_responder_reply_capacity_io,
+        rctx));
+    ASSERT_EQ(wolfSPDM_ConnectPsk(&req), WOLFSPDM_E_IO_FAIL,
+        "A PSK_FINISH reply must fit before the session is established");
+    ASSERT_EQ(wolfSPDM_RespIsSessionActive(rctx), 0,
+        "A failed PSK_FINISH reply leaves no active session");
+    ASSERT_SUCCESS(wolfSPDM_SetPSK(&req, testPsk, sizeof(testPsk), NULL, 0));
     ASSERT_SUCCESS(wolfSPDM_SetIO(&req, requester_to_responder_iocb, rctx));
 
     rc = wolfSPDM_Connect(&req);
