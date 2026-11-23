@@ -5787,6 +5787,11 @@ static int test_peer_dispatch(WOLFSPDM_CTX* ctx, WOLFSPDM_CTX* p,
     if (g_peerRejects) {
         rsp[2] = SPDM_ERROR_BUSY;
     }
+    else if (req[1] == SPDM_END_SESSION) {
+        rsp[1] = SPDM_END_SESSION_ACK;
+        rsp[2] = 0xA5;
+        rsp[3] = 0x5A;
+    }
     else if (req[1] == SPDM_VENDOR_DEFINED_REQUEST) {
         /* Echo sized by the request, to drive chunking */
         rsp[1] = 0x7E;
@@ -6157,6 +6162,20 @@ static int test_disconnect_reports_peer_error(void)
     ASSERT_EQ(wolfSPDM_IsConnected(ctx), 0, "Local session should be retired");
     ASSERT_EQ(wolfSPDM_GetLastPeerError(ctx), SPDM_ERROR_BUSY,
         "END_SESSION peer error should survive local teardown");
+
+    wolfSPDM_Free(&g_peer);
+    TEST_CTX_FREE();
+    TEST_PASS();
+}
+
+static int test_disconnect_ignores_reserved_parameters(void)
+{
+    TEST_CTX_SETUP();
+
+    printf("test_disconnect_ignores_reserved_parameters...\n");
+    test_session_loopback(ctx);
+    ASSERT_SUCCESS(wolfSPDM_Disconnect(ctx));
+    ASSERT_EQ(wolfSPDM_IsConnected(ctx), 0, "Local session should be retired");
 
     wolfSPDM_Free(&g_peer);
     TEST_CTX_FREE();
@@ -6833,6 +6852,7 @@ int main(void)
     !defined(WOLFSPDM_NO_CHALLENGE) || !defined(WOLFSPDM_NO_CHUNK)) && \
     !defined(WOLFSPDM_NO_MCTP)
     test_disconnect_reports_peer_error();
+    test_disconnect_ignores_reserved_parameters();
 #endif
 #ifndef WOLFSPDM_NO_KEY_UPDATE
     test_key_update_msgs();

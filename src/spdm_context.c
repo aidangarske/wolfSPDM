@@ -492,8 +492,7 @@ int wolfSPDM_Disconnect(WOLFSPDM_CTX* ctx)
                 rc = WOLFSPDM_E_PEER_ERROR;
             }
             else if (rxSz != 4 || rxBuf[0] != ctx->spdmVersion ||
-                     rxBuf[1] != SPDM_END_SESSION_ACK ||
-                     rxBuf[2] != 0 || rxBuf[3] != 0) {
+                     rxBuf[1] != SPDM_END_SESSION_ACK) {
                 rc = WOLFSPDM_E_PEER_ERROR;
             }
         }
