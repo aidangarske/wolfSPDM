@@ -6298,18 +6298,32 @@ static int test_secured_record_edges(void)
         WOLFSPDM_E_SESSION_INVALID, "session ID mismatch");
     ctx->sessionId = 0x00020001;
 
-    /* MCTP carries 16 sequence bits and must not wrap */
-    ctx->reqSeqNum = 0x10000;
-    encSz = sizeof(enc);
-    ASSERT_EQ(wolfSPDM_EncryptInternal(ctx, plain, 1, enc, &encSz),
-        WOLFSPDM_E_SEQUENCE, "request sequence past 16 bits");
+    /* DSP0276 1.3 4.1: MCTP sends the low 16 bits; peers track all 64 */
+    ctx->reqSeqNum = 0xFFFF;
+    ctx->rspSeqNum = 0xFFFF;
+    for (i = 0; i < 3; i++) {
+        encSz = sizeof(enc);
+        ASSERT_SUCCESS(wolfSPDM_EncryptInternal(ctx, plain, 1, enc, &encSz));
+        ASSERT_EQ(SPDM_Get16LE(&enc[4]), (word16)(0xFFFF + i),
+            "wire sequence is the low 16 bits");
+        decSz = sizeof(dec);
+        ASSERT_SUCCESS(wolfSPDM_DecryptInternal(ctx, enc, encSz, dec,
+            &decSz));
+    }
+    ASSERT_EQ(ctx->rspSeqNum, 0x10002, "full receive counter");
+
+    /* The upper bits stay in the nonce, so an old record does not verify */
     ctx->reqSeqNum = 0;
     encSz = sizeof(enc);
     ASSERT_SUCCESS(wolfSPDM_EncryptInternal(ctx, plain, 1, enc, &encSz));
     ctx->rspSeqNum = 0x10000;
     decSz = sizeof(dec);
     ASSERT_EQ(wolfSPDM_DecryptInternal(ctx, enc, encSz, dec, &decSz),
-        WOLFSPDM_E_SEQUENCE, "response sequence past 16 bits");
+        WOLFSPDM_E_DECRYPT_FAIL, "record from an earlier 16-bit epoch");
+    ctx->rspSeqNum = 1;
+    decSz = sizeof(dec);
+    ASSERT_EQ(wolfSPDM_DecryptInternal(ctx, enc, encSz, dec, &decSz),
+        WOLFSPDM_E_SEQUENCE, "wire sequence mismatch");
 
     TEST_CTX_FREE();
     TEST_PASS();

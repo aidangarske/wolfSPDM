@@ -123,12 +123,6 @@ static int wolfSPDM_EncryptRecord(WOLFSPDM_CTX* ctx, int appMsg,
         word32 appDataLen = appMsg ? plainSz : 1 + plainSz;
         word32 encDataLen = 2 + appDataLen;
 
-        /* MCTP carries a 16-bit sequence number; fail rather than let the wire
-         * value and the 64-bit IV counter diverge past 0xFFFF */
-        if (ctx->reqSeqNum > 0xFFFF) {
-            return WOLFSPDM_E_SEQUENCE;
-        }
-
         plainBufSz = encDataLen;
         recordLen = encDataLen + WOLFSPDM_AEAD_TAG_SIZE;
         hdrSz = 8;  /* 4 + 2 + 2 */
@@ -149,6 +143,8 @@ static int wolfSPDM_EncryptRecord(WOLFSPDM_CTX* ctx, int appMsg,
 
         /* Build header/AAD: SessionID(4 LE) + SeqNum(2 LE) + Length(2 LE) */
         SPDM_Set32LE(&enc[0], ctx->sessionId);
+        /* DSP0276 1.3 4.1: the wire carries the low 16 bits and both ends
+         * track the upper 48, so the DSP0277 IV uses the full counter */
         SPDM_Set16LE(&enc[4], (word16)ctx->reqSeqNum);
         SPDM_Set16LE(&enc[6], (word16)recordLen);
 
@@ -287,7 +283,8 @@ static int wolfSPDM_DecryptRecord(WOLFSPDM_CTX* ctx, int appMsg,
                 rspSessionId, ctx->sessionId);
             return WOLFSPDM_E_SESSION_INVALID;
         }
-        if ((word64)rspSeqNum != ctx->rspSeqNum) {
+        /* Partial sequence number against the tracked 64-bit counter */
+        if (rspSeqNum != (word16)ctx->rspSeqNum) {
             wolfSPDM_DebugPrint(ctx, "Seq mismatch: %u != %llu\n",
                 rspSeqNum, (unsigned long long)ctx->rspSeqNum);
             return WOLFSPDM_E_SEQUENCE;
@@ -303,7 +300,7 @@ static int wolfSPDM_DecryptRecord(WOLFSPDM_CTX* ctx, int appMsg,
         ciphertext = enc + hdrSz;
         tag = enc + hdrSz + cipherLen;
         XMEMCPY(aad, enc, aadSz);
-        wolfSPDM_BuildIV(iv, ctx->rspDataIv, (word64)rspSeqNum);
+        wolfSPDM_BuildIV(iv, ctx->rspDataIv, ctx->rspSeqNum);
 #endif
     }
 
