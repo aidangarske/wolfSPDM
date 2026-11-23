@@ -174,8 +174,8 @@ int wolfSPDM_DeriveFromHandshakeSecret(WOLFSPDM_CTX* ctx,
     }
 
     if (rc != WOLFSPDM_SUCCESS) {
-        /* wipe any partially derived material so it cannot carry into a
-         * reused ctx */
+        /* Wipe the root and any partially derived material. */
+        wc_ForceZero(ctx->handshakeSecret, sizeof(ctx->handshakeSecret));
         wc_ForceZero(ctx->reqHsSecret, sizeof(ctx->reqHsSecret));
         wc_ForceZero(ctx->rspHsSecret, sizeof(ctx->rspHsSecret));
         wc_ForceZero(ctx->reqFinishedKey, sizeof(ctx->reqFinishedKey));
