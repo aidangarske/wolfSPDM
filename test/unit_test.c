@@ -3977,6 +3977,7 @@ static int test_responder_identity_roundtrip(int fineGrained)
         word32 wireKeySz = sizeof(wireKey);
         const byte* publishedKey = NULL;
 
+        ASSERT_SUCCESS(wolfSPDM_SetMaxVersion(&req, WOLFSPDM_MIN_SPDM_VERSION));
         ASSERT_SUCCESS(wolfSPDM_SetIO(&req, test_responder_reply_capacity_io,
             rctx));
         ASSERT_EQ(wolfSPDM_ConnectTCG(&req), WOLFSPDM_E_IO_FAIL,
@@ -3988,6 +3989,8 @@ static int test_responder_identity_roundtrip(int fineGrained)
         ASSERT_SUCCESS(wolfSPDM_SetIO(&req, requester_to_responder_iocb,
             rctx));
         ASSERT_SUCCESS(wolfSPDM_GetVersion(&req));
+        ASSERT_EQ(req.spdmVersion, WOLFSPDM_MIN_SPDM_VERSION,
+            "The fine-grained loopback uses the minimum supported version");
 #ifndef WOLFSPDM_NO_CERT
         ASSERT_EQ(wolfSPDM_GetDigests(&req), WOLFSPDM_E_PEER_ERROR,
             "This responder does not support certificate digests");

@@ -932,14 +932,11 @@ static int RespHandlePskFinish(WOLFSPDM_RESP_CTX* rctx,
 }
 #endif /* WOLFSPDM_PSK */
 
-static int RespBuildEndSessionAck(WOLFSPDM_CTX* ctx,
-    const byte* in, word32 inSz, byte* out, word32* outSz)
+static int RespBuildEndSessionAck(WOLFSPDM_CTX* ctx, word32 inSz,
+    byte* out, word32* outSz)
 {
     if (inSz != 4) {
         return WOLFSPDM_E_FRAMING;
-    }
-    if (in[0] != ctx->spdmVersion) {
-        return WOLFSPDM_E_VERSION_MISMATCH;
     }
     if (*outSz < 4) {
         return WOLFSPDM_E_BUFFER_SMALL;
@@ -1187,12 +1184,21 @@ static int RespDispatchSecuredInner(WOLFSPDM_RESP_CTX* rctx,
     if (rc != WOLFSPDM_SUCCESS) {
         return rc;
     }
-    if (plainSz < 2) {
+    if (plainSz < 4) {
         return WOLFSPDM_E_FRAMING;
     }
-    code = plain[1];
 
     respPlainSz = WOLFSPDM_MAX_MSG_SIZE;
+    if (plain[0] != ctx->spdmVersion) {
+        rc = RespBuildErrorClear(ctx, SPDM_ERROR_MAJOR_VERSION_MISMATCH, 0,
+            respPlain, &respPlainSz);
+        if (rc == WOLFSPDM_SUCCESS) {
+            rc = RespEncrypt(ctx, respPlain, respPlainSz,
+                securedOut, securedOutSz);
+        }
+        return rc;
+    }
+    code = plain[1];
     switch (code) {
         /* A finish must match the exchange that opened KEY_EX and cannot run
          * again once connected, or a PSK peer could relabel its session as
@@ -1218,8 +1224,7 @@ static int RespDispatchSecuredInner(WOLFSPDM_RESP_CTX* rctx,
             finishAccepted = (rc == WOLFSPDM_SUCCESS) ? 1 : 0;
             break;
         case SPDM_END_SESSION:
-            rc = RespBuildEndSessionAck(ctx, plain, plainSz,
-                respPlain, &respPlainSz);
+            rc = RespBuildEndSessionAck(ctx, plainSz, respPlain, &respPlainSz);
             sessionEnded = (rc == WOLFSPDM_SUCCESS) ? 1 : 0;
             break;
         case SPDM_VENDOR_DEFINED_REQUEST:
