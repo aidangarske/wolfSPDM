@@ -743,7 +743,6 @@ int wolfSPDM_ConnectTCG(WOLFSPDM_CTX* ctx)
     SPDM_CONNECT_STEP(ctx, "TCG Step 7: FINISH\n",
         wolfSPDM_Finish(ctx));
 
-    ctx->state = WOLFSPDM_STATE_CONNECTED;
     wolfSPDM_DebugPrint(ctx, "TCG: SPDM Session Established! "
         "SessionID=0x%08x\n", ctx->sessionId);
 

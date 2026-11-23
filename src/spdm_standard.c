@@ -883,7 +883,6 @@ int wolfSPDM_ConnectStandard(WOLFSPDM_CTX* ctx)
         wolfSPDM_KeyExchangeValidated(ctx));
     SPDM_CONNECT_STEP(ctx, "FINISH\n", wolfSPDM_Finish(ctx));
 
-    ctx->state = WOLFSPDM_STATE_CONNECTED;
     wolfSPDM_DebugPrint(ctx, "SPDM session established, SessionID=0x%08x\n",
         ctx->sessionId);
     return WOLFSPDM_SUCCESS;

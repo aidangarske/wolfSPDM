@@ -3487,7 +3487,7 @@ static int requester_to_responder_iocb(WOLFSPDM_CTX* spdmCtx,
 }
 
 /* Pinned identity handshake + tunneled TPM2_CMD + END_SESSION, end-to-end. */
-static int test_responder_identity_roundtrip(void)
+static int test_responder_identity_roundtrip(int fineGrained)
 {
     WOLFSPDM_CTX req;
     byte rctxBuf[WOLFSPDM_RESP_CTX_STATIC_SIZE];
@@ -3503,7 +3503,8 @@ static int test_responder_identity_roundtrip(void)
     word32 idPubYSz = sizeof(idPubY);
     int rc;
 
-    printf("test_responder_identity_roundtrip...\n");
+    printf("%s...\n", fineGrained ? "test_finish_connects" :
+        "test_responder_identity_roundtrip");
 
     ASSERT_SUCCESS(wolfSPDM_Init(&req));
     ASSERT_SUCCESS(wolfSPDM_RespInit(rctx));
@@ -3536,8 +3537,24 @@ static int test_responder_identity_roundtrip(void)
         NULL));
     ASSERT_SUCCESS(wolfSPDM_SetIO(&req, requester_to_responder_iocb, rctx));
 
-    rc = wolfSPDM_ConnectTCG(&req);
-    TEST_ASSERT(rc == WOLFSPDM_SUCCESS, "identity ConnectTCG failed");
+    if (fineGrained) {
+        byte wireKey[WOLFSPDM_PUBKEY_BUF_SZ];
+        word32 wireKeySz = sizeof(wireKey);
+
+        ASSERT_SUCCESS(wolfSPDM_GetVersion(&req));
+        ASSERT_SUCCESS(wolfSPDM_TCG_GetPubKey(&req, wireKey, &wireKeySz));
+        ASSERT_SUCCESS(wolfSPDM_Sha384Hash(req.certChainHash, wireKey,
+            wireKeySz, NULL, 0, NULL, 0));
+        ASSERT_SUCCESS(wolfSPDM_TranscriptAdd(&req, req.certChainHash,
+            WOLFSPDM_HASH_SIZE));
+        ASSERT_SUCCESS(wolfSPDM_KeyExchange(&req));
+        ASSERT_EQ(wolfSPDM_IsConnected(&req), 0, "Connected before FINISH");
+        ASSERT_SUCCESS(wolfSPDM_Finish(&req));
+    }
+    else {
+        rc = wolfSPDM_ConnectTCG(&req);
+        TEST_ASSERT(rc == WOLFSPDM_SUCCESS, "identity ConnectTCG failed");
+    }
     ASSERT_EQ(wolfSPDM_IsConnected(&req), 1, "Requester not connected");
 
     XMEMSET(cmd, 0, sizeof(cmd));
@@ -6061,7 +6078,8 @@ int main(void)
     test_responder_psk_replace_guard();
     test_responder_configured_psk();
 #endif
-    test_responder_identity_roundtrip();
+    test_responder_identity_roundtrip(0);
+    test_responder_identity_roundtrip(1);
     test_tcg_mode_connect_roundtrip();
 #endif
 #if defined(WOLFSPDM_PSK) && defined(WOLFSPDM_TCG)

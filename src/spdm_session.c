@@ -205,6 +205,10 @@ int wolfSPDM_Finish(WOLFSPDM_CTX* ctx)
         rc = wolfSPDM_DeriveAppDataKeys(ctx);
     }
 
+    if (rc == WOLFSPDM_SUCCESS) {
+        ctx->state = WOLFSPDM_STATE_CONNECTED;
+    }
+
     /* Always zero sensitive stack buffers */
     wc_ForceZero(finishBuf, sizeof(finishBuf));
     wc_ForceZero(decBuf, sizeof(decBuf));
