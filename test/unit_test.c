@@ -74,6 +74,19 @@ static int g_testsFailed = 0;
 #define TEST_CTX_FREE() \
     wolfSPDM_Free(ctx)
 
+static int test_handshake_secrets_cleared(const WOLFSPDM_CTX* ctx)
+{
+    static const byte zero[WOLFSPDM_HASH_SIZE];
+
+    return ctx->sharedSecretSz == 0 && !ctx->flags.ephemeralKeyInit &&
+        XMEMCMP(ctx->sharedSecret, zero, sizeof(ctx->sharedSecret)) == 0 &&
+        XMEMCMP(ctx->handshakeSecret, zero, sizeof(ctx->handshakeSecret)) == 0 &&
+        XMEMCMP(ctx->reqHsSecret, zero, sizeof(ctx->reqHsSecret)) == 0 &&
+        XMEMCMP(ctx->rspHsSecret, zero, sizeof(ctx->rspHsSecret)) == 0 &&
+        XMEMCMP(ctx->reqFinishedKey, zero, sizeof(ctx->reqFinishedKey)) == 0 &&
+        XMEMCMP(ctx->rspFinishedKey, zero, sizeof(ctx->rspFinishedKey)) == 0;
+}
+
 /* Dummy I/O callback for testing */
 static int dummy_io_cb(WOLFSPDM_CTX* ctx, const byte* txBuf, word32 txSz,
     byte* rxBuf, word32* rxSz, void* userCtx)
@@ -778,6 +791,8 @@ static int test_key_exchange_rsp_hmac_check(void)
     rc = wolfSPDM_ParseKeyExchangeRsp(ctx, keRsp, keRspLen);
     ASSERT_EQ(rc, WOLFSPDM_E_BAD_HMAC,
         "flipped rspVerifyData byte must return BAD_HMAC");
+    TEST_ASSERT(test_handshake_secrets_cleared(ctx),
+        "Rejected key exchange must retire handshake material");
 
     wc_ecc_free(&ltKey);
     wc_ecc_free(&respEphem);
@@ -2563,8 +2578,11 @@ static int test_derive_app_data_keys(void)
     TEST_ASSERT(wolfSPDM_DeriveAppDataKeys(NULL) != WOLFSPDM_SUCCESS,
         "NULL ctx");
 
-    /* Set up handshake secret and transcript */
-    XMEMSET(ctx->handshakeSecret, 0x5A, WOLFSPDM_HASH_SIZE);
+    /* Set up handshake material and a transcript for the key transition. */
+    ASSERT_SUCCESS(wolfSPDM_GenerateEphemeralKey(ctx));
+    XMEMSET(ctx->sharedSecret, 0x5A, sizeof(ctx->sharedSecret));
+    ctx->sharedSecretSz = sizeof(ctx->sharedSecret);
+    ASSERT_SUCCESS(wolfSPDM_DeriveHandshakeKeys(ctx, zeros));
     wolfSPDM_TranscriptAdd(ctx, (byte*)"test data for th2", 17);
     ctx->reqSeqNum = 99;
     ctx->rspSeqNum = 99;
@@ -2576,6 +2594,8 @@ static int test_derive_app_data_keys(void)
         "rspDataKey is zero");
     ASSERT_EQ(ctx->reqSeqNum, 0, "reqSeqNum not reset");
     ASSERT_EQ(ctx->rspSeqNum, 0, "rspSeqNum not reset");
+    TEST_ASSERT(test_handshake_secrets_cleared(ctx),
+        "Application key installation must retire handshake material");
 
     TEST_CTX_FREE();
     TEST_PASS();

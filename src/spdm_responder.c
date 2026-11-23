@@ -267,22 +267,11 @@ void wolfSPDM_RespReset(WOLFSPDM_RESP_CTX* ctx)
     wc_ForceZero(ctx->ctx.rspDataKey, sizeof(ctx->ctx.rspDataKey));
     wc_ForceZero(ctx->ctx.reqDataIv, sizeof(ctx->ctx.reqDataIv));
     wc_ForceZero(ctx->ctx.rspDataIv, sizeof(ctx->ctx.rspDataIv));
-    wc_ForceZero(ctx->ctx.handshakeSecret,
-                 sizeof(ctx->ctx.handshakeSecret));
-    wc_ForceZero(ctx->ctx.reqHsSecret, sizeof(ctx->ctx.reqHsSecret));
-    wc_ForceZero(ctx->ctx.rspHsSecret, sizeof(ctx->ctx.rspHsSecret));
-    wc_ForceZero(ctx->ctx.reqFinishedKey,
-                 sizeof(ctx->ctx.reqFinishedKey));
-    wc_ForceZero(ctx->ctx.rspFinishedKey,
-                 sizeof(ctx->ctx.rspFinishedKey));
-    wc_ForceZero(ctx->ctx.sharedSecret, sizeof(ctx->ctx.sharedSecret));
-    ctx->ctx.sharedSecretSz = 0;
+    wolfSPDM_ClearHandshakeSecrets(&ctx->ctx);
 #ifndef WOLFSPDM_NO_KEY_UPDATE
     wc_ForceZero(ctx->ctx.reqAppSecret, sizeof(ctx->ctx.reqAppSecret));
     wc_ForceZero(ctx->ctx.rspAppSecret, sizeof(ctx->ctx.rspAppSecret));
 #endif
-    /* The ephemeral key and transcript would rebuild every session key */
-    wolfSPDM_FreeEphemeralKey(&ctx->ctx);
     wolfSPDM_TranscriptReset(&ctx->ctx);
     ctx->ctx.reqSeqNum = 0;
     ctx->ctx.rspSeqNum = 0;

@@ -543,6 +543,7 @@ WOLFSPDM_API int wolfSPDM_MlKemDecapsulate(WOLFSPDM_CTX* ctx, const byte* ct,
 
 WOLFSPDM_API int wolfSPDM_DeriveHandshakeKeys(WOLFSPDM_CTX* ctx, const byte* th1Hash);
 WOLFSPDM_API int wolfSPDM_DeriveFromHandshakeSecret(WOLFSPDM_CTX* ctx, const byte* th1Hash);
+WOLFSPDM_LOCAL void wolfSPDM_ClearHandshakeSecrets(WOLFSPDM_CTX* ctx);
 WOLFSPDM_API int wolfSPDM_DeriveAppDataKeys(WOLFSPDM_CTX* ctx);
 WOLFSPDM_API int wolfSPDM_HkdfExpandLabel(byte spdmVersion, const byte* secret, word32 secretSz,
     const char* label, const byte* context, word32 contextSz,

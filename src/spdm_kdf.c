@@ -213,6 +213,18 @@ int wolfSPDM_DeriveHandshakeKeys(WOLFSPDM_CTX* ctx, const byte* th1Hash)
 
 /* PSK key derivation moved to spdm_psk.c */
 
+void wolfSPDM_ClearHandshakeSecrets(WOLFSPDM_CTX* ctx)
+{
+    wc_ForceZero(ctx->sharedSecret, sizeof(ctx->sharedSecret));
+    ctx->sharedSecretSz = 0;
+    wc_ForceZero(ctx->handshakeSecret, sizeof(ctx->handshakeSecret));
+    wc_ForceZero(ctx->reqHsSecret, sizeof(ctx->reqHsSecret));
+    wc_ForceZero(ctx->rspHsSecret, sizeof(ctx->rspHsSecret));
+    wc_ForceZero(ctx->reqFinishedKey, sizeof(ctx->reqFinishedKey));
+    wc_ForceZero(ctx->rspFinishedKey, sizeof(ctx->rspFinishedKey));
+    wolfSPDM_FreeEphemeralKey(ctx);
+}
+
 int wolfSPDM_DeriveAppDataKeys(WOLFSPDM_CTX* ctx)
 {
     byte th2Hash[WOLFSPDM_HASH_SIZE];
@@ -274,6 +286,7 @@ int wolfSPDM_DeriveAppDataKeys(WOLFSPDM_CTX* ctx)
         XMEMCPY(ctx->reqAppSecret, reqAppSecret, WOLFSPDM_HASH_SIZE);
         XMEMCPY(ctx->rspAppSecret, rspAppSecret, WOLFSPDM_HASH_SIZE);
     #endif
+        wolfSPDM_ClearHandshakeSecrets(ctx);
         /* Reset sequence numbers for application phase */
         ctx->reqSeqNum = 0;
         ctx->rspSeqNum = 0;

@@ -528,6 +528,7 @@ int wolfSPDM_ParseKeyExchangeRsp(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufS
     byte expectedHmac[WOLFSPDM_HASH_SIZE];
     const byte* signature;
     const byte* rspVerifyData;
+    int haveSharedSecret = 0;
     int rc;
 
     SPDM_CHECK_PARSE_OR_ERROR_ARGS(ctx, buf, bufSz, 140);
@@ -592,6 +593,7 @@ int wolfSPDM_ParseKeyExchangeRsp(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufS
             &buf[40 + WOLFSPDM_ECC_KEY_SIZE]);
     }
     if (rc == WOLFSPDM_SUCCESS) {
+        haveSharedSecret = 1;
         rc = wolfSPDM_TranscriptHash(ctx, ctx->th1);
     }
     if (rc == WOLFSPDM_SUCCESS) {
@@ -618,6 +620,14 @@ int wolfSPDM_ParseKeyExchangeRsp(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufS
         ctx->mutAuthRequested = buf[6];
         ctx->reqSlotIdParam = buf[7];
         ctx->state = WOLFSPDM_STATE_KEY_EX;
+    }
+    else if (haveSharedSecret) {
+        wolfSPDM_ClearHandshakeSecrets(ctx);
+        wc_ForceZero(ctx->reqDataKey, sizeof(ctx->reqDataKey));
+        wc_ForceZero(ctx->rspDataKey, sizeof(ctx->rspDataKey));
+        wc_ForceZero(ctx->reqDataIv, sizeof(ctx->reqDataIv));
+        wc_ForceZero(ctx->rspDataIv, sizeof(ctx->rspDataIv));
+        ctx->state = WOLFSPDM_STATE_ERROR;
     }
 
     wc_ForceZero(expectedHmac, sizeof(expectedHmac));

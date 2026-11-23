@@ -440,18 +440,9 @@ void wolfSPDM_ResetSession(WOLFSPDM_CTX* ctx)
     wc_ForceZero(ctx->reqAppSecret, sizeof(ctx->reqAppSecret));
     wc_ForceZero(ctx->rspAppSecret, sizeof(ctx->rspAppSecret));
 #endif
-    /* Handshake keys */
-    wc_ForceZero(ctx->reqHsSecret, sizeof(ctx->reqHsSecret));
-    wc_ForceZero(ctx->rspHsSecret, sizeof(ctx->rspHsSecret));
-    wc_ForceZero(ctx->reqFinishedKey, sizeof(ctx->reqFinishedKey));
-    wc_ForceZero(ctx->rspFinishedKey, sizeof(ctx->rspFinishedKey));
-    /* Secrets and hashes */
-    wc_ForceZero(ctx->handshakeSecret, sizeof(ctx->handshakeSecret));
-    wc_ForceZero(ctx->sharedSecret, sizeof(ctx->sharedSecret));
-    ctx->sharedSecretSz = 0;
+    wolfSPDM_ClearHandshakeSecrets(ctx);
     wc_ForceZero(ctx->th1, sizeof(ctx->th1));
     wc_ForceZero(ctx->th2, sizeof(ctx->th2));
-    wolfSPDM_FreeEphemeralKey(ctx);
 #ifndef WOLFSPDM_NO_CERT
     ctx->rspCaps = 0;
     ctx->dataTransferSize = 0;
