@@ -1107,7 +1107,7 @@ static int test_tcg_get_pub_key_preserves_pin(void)
     byte pubKey[sizeof(tpmtPublic)];
     word32 pubKeySz;
     int rc;
-    TCG_GET_PUB_KEY_IO_CTX ioCtx;
+    static TCG_GET_PUB_KEY_IO_CTX ioCtx;
     TEST_CTX_SETUP();
 
     printf("test_tcg_get_pub_key_preserves_pin...\n");
@@ -2502,12 +2502,14 @@ static int test_vendor_defined_roundtrip(void)
     byte outBuf[64], payload[32];
     char vdCode[9];
     word32 payloadSz;
-    int i, built;
-    int parsed;
+    int i;
     printf("test_vendor_defined_roundtrip...\n");
 
     for (i = 0; i < 5; i++) {
         byte testData[4] = {(byte)i, 0x11, 0x22, 0x33};
+        int built;
+        int parsed;
+
         built = wolfSPDM_BuildVendorDefined(SPDM_VERSION_12, codes[i],
             testData, 4, outBuf, sizeof(outBuf));
         TEST_ASSERT(built > 0, "build failed");
