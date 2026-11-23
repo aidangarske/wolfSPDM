@@ -188,6 +188,7 @@ int wolfSPDM_Finish(WOLFSPDM_CTX* ctx)
     byte decBuf[WOLFSPDM_FINISH_RSP_MAX];
     word32 finishSz = sizeof(finishBuf);
     word32 decSz = sizeof(decBuf);
+    word32 mark;
     int rc;
 
     /* FINISH is only valid after a successful KEY_EXCHANGE; otherwise the
@@ -196,6 +197,7 @@ int wolfSPDM_Finish(WOLFSPDM_CTX* ctx)
         return WOLFSPDM_E_BAD_STATE;
     }
 
+    mark = ctx->transcriptLen;
     rc = wolfSPDM_BuildFinish(ctx, finishBuf, &finishSz);
     if (rc == WOLFSPDM_SUCCESS) {
         rc = wolfSPDM_FinishXfer(ctx, finishBuf, finishSz, decBuf, &decSz);
@@ -211,6 +213,9 @@ int wolfSPDM_Finish(WOLFSPDM_CTX* ctx)
 
     if (rc == WOLFSPDM_SUCCESS) {
         ctx->state = WOLFSPDM_STATE_CONNECTED;
+    }
+    else {
+        ctx->transcriptLen = mark;
     }
 
     /* Always zero sensitive stack buffers */

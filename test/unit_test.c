@@ -1768,6 +1768,35 @@ static int test_finish_no_io(void)
     TEST_PASS();
 }
 
+static int test_finish_preserves_transcript_on_io_failure(void)
+{
+    static const byte transcript[] = { SPDM_VERSION_12, SPDM_KEY_EXCHANGE, 0, 0 };
+    byte th1[WOLFSPDM_HASH_SIZE] = {0};
+    TEST_CTX_SETUP_V12();
+
+    printf("test_finish_preserves_transcript_on_io_failure...\n");
+#ifdef WOLFSPDM_NO_MCTP
+    ASSERT_SUCCESS(wolfSPDM_SetMode(ctx, WOLFSPDM_MODE_TCG));
+#endif
+    ctx->sessionId = 0x00020001;
+    ctx->state = WOLFSPDM_STATE_KEY_EX;
+    XMEMSET(ctx->sharedSecret, 0x5A, sizeof(ctx->sharedSecret));
+    ctx->sharedSecretSz = sizeof(ctx->sharedSecret);
+    ASSERT_SUCCESS(wolfSPDM_DeriveHandshakeKeys(ctx, th1));
+    ASSERT_SUCCESS(wolfSPDM_SetIO(ctx, dummy_io_cb, NULL));
+    ASSERT_SUCCESS(wolfSPDM_TranscriptAdd(ctx, transcript, sizeof(transcript)));
+    ASSERT_EQ(wolfSPDM_Finish(ctx), WOLFSPDM_E_IO_FAIL,
+        "Transport failure should be returned");
+    ASSERT_EQ(ctx->transcriptLen, (word32)sizeof(transcript),
+        "Failed FINISH should preserve the transcript length");
+    ASSERT_EQ(XMEMCMP(ctx->transcript, transcript, sizeof(transcript)), 0,
+        "Failed FINISH should preserve the transcript bytes");
+    ASSERT_EQ(ctx->reqSeqNum, 1, "Sealing FINISH consumes a sequence number");
+
+    TEST_CTX_FREE();
+    TEST_PASS();
+}
+
 static int test_secured_exchange_null_args(void)
 {
     byte cmd[4] = {0}, rsp[64];
@@ -5984,6 +6013,7 @@ int main(void)
     test_key_exchange_no_io();
     test_key_exchange_preserves_transcript_on_io_failure();
     test_finish_no_io();
+    test_finish_preserves_transcript_on_io_failure();
     test_secured_exchange_null_args();
     test_disconnect_states();
 
