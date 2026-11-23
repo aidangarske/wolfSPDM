@@ -65,7 +65,7 @@ otherwise; failures are negative error codes from `wolfspdm/spdm_error.h`.
 ## Session maintenance
 
 - `wolfSPDM_Heartbeat` *(`WOLFSPDM_HAS_HEARTBEAT`)*
-- `wolfSPDM_KeyUpdate` *(`WOLFSPDM_HAS_KEY_UPDATE`)*
+- `wolfSPDM_KeyUpdate` *(`WOLFSPDM_HAS_KEY_UPDATE`)*: if `VerifyNewKey` fails after the responder acknowledged the update, the session ends and must be re-established
 
 ## TCG SPDM binding (`wolfspdm/spdm_tcg.h`, `WOLFSPDM_TCG`)
 

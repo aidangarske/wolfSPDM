@@ -6601,6 +6601,7 @@ static int g_peerRejects;
 static int g_peerGarble;     /* corrupt the next secured response */
 static byte g_peerRejectCode; /* ErrorCode when rejecting, else Busy */
 static int g_peerClearReply; /* answer the next secured request in clear */
+static int g_peerRejectVerify; /* refuse KEY_UPDATE VerifyNewKey */
 
 #ifndef WOLFSPDM_NO_KEY_UPDATE
 static void test_swap(byte* a, byte* b, word32 sz)
@@ -6801,6 +6802,10 @@ static int test_peer_dispatch(WOLFSPDM_CTX* ctx, WOLFSPDM_CTX* p,
         *rspSz = reqSz;
     }
 #ifndef WOLFSPDM_NO_KEY_UPDATE
+    else if (req[1] == SPDM_KEY_UPDATE && g_peerRejectVerify &&
+            req[2] == SPDM_KEY_UPDATE_OP_VERIFY_NEW_KEY) {
+        rsp[2] = SPDM_ERROR_BUSY;
+    }
     else if (req[1] == SPDM_KEY_UPDATE) {
         rsp[1] = SPDM_KEY_UPDATE_ACK;
         rsp[2] = req[2];
@@ -7368,6 +7373,28 @@ static int test_key_update_loopback(void)
     ASSERT_EQ(wolfSPDM_KeyUpdate(ctx, 1), WOLFSPDM_E_CAPS_MISMATCH,
         "Responder without KEY_UPD_CAP should be refused");
 #endif
+
+    wolfSPDM_Free(&g_peer);
+    TEST_CTX_FREE();
+    TEST_PASS();
+}
+
+/* A failed VerifyNewKey ends the session rather than leaving it half-updated */
+static int test_key_update_verify_failure(void)
+{
+    int rc;
+    TEST_CTX_SETUP();
+
+    printf("test_key_update_verify_failure...\n");
+    test_session_loopback(ctx);
+    g_peerRejectVerify = 1;
+    rc = wolfSPDM_KeyUpdate(ctx, 0);
+    g_peerRejectVerify = 0;
+    ASSERT_EQ(rc, WOLFSPDM_E_PEER_ERROR, "VerifyNewKey rejection");
+    ASSERT_EQ(wolfSPDM_IsConnected(ctx), 0, "Unverified key ends the session");
+    TEST_ASSERT(test_session_retired(ctx), "Session keys must be destroyed");
+    TEST_ASSERT(wolfSPDM_KeyUpdate(ctx, 0) != WOLFSPDM_SUCCESS,
+        "No fresh update on a session with an unverified key");
 
     wolfSPDM_Free(&g_peer);
     TEST_CTX_FREE();
@@ -8026,6 +8053,7 @@ int main(void)
     test_derive_updated_keys();
 #ifndef WOLFSPDM_NO_MCTP
     test_key_update_loopback();
+    test_key_update_verify_failure();
 #endif
 #endif
 #ifndef WOLFSPDM_NO_MEAS

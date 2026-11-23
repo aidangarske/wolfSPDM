@@ -361,6 +361,7 @@ int wolfSPDM_KeyUpdate(WOLFSPDM_CTX* ctx, int updateAll)
     byte op;
     byte tag = 0;
     int rotated = 0;
+    int verifying = 0;
     int rc;
 
     op = updateAll ? SPDM_KEY_UPDATE_OP_UPDATE_ALL_KEYS :
@@ -421,6 +422,7 @@ int wolfSPDM_KeyUpdate(WOLFSPDM_CTX* ctx, int updateAll)
     }
 
     if (rc == WOLFSPDM_SUCCESS) {
+        verifying = 1;
         txSz = sizeof(txBuf);
         rc = wolfSPDM_BuildKeyUpdate(ctx, txBuf, &txSz,
             SPDM_KEY_UPDATE_OP_VERIFY_NEW_KEY, &tag);
@@ -432,6 +434,11 @@ int wolfSPDM_KeyUpdate(WOLFSPDM_CTX* ctx, int updateAll)
     if (rc == WOLFSPDM_SUCCESS) {
         rc = wolfSPDM_ParseKeyUpdateAck(ctx, rxBuf, rxSz,
             SPDM_KEY_UPDATE_OP_VERIFY_NEW_KEY, tag);
+    }
+    /* DSP0274: an unconfirmed new key is retried or ends the session */
+    if (rc != WOLFSPDM_SUCCESS && verifying) {
+        wolfSPDM_ResetSession(ctx);
+        ctx->state = WOLFSPDM_STATE_ERROR;
     }
 
     wc_ForceZero(saved, sizeof(saved));
