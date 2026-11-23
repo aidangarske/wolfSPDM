@@ -170,6 +170,7 @@ static int wolfSPDM_EncryptRecord(WOLFSPDM_CTX* ctx, int appMsg,
     wc_ForceZero(iv, sizeof(iv));
     if (aesInit) {
         wc_AesFree(&aes);
+        wc_ForceZero(&aes, sizeof(aes));
     }
 
     if (rc == 0) {
@@ -324,6 +325,7 @@ static int wolfSPDM_DecryptRecord(WOLFSPDM_CTX* ctx, int appMsg,
     wc_ForceZero(iv, sizeof(iv));
     if (aesInit) {
         wc_AesFree(&aes);
+        wc_ForceZero(&aes, sizeof(aes));
     }
 
     /* ----- Parse decrypted payload ----- */
