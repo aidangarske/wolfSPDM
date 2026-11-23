@@ -686,6 +686,7 @@ static int RespDispatchClear(WOLFSPDM_RESP_CTX* rctx,
             }
             break;
         default:
+            ctx->transcriptLen = transcriptMark;
             return RespBuildErrorClear(ctx,
                 SPDM_ERROR_UNSUPPORTED_REQUEST, code, out, outSz);
     }

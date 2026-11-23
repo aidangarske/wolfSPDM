@@ -3976,6 +3976,10 @@ static int test_responder_identity_roundtrip(int fineGrained)
         ASSERT_SUCCESS(wolfSPDM_SetIO(&req, requester_to_responder_iocb,
             rctx));
         ASSERT_SUCCESS(wolfSPDM_GetVersion(&req));
+#ifndef WOLFSPDM_NO_CERT
+        ASSERT_EQ(wolfSPDM_GetDigests(&req), WOLFSPDM_E_PEER_ERROR,
+            "This responder does not support certificate digests");
+#endif
         ASSERT_SUCCESS(wolfSPDM_TCG_GetPubKey(&req, wireKey, &wireKeySz));
         ASSERT_SUCCESS(wolfSPDM_Sha384Hash(req.certChainHash, wireKey,
             wireKeySz, NULL, 0, NULL, 0));
