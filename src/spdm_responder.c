@@ -256,13 +256,9 @@ word32 wolfSPDM_RespGetIdentityKey(const WOLFSPDM_RESP_CTX* ctx,
     return ctx->idPubKeyLen;
 }
 
-void wolfSPDM_RespReset(WOLFSPDM_RESP_CTX* ctx)
+/* Wipe session keys, handshake secrets and the ephemeral key */
+static void RespClearSessionKeys(WOLFSPDM_RESP_CTX* ctx)
 {
-    if (ctx == NULL) {
-        return;
-    }
-    /* Identity key, PSK, mode flags survive; only session-scoped material
-     * is wiped. */
     wc_ForceZero(ctx->ctx.reqDataKey, sizeof(ctx->ctx.reqDataKey));
     wc_ForceZero(ctx->ctx.rspDataKey, sizeof(ctx->ctx.rspDataKey));
     wc_ForceZero(ctx->ctx.reqDataIv, sizeof(ctx->ctx.reqDataIv));
@@ -272,15 +268,25 @@ void wolfSPDM_RespReset(WOLFSPDM_RESP_CTX* ctx)
     wc_ForceZero(ctx->ctx.reqAppSecret, sizeof(ctx->ctx.reqAppSecret));
     wc_ForceZero(ctx->ctx.rspAppSecret, sizeof(ctx->ctx.rspAppSecret));
 #endif
+    ctx->ctx.sessionId = 0;
+    ctx->flags.pendingAsym = 0;
+}
+
+void wolfSPDM_RespReset(WOLFSPDM_RESP_CTX* ctx)
+{
+    if (ctx == NULL) {
+        return;
+    }
+    /* Identity key, PSK, mode flags survive; only session-scoped material
+     * is wiped. */
+    RespClearSessionKeys(ctx);
     wolfSPDM_TranscriptReset(&ctx->ctx);
     /* The VCA left with the transcript; GET_VERSION must renegotiate. */
     ctx->ctx.spdmVersion = 0;
     ctx->ctx.reqSeqNum = 0;
     ctx->ctx.rspSeqNum = 0;
-    ctx->ctx.sessionId = 0;
     ctx->ctx.state = WOLFSPDM_STATE_INIT;
     ctx->flags.sessionAsym = 0;
-    ctx->flags.pendingAsym = 0;
     wc_ForceZero(ctx->secureInPlain, sizeof(ctx->secureInPlain));
     wc_ForceZero(ctx->secureOutPlain, sizeof(ctx->secureOutPlain));
     wc_ForceZero(ctx->vdInPayload, sizeof(ctx->vdInPayload));
@@ -698,6 +704,11 @@ static int RespDispatchClear(WOLFSPDM_RESP_CTX* rctx,
     }
     if (rc != WOLFSPDM_SUCCESS && ctx->transcriptLen > transcriptMark) {
         ctx->transcriptLen = transcriptMark;
+    }
+    /* Only reached without a live session (checked above) */
+    if (rc != WOLFSPDM_SUCCESS &&
+            (code == SPDM_KEY_EXCHANGE || code == SPDM_PSK_EXCHANGE)) {
+        RespClearSessionKeys(rctx);
     }
     return rc;
 }
@@ -1175,6 +1186,7 @@ static int RespDispatchSecuredInner(WOLFSPDM_RESP_CTX* rctx,
     byte code;
     int rc;
     int sessionEnded = 0;
+    int finishAttempted = 0;
     int finishAccepted = 0;
 
     /* KEY_EX has handshake traffic keys; CONNECTED has application traffic
@@ -1215,6 +1227,7 @@ static int RespDispatchSecuredInner(WOLFSPDM_RESP_CTX* rctx,
                     rctx->flags.pendingAsym) {
                 return WOLFSPDM_E_BAD_STATE;
             }
+            finishAttempted = 1;
             rc = RespHandlePskFinish(rctx, plain, plainSz,
                 respPlain, &respPlainSz);
             finishAccepted = (rc == WOLFSPDM_SUCCESS) ? 1 : 0;
@@ -1225,6 +1238,7 @@ static int RespDispatchSecuredInner(WOLFSPDM_RESP_CTX* rctx,
                     !rctx->flags.pendingAsym) {
                 return WOLFSPDM_E_BAD_STATE;
             }
+            finishAttempted = 1;
             rc = RespHandleFinish(rctx, plain, plainSz,
                 respPlain, &respPlainSz);
             finishAccepted = (rc == WOLFSPDM_SUCCESS) ? 1 : 0;
@@ -1259,6 +1273,10 @@ static int RespDispatchSecuredInner(WOLFSPDM_RESP_CTX* rctx,
         else {
             wolfSPDM_RespReset(rctx);
         }
+    }
+    else if (finishAttempted) {
+        /* The failed FINISH is in the transcript, so no retry can verify */
+        wolfSPDM_RespReset(rctx);
     }
 
     if (sessionEnded) {

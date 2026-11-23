@@ -4436,6 +4436,111 @@ static int test_responder_key_exchange_envelope(void)
     TEST_PASS();
 }
 
+/* WOLFSPDM_CTX is the first member of the responder context */
+#define TEST_RESP_SPDM_CTX(r) ((const WOLFSPDM_CTX*)(const void*)(r))
+
+/* A failed responder handshake keeps no handshake secrets, ephemeral key or
+ * session, and a later handshake still completes. */
+static int test_responder_failed_handshake_cleanup(void)
+{
+    static const byte zero[WOLFSPDM_AEAD_KEY_SIZE];
+    WOLFSPDM_CTX req;
+    byte rctxBuf[WOLFSPDM_RESP_CTX_STATIC_SIZE];
+    WOLFSPDM_RESP_CTX* rctx = (WOLFSPDM_RESP_CTX*)rctxBuf;
+    const WOLFSPDM_CTX* inner = TEST_RESP_SPDM_CTX(rctxBuf);
+    ecc_key idKey;
+    byte idPriv[WOLFSPDM_ECC_KEY_SIZE];
+    byte idPub[WOLFSPDM_ECC_POINT_SIZE];
+    word32 idPrivSz = sizeof(idPriv);
+    word32 idPubXSz = WOLFSPDM_ECC_KEY_SIZE;
+    word32 idPubYSz = WOLFSPDM_ECC_KEY_SIZE;
+    byte getVersion[4] = { SPDM_VERSION_10, SPDM_GET_VERSION, 0, 0 };
+    byte keyEx[138];
+    byte frame[WOLFSPDM_TCG_HEADER_SIZE + sizeof(keyEx)];
+    byte wireKey[WOLFSPDM_PUBKEY_BUF_SZ];
+    word32 wireKeySz = sizeof(wireKey);
+    byte outBuf[512];
+    word32 outSz;
+    int rc;
+
+    printf("test_responder_failed_handshake_cleanup...\n");
+    ASSERT_SUCCESS(wolfSPDM_Init(&req));
+    ASSERT_SUCCESS(wolfSPDM_RespInit(rctx));
+    ASSERT_SUCCESS(wc_ecc_init(&idKey));
+    ASSERT_SUCCESS(wc_ecc_make_key(&req.rng, WOLFSPDM_ECC_KEY_SIZE,
+        &idKey));
+    ASSERT_SUCCESS(wc_ecc_export_private_only(&idKey, idPriv, &idPrivSz));
+    ASSERT_SUCCESS(wc_ecc_export_public_raw(&idKey, idPub, &idPubXSz,
+        idPub + WOLFSPDM_ECC_KEY_SIZE, &idPubYSz));
+    wc_ecc_free(&idKey);
+    ASSERT_EQ(idPrivSz + idPubXSz + idPubYSz, 3 * WOLFSPDM_ECC_KEY_SIZE,
+        "identity key size mismatch");
+    req.mode = WOLFSPDM_MODE_NUVOTON;
+    ASSERT_SUCCESS(wolfSPDM_SetResponderPubKey(&req, idPub, sizeof(idPub)));
+    ASSERT_SUCCESS(wolfSPDM_RespSetMode(rctx, 1, 0));
+    ASSERT_SUCCESS(wolfSPDM_RespSetIdentityKey(rctx, idPriv, sizeof(idPriv),
+        idPub, sizeof(idPub)));
+
+    /* An off-curve ExchangeData fails after the ephemeral key exists */
+    wolfSPDM_WriteTcgHeader(frame, WOLFSPDM_TCG_TAG_CLEAR,
+        WOLFSPDM_TCG_HEADER_SIZE + sizeof(getVersion), 0, 0);
+    XMEMCPY(frame + WOLFSPDM_TCG_HEADER_SIZE, getVersion, sizeof(getVersion));
+    outSz = sizeof(outBuf);
+    ASSERT_SUCCESS(wolfSPDM_RespHandleMessage(rctx, frame,
+        WOLFSPDM_TCG_HEADER_SIZE + sizeof(getVersion), outBuf, &outSz));
+    XMEMSET(keyEx, 0, sizeof(keyEx));
+    keyEx[0] = SPDM_VERSION_13;
+    keyEx[1] = SPDM_KEY_EXCHANGE;
+    keyEx[4] = 0x01;
+    keyEx[40 + WOLFSPDM_ECC_KEY_SIZE - 1] = 0x01;
+    keyEx[88 + WOLFSPDM_ECC_KEY_SIZE - 1] = 0x01;
+    wolfSPDM_WriteTcgHeader(frame, WOLFSPDM_TCG_TAG_CLEAR, sizeof(frame),
+        0, 0);
+    XMEMCPY(frame + WOLFSPDM_TCG_HEADER_SIZE, keyEx, sizeof(keyEx));
+    outSz = sizeof(outBuf);
+    rc = wolfSPDM_RespHandleMessage(rctx, frame, sizeof(frame), outBuf,
+        &outSz);
+    TEST_ASSERT(rc != WOLFSPDM_SUCCESS ||
+        outBuf[WOLFSPDM_TCG_HEADER_SIZE + 1] == SPDM_ERROR,
+        "Off-curve KEY_EXCHANGE must fail");
+    TEST_ASSERT(test_handshake_secrets_cleared(inner),
+        "Failed KEY_EXCHANGE must clear its handshake material");
+    ASSERT_EQ(inner->sessionId, 0, "Failed KEY_EXCHANGE leaves no session");
+
+    /* A RequesterVerifyData mismatch ends the handshake */
+    ASSERT_SUCCESS(wolfSPDM_SetIO(&req, requester_to_responder_iocb, rctx));
+    ASSERT_SUCCESS(wolfSPDM_GetVersion(&req));
+    ASSERT_SUCCESS(wolfSPDM_TCG_GetPubKey(&req, wireKey, &wireKeySz));
+    ASSERT_SUCCESS(wolfSPDM_Sha384Hash(req.certChainHash, wireKey,
+        wireKeySz, NULL, 0, NULL, 0));
+    ASSERT_SUCCESS(wolfSPDM_TranscriptAdd(&req, req.certChainHash,
+        WOLFSPDM_HASH_SIZE));
+    ASSERT_SUCCESS(wolfSPDM_KeyExchange(&req));
+    ASSERT_EQ(inner->state, WOLFSPDM_STATE_KEY_EX, "Responder in handshake");
+    req.reqFinishedKey[0] ^= 0x01;
+    TEST_ASSERT(wolfSPDM_Finish(&req) != WOLFSPDM_SUCCESS,
+        "Mismatched FINISH must fail");
+    ASSERT_EQ(wolfSPDM_RespIsSessionActive(rctx), 0, "No responder session");
+    ASSERT_EQ(inner->sessionId, 0, "Failed FINISH retires the session ID");
+    TEST_ASSERT(inner->state != WOLFSPDM_STATE_KEY_EX,
+        "Failed FINISH ends the handshake");
+    TEST_ASSERT(test_handshake_secrets_cleared(inner),
+        "Failed FINISH must clear its handshake material");
+    ASSERT_EQ(XMEMCMP(inner->reqDataKey, zero, sizeof(zero)), 0,
+        "Failed FINISH clears the request handshake key");
+    ASSERT_EQ(XMEMCMP(inner->rspDataKey, zero, sizeof(zero)), 0,
+        "Failed FINISH clears the response handshake key");
+
+    ASSERT_SUCCESS(wolfSPDM_ConnectTCG(&req));
+    ASSERT_EQ(wolfSPDM_IsConnected(&req), 1, "Later handshake completes");
+    ASSERT_SUCCESS(wolfSPDM_Disconnect(&req));
+
+    wc_ForceZero(idPriv, sizeof(idPriv));
+    wolfSPDM_RespFree(rctx);
+    wolfSPDM_Free(&req);
+    TEST_PASS();
+}
+
 /* The same handshake reached through wolfSPDM_Connect in WOLFSPDM_MODE_TCG,
  * which is the mode a part with no vendor adapter uses. The roundtrip above
  * names the Nuvoton mode and calls wolfSPDM_ConnectTCG directly, so neither
@@ -7572,6 +7677,7 @@ int main(void)
     test_responder_identity_roundtrip(0);
     test_responder_identity_roundtrip(1);
     test_responder_key_exchange_envelope();
+    test_responder_failed_handshake_cleanup();
     test_tcg_mode_connect_roundtrip();
 #endif
 #if defined(WOLFSPDM_PSK) && defined(WOLFSPDM_TCG)
