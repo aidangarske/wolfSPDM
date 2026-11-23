@@ -848,21 +848,6 @@ int wolfSPDM_ConnectStandard(WOLFSPDM_CTX* ctx)
     int slot = 0;
     int rc;
 
-    /* A key taken from a previous responder's chain is not a trust anchor */
-    if (ctx->flags.rspKeyFromCert) {
-        ctx->flags.hasRspPubKey = 0;
-        ctx->flags.rspKeyFromCert = 0;
-        ctx->rspPubKeyLen = 0;
-    }
-    ctx->state = WOLFSPDM_STATE_INIT;
-    ctx->lastPeerErrorCode = 0;
-    /* No chunking or other peer capability until CAPABILITIES says so */
-    ctx->rspCaps = 0;
-    wolfSPDM_TranscriptReset(ctx);
-#if !defined(WOLFSPDM_NO_MEAS) || !defined(WOLFSPDM_NO_CHALLENGE)
-    wolfSPDM_AttestFree(ctx);
-#endif
-
     SPDM_CONNECT_STEP(ctx, "GET_VERSION\n", wolfSPDM_GetVersion(ctx));
     SPDM_CONNECT_STEP(ctx, "GET_CAPABILITIES\n",
         wolfSPDM_GetCapabilities(ctx));

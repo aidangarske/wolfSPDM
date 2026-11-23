@@ -349,9 +349,6 @@ int wolfSPDM_ConnectPsk(WOLFSPDM_CTX* ctx)
 
     wolfSPDM_DebugPrint(ctx, "PSK: Starting SPDM connection\n");
 
-    ctx->state = WOLFSPDM_STATE_INIT;
-    wolfSPDM_TranscriptReset(ctx);
-
     /* Step 1: GET_VERSION */
     wolfSPDM_DebugPrint(ctx, "PSK Step 1: GET_VERSION\n");
     rc = wolfSPDM_GetVersion(ctx);

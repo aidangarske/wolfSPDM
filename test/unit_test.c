@@ -1702,6 +1702,75 @@ static int test_get_version_no_io(void)
     TEST_PASS();
 }
 
+#ifndef WOLFSPDM_NO_MCTP
+static const byte test_version_reply[] = {
+    SPDM_VERSION_10, SPDM_VERSION, 0, 0, 0, 1, 0, SPDM_VERSION_12
+};
+
+static int test_version_restart_io(WOLFSPDM_CTX* ctx, const byte* txBuf,
+    word32 txSz, byte* rxBuf, word32* rxSz, void* userCtx)
+{
+    (void)ctx;
+    (void)userCtx;
+    if (txSz != 4 || txBuf[1] != SPDM_GET_VERSION ||
+            *rxSz < sizeof(test_version_reply)) {
+        return -1;
+    }
+    XMEMCPY(rxBuf, test_version_reply, sizeof(test_version_reply));
+    *rxSz = sizeof(test_version_reply);
+    return 0;
+}
+
+static int test_get_version_restarts_connection(void)
+{
+    static const byte zero[WOLFSPDM_AEAD_KEY_SIZE];
+    static const byte previous[] = { SPDM_VERSION_12, SPDM_FINISH, 0, 0 };
+    TEST_CTX_SETUP_V12();
+
+    printf("test_get_version_restarts_connection...\n");
+    ctx->state = WOLFSPDM_STATE_CONNECTED;
+    ctx->sessionId = 0x00020001;
+    ctx->reqSeqNum = 3;
+    ctx->rspSeqNum = 2;
+    XMEMSET(ctx->reqDataKey, 0x5A, sizeof(ctx->reqDataKey));
+#ifndef WOLFSPDM_NO_CERT
+    ctx->vcaLen = sizeof(previous);
+    ctx->certChainLen = sizeof(previous);
+    ASSERT_SUCCESS(wolfSPDM_SetResponderPubKey(ctx, test_rsp_leaf_pub,
+        sizeof(test_rsp_leaf_pub)));
+    ctx->flags.rspKeyFromCert = 1;
+#endif
+    ASSERT_SUCCESS(wolfSPDM_TranscriptAdd(ctx, previous, sizeof(previous)));
+    ASSERT_SUCCESS(wolfSPDM_SetIO(ctx, test_version_restart_io, NULL));
+    ASSERT_SUCCESS(wolfSPDM_GetVersion(ctx));
+    ASSERT_EQ(ctx->state, WOLFSPDM_STATE_VERSION, "Fresh VERSION state");
+    ASSERT_EQ(ctx->transcriptLen, (word32)(4 + sizeof(test_version_reply)),
+        "Transcript should contain the fresh VERSION exchange");
+    ASSERT_EQ(ctx->transcript[1], SPDM_GET_VERSION, "Fresh transcript start");
+    ASSERT_EQ(XMEMCMP(ctx->transcript + 4, test_version_reply,
+        sizeof(test_version_reply)), 0, "Fresh transcript reply");
+    ASSERT_EQ(ctx->sessionId, 0, "Previous session must be retired");
+    ASSERT_EQ(ctx->reqSeqNum, 0, "Previous request sequence must be reset");
+    ASSERT_EQ(ctx->rspSeqNum, 0, "Previous response sequence must be reset");
+    ASSERT_EQ(XMEMCMP(ctx->reqDataKey, zero, sizeof(ctx->reqDataKey)), 0,
+        "Previous traffic key must be retired");
+#ifndef WOLFSPDM_NO_CERT
+    ASSERT_EQ(ctx->vcaLen, 0, "Prior VCA length must be cleared");
+    ASSERT_EQ(ctx->certChainLen, 0, "Prior certificate chain must be cleared");
+    ASSERT_EQ(ctx->flags.hasRspPubKey, 0, "Prior leaf key must be invalidated");
+    ASSERT_SUCCESS(wolfSPDM_SetResponderPubKey(ctx, test_rsp_leaf_pub,
+        sizeof(test_rsp_leaf_pub)));
+    ASSERT_SUCCESS(wolfSPDM_GetVersion(ctx));
+    ASSERT_EQ(ctx->flags.hasRspPubKey, 1, "The configured pin must survive");
+    ASSERT_EQ(XMEMCMP(ctx->rspPubKey, test_rsp_leaf_pub,
+        sizeof(test_rsp_leaf_pub)), 0, "The configured pin must stay intact");
+#endif
+
+    TEST_CTX_FREE();
+    TEST_PASS();
+}
+#endif /* !WOLFSPDM_NO_MCTP */
+
 static int test_key_exchange_no_io(void)
 {
     TEST_CTX_SETUP();
@@ -3712,6 +3781,11 @@ static int test_tcg_mode_connect_roundtrip(void)
     TEST_ASSERT(rc == WOLFSPDM_SUCCESS, "TPM2_CMD passthrough failed");
     ASSERT_EQ(g_tpmCbInvocations, 1, "TPM stub must have run once");
 
+    ASSERT_SUCCESS(wolfSPDM_ConnectTCG(&req));
+    ASSERT_EQ(wolfSPDM_IsConnected(&req), 1, "Requester must reconnect");
+    ASSERT_EQ(req.reqSeqNum, 0, "New session must use a new request sequence");
+    ASSERT_EQ(req.rspSeqNum, 0, "New session must use a new response sequence");
+
     ASSERT_SUCCESS(wolfSPDM_Disconnect(&req));
 
     wc_ForceZero(idPriv, sizeof(idPriv));
@@ -3775,6 +3849,12 @@ static int test_responder_psk_roundtrip(void)
         cmd, sizeof(cmd));
     TEST_ASSERT(rc == WOLFSPDM_SUCCESS, "TPM2_CMD passthrough failed");
     ASSERT_EQ(g_tpmCbInvocations, 1, "TPM stub must have run once");
+
+    ASSERT_SUCCESS(wolfSPDM_SetPSK(&req, testPsk, sizeof(testPsk), NULL, 0));
+    ASSERT_SUCCESS(wolfSPDM_ConnectPsk(&req));
+    ASSERT_EQ(wolfSPDM_IsConnected(&req), 1, "Requester must reconnect");
+    ASSERT_EQ(req.reqSeqNum, 0, "New session must use a new request sequence");
+    ASSERT_EQ(req.rspSeqNum, 0, "New session must use a new response sequence");
 
     ASSERT_SUCCESS(wolfSPDM_Disconnect(&req));
 
@@ -6010,6 +6090,9 @@ int main(void)
 #endif
     test_connect_null_args();
     test_get_version_no_io();
+#ifndef WOLFSPDM_NO_MCTP
+    test_get_version_restarts_connection();
+#endif
     test_key_exchange_no_io();
     test_key_exchange_preserves_transcript_on_io_failure();
     test_finish_no_io();

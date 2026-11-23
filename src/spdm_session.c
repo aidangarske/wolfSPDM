@@ -69,6 +69,43 @@ int wolfSPDM_GetVersion(WOLFSPDM_CTX* ctx)
     byte txBuf[8];
     byte rxBuf[32];  /* VERSION: 4 hdr + 2 count + up to 8 entries * 2 = 22 */
 
+    if (ctx == NULL) {
+        return WOLFSPDM_E_INVALID_ARG;
+    }
+    if (!ctx->flags.initialized) {
+        return WOLFSPDM_E_BAD_STATE;
+    }
+    if (ctx->ioCb == NULL) {
+        return WOLFSPDM_E_IO_FAIL;
+    }
+
+    /* GET_VERSION starts a new negotiation and ends any prior session. */
+    wolfSPDM_ResetSession(ctx);
+    wolfSPDM_TranscriptReset(ctx);
+    ctx->spdmVersion = 0;
+    ctx->lastPeerErrorCode = 0;
+#ifndef WOLFSPDM_NO_CERT
+    ctx->vcaLen = 0;
+    ctx->certChainLen = 0;
+    ctx->slotMask = 0;
+    ctx->currentSlotId = 0;
+    if (ctx->flags.rspKeyFromCert) {
+        ctx->flags.hasRspPubKey = 0;
+        ctx->flags.rspKeyFromCert = 0;
+        ctx->rspPubKeyLen = 0;
+        wc_ForceZero(ctx->rspPubKey, sizeof(ctx->rspPubKey));
+    }
+    #ifndef WOLFSPDM_NO_CHUNK
+    ctx->chunkHandle = 0;
+    #endif
+    #ifdef WOLFSPDM_HAVE_MLDSA
+    ctx->pqcAsymSel = 0;
+    #endif
+    #ifdef WOLFSPDM_HAVE_MLKEM
+    ctx->kemAlgSel = 0;
+    #endif
+#endif
+
     return wolfSPDM_ExchangeMsg(ctx, wolfSPDM_BuildGetVersionAdapter,
         wolfSPDM_ParseVersion, txBuf, sizeof(txBuf), rxBuf, sizeof(rxBuf));
 }

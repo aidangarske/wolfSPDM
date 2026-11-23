@@ -160,6 +160,7 @@ WOLFSPDM_API int wolfSPDM_IsConnected(WOLFSPDM_CTX* ctx);
 WOLFSPDM_API int wolfSPDM_Disconnect(WOLFSPDM_CTX* ctx);
 
 /* Individual handshake steps (for fine-grained control) */
+/* Start a fresh negotiation and retire any previous session. */
 WOLFSPDM_API int wolfSPDM_GetVersion(WOLFSPDM_CTX* ctx);
 #ifndef WOLFSPDM_NO_CERT
 WOLFSPDM_API int wolfSPDM_GetCapabilities(WOLFSPDM_CTX* ctx);

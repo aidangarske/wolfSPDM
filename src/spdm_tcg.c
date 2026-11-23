@@ -366,7 +366,6 @@ int wolfSPDM_TCG_GetPubKey(
 
     /* Responders reject GET_PUBK with UnexpectedRequest before GET_VERSION */
     if (ctx->state == WOLFSPDM_STATE_INIT) {
-        wolfSPDM_TranscriptReset(ctx);
         rc = wolfSPDM_GetVersion(ctx);
         if (rc != WOLFSPDM_SUCCESS) {
             wolfSPDM_DebugPrint(ctx, "GET_PUBK: GET_VERSION failed %d\n", rc);
@@ -674,9 +673,6 @@ int wolfSPDM_ConnectTCG(WOLFSPDM_CTX* ctx)
     }
 
     wolfSPDM_DebugPrint(ctx, "TCG: Starting SPDM connection\n");
-
-    ctx->state = WOLFSPDM_STATE_INIT;
-    wolfSPDM_TranscriptReset(ctx);
 
     /* Step 1: GET_VERSION */
     SPDM_CONNECT_STEP(ctx, "TCG Step 1: GET_VERSION\n",
