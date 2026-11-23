@@ -1714,6 +1714,36 @@ static int test_key_exchange_no_io(void)
     TEST_PASS();
 }
 
+static int test_key_exchange_preserves_transcript_on_io_failure(void)
+{
+    static const byte transcript[] = { SPDM_VERSION_10, SPDM_GET_VERSION, 0, 0 };
+    byte publicKey[WOLFSPDM_ECC_POINT_SIZE];
+    word32 xSz = WOLFSPDM_ECC_KEY_SIZE;
+    word32 ySz = WOLFSPDM_ECC_KEY_SIZE;
+    TEST_CTX_SETUP_V12();
+
+    printf("test_key_exchange_preserves_transcript_on_io_failure...\n");
+#ifdef WOLFSPDM_NO_MCTP
+    ASSERT_SUCCESS(wolfSPDM_SetMode(ctx, WOLFSPDM_MODE_TCG));
+#endif
+    ASSERT_SUCCESS(wolfSPDM_GenerateEphemeralKey(ctx));
+    ASSERT_SUCCESS(wolfSPDM_ExportEphemeralPubKey(ctx, publicKey, &xSz,
+        publicKey + WOLFSPDM_ECC_KEY_SIZE, &ySz));
+    ASSERT_SUCCESS(wolfSPDM_SetResponderPubKey(ctx, publicKey,
+        sizeof(publicKey)));
+    ASSERT_SUCCESS(wolfSPDM_SetIO(ctx, dummy_io_cb, NULL));
+    ASSERT_SUCCESS(wolfSPDM_TranscriptAdd(ctx, transcript, sizeof(transcript)));
+    ASSERT_EQ(wolfSPDM_KeyExchange(ctx), WOLFSPDM_E_IO_FAIL,
+        "Transport failure should be returned");
+    ASSERT_EQ(ctx->transcriptLen, (word32)sizeof(transcript),
+        "Failed key exchange should preserve the transcript length");
+    ASSERT_EQ(XMEMCMP(ctx->transcript, transcript, sizeof(transcript)), 0,
+        "Failed key exchange should preserve the transcript bytes");
+
+    TEST_CTX_FREE();
+    TEST_PASS();
+}
+
 static int test_finish_no_io(void)
 {
     TEST_CTX_SETUP();
@@ -5952,6 +5982,7 @@ int main(void)
     test_connect_null_args();
     test_get_version_no_io();
     test_key_exchange_no_io();
+    test_key_exchange_preserves_transcript_on_io_failure();
     test_finish_no_io();
     test_secured_exchange_null_args();
     test_disconnect_states();

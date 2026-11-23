@@ -79,6 +79,7 @@ static int wolfSPDM_KeyExchangeEx(WOLFSPDM_CTX* ctx, int revalidate)
     byte rxBuf[WOLFSPDM_KEY_EX_RX_SZ];
     word32 txSz = sizeof(txBuf);
     word32 rxSz = sizeof(rxBuf);
+    word32 mark = (ctx != NULL) ? ctx->transcriptLen : 0;
     int rc;
 
     /* The signature in KEY_EXCHANGE_RSP can only be checked against a
@@ -121,6 +122,9 @@ static int wolfSPDM_KeyExchangeEx(WOLFSPDM_CTX* ctx, int revalidate)
     if (rc == WOLFSPDM_SUCCESS) {
         wolfSPDM_DebugPrint(ctx, "KEY_EXCHANGE_RSP: received %u bytes\n", rxSz);
         rc = wolfSPDM_ParseKeyExchangeRsp(ctx, rxBuf, rxSz);
+    }
+    if (rc != WOLFSPDM_SUCCESS && ctx != NULL && ctx->transcriptLen > mark) {
+        ctx->transcriptLen = mark;
     }
 
     return rc;
