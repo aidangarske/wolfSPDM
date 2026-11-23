@@ -871,7 +871,13 @@ int wolfSPDM_ConnectStandard(WOLFSPDM_CTX* ctx)
         wolfSPDM_ValidateCertChain(ctx));
     SPDM_CONNECT_STEP(ctx, "KEY_EXCHANGE\n",
         wolfSPDM_KeyExchangeValidated(ctx));
-    SPDM_CONNECT_STEP(ctx, "FINISH\n", wolfSPDM_Finish(ctx));
+    wolfSPDM_DebugPrint(ctx, "FINISH\n");
+    rc = wolfSPDM_Finish(ctx);
+    if (rc != WOLFSPDM_SUCCESS) {
+        wolfSPDM_ResetSession(ctx);
+        ctx->state = WOLFSPDM_STATE_ERROR;
+        return rc;
+    }
 
     wolfSPDM_DebugPrint(ctx, "SPDM session established, SessionID=0x%08x\n",
         ctx->sessionId);

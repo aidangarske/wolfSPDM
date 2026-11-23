@@ -4449,6 +4449,158 @@ static int test_get_certificate_portions(void)
     TEST_CTX_FREE();
     TEST_PASS();
 }
+
+#ifndef WOLFSPDM_NO_MCTP
+typedef struct {
+    WOLFSPDM_CTX ctx;
+    TEST_CERT_RSP certs;
+    int finishIoCalls;
+} TEST_STANDARD_PEER;
+
+static int test_build_standard_key_exchange(WOLFSPDM_CTX* peer,
+    const WOLFSPDM_CTX* ctx, const byte* txBuf, word32 txSz,
+    byte* rxBuf, word32* rxSz)
+{
+    const word32 sigOffset = 40 + WOLFSPDM_ECC_POINT_SIZE + 2;
+    const word32 hmacOffset = sigOffset + WOLFSPDM_ECC_SIG_SIZE;
+    const word32 responseSz = hmacOffset + WOLFSPDM_HASH_SIZE;
+    word32 xSz = WOLFSPDM_ECC_KEY_SIZE;
+    word32 ySz = WOLFSPDM_ECC_KEY_SIZE;
+    byte digest[WOLFSPDM_HASH_SIZE];
+    byte signedDigest[WOLFSPDM_HASH_SIZE];
+
+    if (txSz < 40 + WOLFSPDM_ECC_POINT_SIZE || *rxSz < responseSz) {
+        return -1;
+    }
+    XMEMSET(rxBuf, 0, responseSz);
+    peer->spdmVersion = txBuf[0];
+    rxBuf[0] = txBuf[0];
+    rxBuf[1] = SPDM_KEY_EXCHANGE_RSP;
+    SPDM_Set16LE(&rxBuf[4], 2);
+    ASSERT_SUCCESS(wolfSPDM_GetRandom(peer, &rxBuf[8], 32));
+    ASSERT_SUCCESS(wolfSPDM_GenerateEphemeralKey(peer));
+    ASSERT_SUCCESS(wolfSPDM_ExportEphemeralPubKey(peer, &rxBuf[40], &xSz,
+        &rxBuf[40 + WOLFSPDM_ECC_KEY_SIZE], &ySz));
+    ASSERT_SUCCESS(wolfSPDM_ComputeSharedSecret(peer, &txBuf[40],
+        &txBuf[40 + WOLFSPDM_ECC_KEY_SIZE]));
+    ASSERT_SUCCESS(wolfSPDM_TranscriptAdd(peer, ctx->transcript,
+        ctx->transcriptLen));
+    ASSERT_SUCCESS(wolfSPDM_TranscriptAdd(peer, rxBuf, sigOffset));
+    ASSERT_SUCCESS(wolfSPDM_TranscriptHash(peer, digest));
+    ASSERT_SUCCESS(wolfSPDM_BuildSignedHash(peer->spdmVersion,
+        "responder-key_exchange_rsp signing", 34, digest, signedDigest));
+    ASSERT_SUCCESS(test_ecc_sign(&peer->rng, test_rsp_leaf_priv,
+        test_rsp_leaf_pub, signedDigest, &rxBuf[sigOffset]));
+    ASSERT_SUCCESS(wolfSPDM_TranscriptAdd(peer, &rxBuf[sigOffset],
+        WOLFSPDM_ECC_SIG_SIZE));
+    ASSERT_SUCCESS(wolfSPDM_TranscriptHash(peer, digest));
+    ASSERT_SUCCESS(wolfSPDM_DeriveHandshakeKeys(peer, digest));
+    ASSERT_SUCCESS(wolfSPDM_ComputeVerifyData(peer->rspFinishedKey, digest,
+        &rxBuf[hmacOffset]));
+    *rxSz = responseSz;
+    return 0;
+}
+
+static int standard_connect_io(WOLFSPDM_CTX* ctx, const byte* txBuf,
+    word32 txSz, byte* rxBuf, word32* rxSz, void* userCtx)
+{
+    TEST_STANDARD_PEER* peer = (TEST_STANDARD_PEER*)userCtx;
+
+    if (ctx->state == WOLFSPDM_STATE_KEY_EX) {
+        peer->finishIoCalls++;
+        return -1;
+    }
+    if (txSz < 4) {
+        return -1;
+    }
+    switch (txBuf[1]) {
+        case SPDM_GET_VERSION:
+            return test_version_restart_io(ctx, txBuf, txSz, rxBuf, rxSz,
+                NULL);
+        case SPDM_GET_CAPABILITIES:
+            if (*rxSz < 20) {
+                return -1;
+            }
+            *rxSz = 20;
+            XMEMSET(rxBuf, 0, *rxSz);
+            rxBuf[0] = txBuf[0];
+            rxBuf[1] = SPDM_CAPABILITIES;
+            SPDM_Set32LE(&rxBuf[8], SPDM_CAP_CERT_CAP | SPDM_CAP_ENCRYPT_CAP |
+                SPDM_CAP_MAC_CAP | SPDM_CAP_KEY_EX_CAP);
+            SPDM_Set32LE(&rxBuf[12], 1024);
+            SPDM_Set32LE(&rxBuf[16], 1024);
+            return 0;
+        case SPDM_NEGOTIATE_ALGORITHMS:
+            if (*rxSz < 52 || txSz != 48) {
+                return -1;
+            }
+            *rxSz = 52;
+            XMEMSET(rxBuf, 0, *rxSz);
+            rxBuf[0] = txBuf[0];
+            rxBuf[1] = SPDM_ALGORITHMS;
+            rxBuf[2] = 4;
+            SPDM_Set16LE(&rxBuf[4], 52);
+            rxBuf[6] = 1;
+            rxBuf[7] = 2;
+            SPDM_Set32LE(&rxBuf[12], SPDM_ASYM_ALGO_ECDSA_P384);
+            SPDM_Set32LE(&rxBuf[16], SPDM_HASH_ALGO_SHA_384);
+            XMEMCPY(&rxBuf[36], &txBuf[32], 16);
+            return 0;
+        case SPDM_GET_DIGESTS:
+            if (*rxSz < 4 + WOLFSPDM_HASH_SIZE) {
+                return -1;
+            }
+            rxBuf[0] = txBuf[0];
+            rxBuf[1] = SPDM_DIGESTS;
+            rxBuf[2] = 0;
+            rxBuf[3] = 1;
+            *rxSz = 4 + WOLFSPDM_HASH_SIZE;
+            return wolfSPDM_Sha384Hash(&rxBuf[4], peer->certs.chain,
+                peer->certs.chainSz, NULL, 0, NULL, 0);
+        case SPDM_GET_CERTIFICATE:
+            return cert_portion_io_cb(ctx, txBuf, txSz, rxBuf, rxSz,
+                &peer->certs);
+        case SPDM_KEY_EXCHANGE:
+            return test_build_standard_key_exchange(&peer->ctx, ctx, txBuf,
+                txSz, rxBuf, rxSz);
+        default:
+            return -1;
+    }
+}
+
+static int test_standard_connect_releases_session(void)
+{
+    static const byte zero[WOLFSPDM_HASH_SIZE];
+    static TEST_STANDARD_PEER peer;
+    TEST_CTX_SETUP();
+
+    puts("test_standard_connect_releases_session...");
+    ASSERT_SUCCESS(wolfSPDM_Init(&peer.ctx));
+    ASSERT_SUCCESS(test_load_sample_chain(&peer.ctx));
+    peer.certs.chainSz = peer.ctx.certChainLen;
+    XMEMCPY(peer.certs.chain, peer.ctx.certChain, peer.certs.chainSz);
+    ASSERT_SUCCESS(wc_InitSha384(&peer.certs.m1));
+    ASSERT_SUCCESS(wolfSPDM_SetTrustedCAs(ctx, test_ca_cert_der,
+        sizeof(test_ca_cert_der)));
+    ASSERT_SUCCESS(wolfSPDM_SetIO(ctx, standard_connect_io, &peer));
+    ASSERT_EQ(wolfSPDM_Connect(ctx), WOLFSPDM_E_IO_FAIL, "FINISH I/O failure");
+    ASSERT_EQ(peer.finishIoCalls, 1, "One I/O failure after key exchange");
+    ASSERT_EQ(ctx->state, WOLFSPDM_STATE_ERROR, "Aborted standard session");
+    TEST_ASSERT(test_handshake_secrets_cleared(ctx),
+        "Aborted standard connection must retire handshake material");
+    TEST_ASSERT(XMEMCMP(ctx->reqDataKey, zero, sizeof(ctx->reqDataKey)) == 0 &&
+        XMEMCMP(ctx->rspDataKey, zero, sizeof(ctx->rspDataKey)) == 0 &&
+        XMEMCMP(ctx->reqDataIv, zero, sizeof(ctx->reqDataIv)) == 0 &&
+        XMEMCMP(ctx->rspDataIv, zero, sizeof(ctx->rspDataIv)) == 0,
+        "Aborted standard connection must retire traffic material");
+    ASSERT_EQ(ctx->sessionId, 0, "Aborted standard session ID");
+    TEST_CTX_FREE();
+    wc_Sha384Free(&peer.certs.m1);
+    wolfSPDM_Free(&peer.ctx);
+    TEST_PASS();
+}
+#endif /* !WOLFSPDM_NO_MCTP */
+
 #endif /* !WOLFSPDM_NO_CERT */
 
 #if defined(WOLFSPDM_HAVE_MLDSA) || defined(WOLFSPDM_HAVE_MLKEM)
@@ -6398,6 +6550,9 @@ int main(void)
     test_mutual_auth_rejected_in_standard_mode();
     test_validate_cert_chain();
     test_get_certificate_portions();
+#ifndef WOLFSPDM_NO_MCTP
+    test_standard_connect_releases_session();
+#endif
     test_clear_exchange_dts();
 #endif
 #if defined(WOLFSPDM_HAVE_MLDSA) || defined(WOLFSPDM_HAVE_MLKEM)
