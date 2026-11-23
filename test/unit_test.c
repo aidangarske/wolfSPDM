@@ -3665,6 +3665,28 @@ static int resp_send_clear_vd(WOLFSPDM_RESP_CTX* rctx, const char* vdCode,
         (word32)spdmMsgSz + WOLFSPDM_TCG_HEADER_SIZE, out, outSz);
 }
 
+static int test_responder_pre_negotiation_status_version(void)
+{
+    byte rctxBuf[WOLFSPDM_RESP_CTX_STATIC_SIZE];
+    WOLFSPDM_RESP_CTX* rctx = (WOLFSPDM_RESP_CTX*)rctxBuf;
+    byte response[64];
+    word32 responseSz = sizeof(response);
+
+    printf("test_responder_pre_negotiation_status_version...\n");
+    ASSERT_SUCCESS(wolfSPDM_RespInit(rctx));
+    ASSERT_SUCCESS(wolfSPDM_RespSetMode(rctx, 1, 0));
+    ASSERT_SUCCESS(resp_send_clear_vd(rctx, WOLFSPDM_VDCODE_GET_STS,
+        NULL, 0, response, &responseSz));
+    TEST_ASSERT(responseSz >= WOLFSPDM_TCG_HEADER_SIZE + 4,
+        "GET_STS reply includes its header");
+    ASSERT_EQ(response[WOLFSPDM_TCG_HEADER_SIZE + 1],
+        SPDM_TEST_VENDOR_DEFINED_RSP, "GET_STS reply code");
+    ASSERT_EQ(response[WOLFSPDM_TCG_HEADER_SIZE], SPDM_VERSION_13,
+        "GET_STS reply must use the request version");
+    wolfSPDM_RespFree(rctx);
+    TEST_PASS();
+}
+
 /* A clear SPDM message in a TCG clear frame */
 static int resp_send_clear(WOLFSPDM_RESP_CTX* rctx, const byte* msg,
     word32 msgSz, byte* out, word32* outSz)
@@ -6819,6 +6841,7 @@ int main(void)
     test_responder_secured_requires_session();
     test_responder_get_version_reserved();
 #ifdef WOLFSPDM_NATIONS
+    test_responder_pre_negotiation_status_version();
     test_responder_psk_replace_guard();
     test_responder_configured_psk();
 #endif

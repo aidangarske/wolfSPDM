@@ -1124,7 +1124,7 @@ static int RespHandleVendorDefinedInner(WOLFSPDM_RESP_CTX* rctx,
         return WOLFSPDM_E_BUFFER_SMALL;
     }
     off = 0;
-    out[off++] = ctx->spdmVersion;
+    out[off++] = ctx->spdmVersion != 0 ? ctx->spdmVersion : in[0];
     out[off++] = WOLFSPDM_VENDOR_DEFINED_RSP;
     out[off++] = 0x00;
     out[off++] = 0x00;
