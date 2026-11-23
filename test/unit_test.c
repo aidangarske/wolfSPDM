@@ -4326,6 +4326,12 @@ static int cert_portion_io_cb(WOLFSPDM_CTX* ctx, const byte* txBuf,
 
 static int test_get_certificate_portions(void)
 {
+    static const int sessionStates[] = {
+        WOLFSPDM_STATE_KEY_EX, WOLFSPDM_STATE_FINISH, WOLFSPDM_STATE_CONNECTED
+    };
+    word32 i;
+    word32 mark;
+    int exchanges;
     static TEST_CERT_RSP r;
 #ifndef WOLFSPDM_NO_CHALLENGE
     byte want[WOLFSPDM_HASH_SIZE];
@@ -4363,6 +4369,19 @@ static int test_get_certificate_portions(void)
     ASSERT_EQ(XMEMCMP(want, got, sizeof(want)), 0,
         "M1 matches the exchanged bytes");
 #endif
+
+    mark = ctx->transcriptLen;
+    exchanges = r.exchanges;
+    for (i = 0; i < sizeof(sessionStates) / sizeof(sessionStates[0]); i++) {
+        ctx->state = sessionStates[i];
+        ASSERT_EQ(wolfSPDM_GetCertificate(ctx, 1), WOLFSPDM_E_BAD_STATE,
+            "Certificate fetching must not interrupt a session");
+        ASSERT_EQ(ctx->state, sessionStates[i], "Preserve session state");
+    }
+    ASSERT_EQ(ctx->transcriptLen, mark, "Preserve the session transcript");
+    ASSERT_EQ(ctx->certChainLen, r.chainSz, "Preserve the current chain");
+    ASSERT_EQ(ctx->currentSlotId, 0, "Preserve the current certificate slot");
+    ASSERT_EQ(r.exchanges, exchanges, "Reject before contacting the peer");
 
     wc_Sha384Free(&r.m1);
     TEST_CTX_FREE();

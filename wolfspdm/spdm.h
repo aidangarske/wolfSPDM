@@ -166,6 +166,7 @@ WOLFSPDM_API int wolfSPDM_GetVersion(WOLFSPDM_CTX* ctx);
 WOLFSPDM_API int wolfSPDM_GetCapabilities(WOLFSPDM_CTX* ctx);
 WOLFSPDM_API int wolfSPDM_NegotiateAlgorithms(WOLFSPDM_CTX* ctx);
 WOLFSPDM_API int wolfSPDM_GetDigests(WOLFSPDM_CTX* ctx);
+/* Fetch the certificate chain before starting a session. */
 WOLFSPDM_API int wolfSPDM_GetCertificate(WOLFSPDM_CTX* ctx, int slotId);
 /* Verify the fetched chain against the trust anchor and install its leaf as
  * the responder key; call between GetCertificate and KeyExchange */

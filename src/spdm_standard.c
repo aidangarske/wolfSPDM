@@ -391,6 +391,11 @@ int wolfSPDM_GetCertificate(WOLFSPDM_CTX* ctx, int slotId)
     if (ctx == NULL || slotId < 0 || slotId > 7) {
         return WOLFSPDM_E_INVALID_ARG;
     }
+    /* The fetched chain and transcript are used by the current session. */
+    if (ctx->state >= WOLFSPDM_STATE_KEY_EX &&
+            ctx->state <= WOLFSPDM_STATE_CONNECTED) {
+        return WOLFSPDM_E_BAD_STATE;
+    }
 
     /* The CERTIFICATE response (8-byte header + portion) must fit the
      * responder's DataTransferSize */
