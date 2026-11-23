@@ -130,6 +130,7 @@ int wolfSPDM_BuildPskExchange(WOLFSPDM_CTX* ctx, byte* buf, word32* bufSz)
 int wolfSPDM_ParsePskExchangeRsp(WOLFSPDM_CTX* ctx, const byte* buf,
     word32 bufSz)
 {
+    const word32 fixedSz = 12;
     word16 rspContextLen, opaqueLen;
     word32 verifyOffset;
     word32 rspPartialLen;
@@ -139,19 +140,19 @@ int wolfSPDM_ParsePskExchangeRsp(WOLFSPDM_CTX* ctx, const byte* buf,
     int usedPsk = 0;
     int rc;
 
-    /* Minimum: header(4) + RspSessionID(2) + Reserved(1) + RspContextLen(2) +
-     * OpaqueLen(2) + VerifyData(48) = 59 */
-    SPDM_CHECK_PARSE_OR_ERROR_ARGS(ctx, buf, bufSz, 59);
+    /* The fixed fields take 12 bytes, followed by variable fields and
+     * ResponderVerifyData. */
+    SPDM_CHECK_PARSE_OR_ERROR_ARGS(ctx, buf, bufSz,
+        fixedSz + WOLFSPDM_HASH_SIZE);
     SPDM_CHECK_RESPONSE(ctx, buf, bufSz, SPDM_PSK_EXCHANGE_RSP,
         WOLFSPDM_E_KEY_EXCHANGE);
 
-    /* Per SPDM 1.3 DSP0274 Table 65:
-     * [4-5] RspSessionID, [6] MutAuthRequested, [7] ReqSlotIDParam,
-     * [8-9] RspContextLength, [10-11] OpaqueDataLength */
+    /* DSP0274 places RspSessionID at bytes 4-5 and reserves bytes 6-7.
+     * Bytes 8-9 hold ResponderContext length and 10-11 OpaqueDataLength. */
     rspContextLen = SPDM_Get16LE(&buf[8]);
     opaqueLen = SPDM_Get16LE(&buf[10]);
 
-    verifyOffset = 12 + (word32)rspContextLen + opaqueLen;
+    verifyOffset = fixedSz + (word32)rspContextLen + opaqueLen;
     rspPartialLen = verifyOffset;
 
     if (bufSz < verifyOffset + WOLFSPDM_HASH_SIZE) {

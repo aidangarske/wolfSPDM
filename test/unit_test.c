@@ -2427,6 +2427,8 @@ static int test_nations_psk_clear_vca_null_args(void)
 
 static int test_parse_psk_exchange_rsp_null_args(void)
 {
+    static const byte error[] = { SPDM_VERSION_12, SPDM_ERROR,
+        SPDM_ERROR_BUSY, 0 };
     byte buf[64];
     TEST_CTX_SETUP_V12();
     printf("test_parse_psk_exchange_rsp_null_args...\n");
@@ -2437,6 +2439,16 @@ static int test_parse_psk_exchange_rsp_null_args(void)
         != WOLFSPDM_SUCCESS, "NULL buf");
     TEST_ASSERT(wolfSPDM_ParsePskExchangeRsp(ctx, buf, 4)
         != WOLFSPDM_SUCCESS, "short buf");
+
+    buf[0] = SPDM_VERSION_12;
+    buf[1] = SPDM_PSK_EXCHANGE_RSP;
+    ASSERT_EQ(wolfSPDM_ParsePskExchangeRsp(ctx, buf,
+        11 + WOLFSPDM_HASH_SIZE), WOLFSPDM_E_INVALID_ARG,
+        "PSK exchange response needs its full header and verify data");
+    ASSERT_EQ(wolfSPDM_ParsePskExchangeRsp(ctx, error, sizeof(error)),
+        WOLFSPDM_E_PEER_ERROR, "A short peer error can still be returned");
+    ASSERT_EQ(wolfSPDM_GetLastPeerError(ctx), SPDM_ERROR_BUSY,
+        "Preserve the peer error code");
     TEST_CTX_FREE();
     TEST_PASS();
 }
