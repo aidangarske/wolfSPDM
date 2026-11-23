@@ -67,7 +67,7 @@ static int wolfSPDM_BuildGetVersionAdapter(WOLFSPDM_CTX* ctx, byte* buf,
 int wolfSPDM_GetVersion(WOLFSPDM_CTX* ctx)
 {
     byte txBuf[8];
-    byte rxBuf[32];  /* VERSION: 4 hdr + 2 count + up to 8 entries * 2 = 22 */
+    byte rxBuf[SPDM_MIN_DATA_TRANSFER_SIZE];
 
     if (ctx == NULL) {
         return WOLFSPDM_E_INVALID_ARG;

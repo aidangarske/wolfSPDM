@@ -1824,6 +1824,44 @@ static int test_version_restart_io(WOLFSPDM_CTX* ctx, const byte* txBuf,
     return 0;
 }
 
+static int test_version_min_transfer_io(WOLFSPDM_CTX* ctx, const byte* txBuf,
+    word32 txSz, byte* rxBuf, word32* rxSz, void* userCtx)
+{
+    const word32 count = (SPDM_MIN_DATA_TRANSFER_SIZE - 6) / 2;
+    word32 i;
+
+    (void)ctx;
+    (void)userCtx;
+    if (txSz != 4 || txBuf[1] != SPDM_GET_VERSION ||
+            *rxSz < SPDM_MIN_DATA_TRANSFER_SIZE) {
+        return -1;
+    }
+
+    XMEMSET(rxBuf, 0, SPDM_MIN_DATA_TRANSFER_SIZE);
+    rxBuf[0] = SPDM_VERSION_10;
+    rxBuf[1] = SPDM_VERSION;
+    rxBuf[5] = (byte)count;
+    for (i = 0; i < count; i++) {
+        rxBuf[6 + i * 2] = (byte)((i % 4) << 4);
+        rxBuf[7 + i * 2] = (byte)(SPDM_VERSION_10 + i / 4);
+    }
+    *rxSz = SPDM_MIN_DATA_TRANSFER_SIZE;
+    return 0;
+}
+
+static int test_get_version_accepts_minimum_transfer(void)
+{
+    TEST_CTX_SETUP();
+
+    printf("test_get_version_accepts_minimum_transfer...\n");
+    ASSERT_SUCCESS(wolfSPDM_SetIO(ctx, test_version_min_transfer_io, NULL));
+    ASSERT_SUCCESS(wolfSPDM_GetVersion(ctx));
+    ASSERT_EQ(ctx->spdmVersion, WOLFSPDM_MAX_SPDM_VERSION,
+        "Negotiate the highest supported version");
+    TEST_CTX_FREE();
+    TEST_PASS();
+}
+
 static int test_get_version_restarts_connection(void)
 {
     static const byte zero[WOLFSPDM_AEAD_KEY_SIZE];
@@ -6885,6 +6923,7 @@ int main(void)
     test_get_version_no_io();
 #ifndef WOLFSPDM_NO_MCTP
     test_get_version_restarts_connection();
+    test_get_version_accepts_minimum_transfer();
 #endif
     test_key_exchange_no_io();
     test_key_exchange_preserves_transcript_on_io_failure();
