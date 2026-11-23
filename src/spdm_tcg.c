@@ -117,6 +117,7 @@ int wolfSPDM_TCG_VendorCmdSecured(WOLFSPDM_CTX* ctx, const char* vdCode,
     if (rc == WOLFSPDM_SUCCESS && decSz >= 4 && decBuf[1] == SPDM_ERROR) {
         wolfSPDM_DebugPrint(ctx, "%s: SPDM ERROR 0x%02x 0x%02x\n",
             vdCode, decBuf[2], decBuf[3]);
+        ctx->lastPeerErrorCode = decBuf[2];
         rc = WOLFSPDM_E_PEER_ERROR;
     }
 
@@ -457,6 +458,7 @@ static int wolfSPDM_TCG_CheckResponse(WOLFSPDM_CTX* ctx, const byte* rsp,
         return WOLFSPDM_E_BUFFER_SMALL;
     }
     if (wolfSPDM_CheckError(rsp, rspSz, &errorCode)) {
+        ctx->lastPeerErrorCode = (byte)errorCode;
         wolfSPDM_DebugPrint(ctx, "SPDM error: 0x%02x\n", errorCode);
         return WOLFSPDM_E_PEER_ERROR;
     }

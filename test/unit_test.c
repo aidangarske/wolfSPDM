@@ -1107,6 +1107,88 @@ static int test_tcg_get_pub_key_version_failure(void)
     TEST_PASS();
 }
 
+static int test_tcg_peer_error_io(WOLFSPDM_CTX* ctx, const byte* txBuf,
+    word32 txSz, byte* rxBuf, word32* rxSz, void* userCtx)
+{
+    byte error[] = { ctx->spdmVersion, SPDM_ERROR, SPDM_ERROR_BUSY, 0 };
+    word32 payloadSz;
+    word16 tag;
+
+    if (txSz < WOLFSPDM_TCG_HEADER_SIZE ||
+            *rxSz < WOLFSPDM_TCG_HEADER_SIZE + sizeof(error)) {
+        return -1;
+    }
+    tag = SPDM_Get16BE(txBuf);
+    if (tag == WOLFSPDM_TCG_TAG_CLEAR) {
+        XMEMCPY(rxBuf + WOLFSPDM_TCG_HEADER_SIZE, error, sizeof(error));
+        payloadSz = sizeof(error);
+    }
+    else if (tag == WOLFSPDM_TCG_TAG_SECURED && userCtx != NULL) {
+        payloadSz = *rxSz - WOLFSPDM_TCG_HEADER_SIZE;
+        if (wolfSPDM_EncryptInternal((WOLFSPDM_CTX*)userCtx, error,
+                sizeof(error), rxBuf + WOLFSPDM_TCG_HEADER_SIZE,
+                &payloadSz) != WOLFSPDM_SUCCESS) {
+            return -1;
+        }
+    }
+    else {
+        return -1;
+    }
+    *rxSz = WOLFSPDM_TCG_HEADER_SIZE + payloadSz;
+    wolfSPDM_WriteTcgHeader(rxBuf, tag, *rxSz, 0, 0);
+    return 0;
+}
+
+static int test_tcg_vca_reports_peer_error(void)
+{
+    TEST_CTX_SETUP_V12();
+    printf("test_tcg_vca_reports_peer_error...\n");
+    ASSERT_SUCCESS(wolfSPDM_SetMode(ctx, WOLFSPDM_MODE_TCG));
+    ASSERT_SUCCESS(wolfSPDM_SetIO(ctx, test_tcg_peer_error_io, NULL));
+
+    ASSERT_EQ(wolfSPDM_TCG_GetCapabilities(ctx, WOLFSPDM_TCG_CAPS_FLAGS_DEFAULT),
+        WOLFSPDM_E_PEER_ERROR, "CAPABILITIES rejection");
+    ASSERT_EQ(wolfSPDM_GetLastPeerError(ctx), SPDM_ERROR_BUSY,
+        "CAPABILITIES peer error code");
+    ctx->lastPeerErrorCode = 0;
+    ASSERT_EQ(wolfSPDM_TCG_NegotiateAlgorithms(ctx), WOLFSPDM_E_PEER_ERROR,
+        "ALGORITHMS rejection");
+    ASSERT_EQ(wolfSPDM_GetLastPeerError(ctx), SPDM_ERROR_BUSY,
+        "ALGORITHMS peer error code");
+
+    TEST_CTX_FREE();
+    TEST_PASS();
+}
+
+static int test_tcg_secured_vendor_reports_peer_error(void)
+{
+    WOLFSPDM_CTX peer;
+    TEST_CTX_SETUP_V12();
+    printf("test_tcg_secured_vendor_reports_peer_error...\n");
+    ASSERT_SUCCESS(wolfSPDM_Init(&peer));
+    ASSERT_SUCCESS(wolfSPDM_SetMode(ctx, WOLFSPDM_MODE_TCG));
+    ASSERT_SUCCESS(wolfSPDM_SetMode(&peer, WOLFSPDM_MODE_TCG));
+    ctx->state = WOLFSPDM_STATE_CONNECTED;
+    ctx->sessionId = 0x00020001;
+    peer.sessionId = ctx->sessionId;
+    XMEMSET(ctx->reqDataKey, 0x11, sizeof(ctx->reqDataKey));
+    XMEMSET(ctx->reqDataIv, 0x22, sizeof(ctx->reqDataIv));
+    XMEMSET(ctx->rspDataKey, 0x33, sizeof(ctx->rspDataKey));
+    XMEMSET(ctx->rspDataIv, 0x44, sizeof(ctx->rspDataIv));
+    XMEMCPY(peer.reqDataKey, ctx->rspDataKey, sizeof(peer.reqDataKey));
+    XMEMCPY(peer.reqDataIv, ctx->rspDataIv, sizeof(peer.reqDataIv));
+    ASSERT_SUCCESS(wolfSPDM_SetIO(ctx, test_tcg_peer_error_io, &peer));
+
+    ASSERT_EQ(wolfSPDM_TCG_VendorCmdSecured(ctx, WOLFSPDM_VDCODE_GET_STS,
+        NULL, 0), WOLFSPDM_E_PEER_ERROR, "Secured vendor command rejection");
+    ASSERT_EQ(wolfSPDM_GetLastPeerError(ctx), SPDM_ERROR_BUSY,
+        "Secured vendor command peer error code");
+
+    wolfSPDM_Free(&peer);
+    TEST_CTX_FREE();
+    TEST_PASS();
+}
+
 static int test_tcg_connect_requires_responder_key(void)
 {
     int rc;
@@ -6087,6 +6169,8 @@ int main(void)
     test_tcg_get_pub_key_discovery_is_not_trusted();
     test_tcg_get_pub_key_negotiates_version();
     test_tcg_get_pub_key_version_failure();
+    test_tcg_vca_reports_peer_error();
+    test_tcg_secured_vendor_reports_peer_error();
     test_tcg_connect_requires_responder_key();
     test_tcg_underflow();
 #endif
