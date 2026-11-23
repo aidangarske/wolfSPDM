@@ -2463,8 +2463,11 @@ static int test_parse_psk_finish_rsp(void)
     /* Error response */
     buf[1] = 0x7F; /* SPDM_ERROR */
     buf[2] = 0x01;
-    TEST_ASSERT(wolfSPDM_ParsePskFinishRsp(ctx, buf, 4)
-        != WOLFSPDM_SUCCESS, "error not detected");
+    ctx->lastPeerErrorCode = SPDM_ERROR_BUSY;
+    ASSERT_EQ(wolfSPDM_ParsePskFinishRsp(ctx, buf, 4), WOLFSPDM_E_PEER_ERROR,
+        "PSK_FINISH error response should be reported");
+    ASSERT_EQ(wolfSPDM_GetLastPeerError(ctx), buf[2],
+        "PSK_FINISH should record the peer error code");
 
     TEST_CTX_FREE();
     TEST_PASS();

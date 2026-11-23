@@ -270,6 +270,7 @@ int wolfSPDM_ParsePskFinishRsp(WOLFSPDM_CTX* ctx, const byte* buf,
     }
 
     if (buf[1] == SPDM_ERROR) {
+        ctx->lastPeerErrorCode = buf[2];
         wolfSPDM_DebugPrint(ctx, "PSK_FINISH error: 0x%02x\n", buf[2]);
         return WOLFSPDM_E_PEER_ERROR;
     }
