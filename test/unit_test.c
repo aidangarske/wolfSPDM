@@ -1515,8 +1515,11 @@ static int test_oob_read_error(void)
 
     printf("test_oob_read_error...\n");
 
+    ctx->lastPeerErrorCode = SPDM_ERROR_BUSY;
     rc = wolfSPDM_ParseFinishRsp(ctx, fullErr, sizeof(fullErr));
     ASSERT_EQ(rc, WOLFSPDM_E_PEER_ERROR, "Should return peer error");
+    ASSERT_EQ(wolfSPDM_GetLastPeerError(ctx), fullErr[2],
+        "FINISH should record the peer error code");
 
     rc = wolfSPDM_ParseFinishRsp(ctx, shortErr, sizeof(shortErr));
     ASSERT_EQ(rc, WOLFSPDM_E_INVALID_ARG, "Short buffer should fail");

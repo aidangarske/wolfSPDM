@@ -670,6 +670,7 @@ int wolfSPDM_ParseFinishRsp(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufSz)
     }
 
     if (buf[1] == SPDM_ERROR) {
+        ctx->lastPeerErrorCode = buf[2];
         wolfSPDM_DebugPrint(ctx, "FINISH error: 0x%02x\n", buf[2]);
         return WOLFSPDM_E_PEER_ERROR;
     }
