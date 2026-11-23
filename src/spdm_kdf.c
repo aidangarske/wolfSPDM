@@ -101,18 +101,13 @@ int wolfSPDM_ComputeVerifyData(const byte* finishedKey, const byte* thHash,
     }
 
     rc = wc_HmacSetKey(&hmac, WC_SHA384, finishedKey, WOLFSPDM_HASH_SIZE);
-    if (rc != 0) {
-        wc_HmacFree(&hmac);
-        return WOLFSPDM_E_CRYPTO_FAIL;
+    if (rc == 0) {
+        rc = wc_HmacUpdate(&hmac, thHash, WOLFSPDM_HASH_SIZE);
+    }
+    if (rc == 0) {
+        rc = wc_HmacFinal(&hmac, verifyData);
     }
 
-    rc = wc_HmacUpdate(&hmac, thHash, WOLFSPDM_HASH_SIZE);
-    if (rc != 0) {
-        wc_HmacFree(&hmac);
-        return WOLFSPDM_E_CRYPTO_FAIL;
-    }
-
-    rc = wc_HmacFinal(&hmac, verifyData);
     wc_HmacFree(&hmac);
     wc_ForceZero(&hmac, sizeof(hmac));
 
