@@ -2167,6 +2167,9 @@ static int test_key_exchange_preserves_transcript_on_io_failure(void)
     printf("test_key_exchange_preserves_transcript_on_io_failure...\n");
 #ifdef WOLFSPDM_NO_MCTP
     ASSERT_SUCCESS(wolfSPDM_SetMode(ctx, WOLFSPDM_MODE_TCG));
+#elif !defined(WOLFSPDM_NO_CERT)
+    /* A standard-binding pin is matched against a retrieved chain */
+    ctx->certChainLen = WOLFSPDM_CERT_CHAIN_HDR_SZ + 1;
 #endif
     ASSERT_SUCCESS(wolfSPDM_GenerateEphemeralKey(ctx));
     ASSERT_SUCCESS(wolfSPDM_ExportEphemeralPubKey(ctx, publicKey, &xSz,
@@ -3276,6 +3279,33 @@ static int test_build_key_exchange_format(void)
     TEST_CTX_FREE();
     TEST_PASS();
 }
+
+#ifndef WOLFSPDM_NO_CERT
+/* A standard-binding pin names a slot only through a retrieved chain */
+static int test_build_key_exchange_pinned_slot(void)
+{
+    byte buf[256];
+    word32 bufSz = sizeof(buf);
+    TEST_CTX_SETUP_V12();
+    printf("test_build_key_exchange_pinned_slot...\n");
+
+    ctx->reqSessionId = 0x0001;
+    ctx->currentSlotId = 2;
+    ASSERT_SUCCESS(wolfSPDM_SetResponderPubKey(ctx, test_rsp_leaf_pub,
+        sizeof(test_rsp_leaf_pub)));
+    ASSERT_EQ(wolfSPDM_BuildKeyExchange(ctx, buf, &bufSz),
+        WOLFSPDM_E_BAD_STATE, "Pinned key without a certificate chain");
+    ASSERT_EQ(ctx->flags.ephemeralKeyInit, 0, "No ephemeral key generated");
+
+    ctx->certChainLen = WOLFSPDM_CERT_CHAIN_HDR_SZ + 1;
+    bufSz = sizeof(buf);
+    ASSERT_SUCCESS(wolfSPDM_BuildKeyExchange(ctx, buf, &bufSz));
+    ASSERT_EQ(buf[3], 2, "Chain-backed pin uses the chain's slot");
+
+    TEST_CTX_FREE();
+    TEST_PASS();
+}
+#endif
 #endif
 
 #ifdef WOLFSPDM_TCG
@@ -7703,6 +7733,9 @@ int main(void)
     test_build_key_exchange_null_args();
 #ifndef WOLFSPDM_NO_MCTP
     test_build_key_exchange_format();
+#ifndef WOLFSPDM_NO_CERT
+    test_build_key_exchange_pinned_slot();
+#endif
 #endif
     test_build_key_exchange_mode_opaque();
     test_build_finish_null_args();

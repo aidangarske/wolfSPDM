@@ -136,6 +136,14 @@ int wolfSPDM_BuildKeyExchange(WOLFSPDM_CTX* ctx, byte* buf, word32* bufSz)
     if (ctx == NULL) {
         return WOLFSPDM_E_INVALID_ARG;
     }
+#ifndef WOLFSPDM_NO_CERT
+    /* The standard binding defines no provisioned-key format for Ct, so a
+     * pin needs a retrieved chain to name a slot (DSP0274 KEY_EXCHANGE). */
+    if (!wolfSPDM_IsTcgMode(ctx) && ctx->flags.hasRspPubKey &&
+            !ctx->flags.rspKeyFromCert && ctx->certChainLen == 0) {
+        return WOLFSPDM_E_BAD_STATE;
+    }
+#endif
     wolfSPDM_KeyExOpaque(ctx, &opaque, &opaqueSz);
     if (opaque == NULL) {
         return WOLFSPDM_E_NOT_AVAILABLE;
