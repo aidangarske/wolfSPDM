@@ -392,6 +392,11 @@ int wolfSPDM_ConnectPsk(WOLFSPDM_CTX* ctx)
     if (rc == WOLFSPDM_SUCCESS) {
         rc = wolfSPDM_SendReceive(ctx, encBuf, encSz, rxBuf, &rxSz);
     }
+    if (rc == WOLFSPDM_SUCCESS && rxSz >= 4 &&
+            rxBuf[0] == ctx->spdmVersion && rxBuf[1] == SPDM_ERROR) {
+        ctx->lastPeerErrorCode = rxBuf[2];
+        rc = WOLFSPDM_E_PEER_ERROR;
+    }
     if (rc == WOLFSPDM_SUCCESS) {
         rc = wolfSPDM_DecryptInternal(ctx, rxBuf, rxSz, decBuf, &decSz);
     }

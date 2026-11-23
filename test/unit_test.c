@@ -3883,6 +3883,24 @@ static int test_tcg_mode_connect_roundtrip(void)
 }
 
 #ifdef WOLFSPDM_PSK
+static int test_psk_finish_clear_error_io(WOLFSPDM_CTX* ctx, const byte* txBuf,
+    word32 txSz, byte* rxBuf, word32* rxSz, void* userCtx)
+{
+    if (txSz >= WOLFSPDM_TCG_HEADER_SIZE &&
+            SPDM_Get16BE(txBuf) == WOLFSPDM_TCG_TAG_SECURED) {
+        byte error[] = { ctx->spdmVersion, SPDM_ERROR,
+            SPDM_ERROR_DECRYPT_ERROR, 0 };
+        int size = wolfSPDM_BuildTcgClearMessage(ctx, error, sizeof(error),
+            rxBuf, *rxSz);
+        if (size < 0) {
+            return size;
+        }
+        *rxSz = (word32)size;
+        return 0;
+    }
+    return requester_to_responder_iocb(ctx, txBuf, txSz, rxBuf, rxSz, userCtx);
+}
+
 /* PSK handshake + tunneled TPM2_CMD round-trip + END_SESSION, end-to-end. */
 static int test_responder_psk_roundtrip(void)
 {
@@ -3958,6 +3976,13 @@ static int test_responder_psk_roundtrip(void)
         "secured record after session teardown must return BAD_STATE");
     ASSERT_EQ(g_tpmCbInvocations, 1,
         "sessionless record must not reach the TPM callback");
+
+    ASSERT_SUCCESS(wolfSPDM_SetIO(&req, test_psk_finish_clear_error_io, rctx));
+    ASSERT_SUCCESS(wolfSPDM_SetPSK(&req, testPsk, sizeof(testPsk), NULL, 0));
+    ASSERT_EQ(wolfSPDM_ConnectPsk(&req), WOLFSPDM_E_PEER_ERROR,
+        "Clear PSK_FINISH rejection should be reported as a peer error");
+    ASSERT_EQ(wolfSPDM_GetLastPeerError(&req), SPDM_ERROR_DECRYPT_ERROR,
+        "PSK_FINISH should record the clear peer error code");
 
     wolfSPDM_RespFree(rctx);
     wolfSPDM_Free(&req);
