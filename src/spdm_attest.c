@@ -410,7 +410,9 @@ int wolfSPDM_Challenge(WOLFSPDM_CTX* ctx, int slotId, byte measHashType)
     word32 sigOff = 0;
     int rc;
 
-    if (ctx == NULL) {
+    if (ctx == NULL || (measHashType != SPDM_MEAS_SUMMARY_HASH_NONE &&
+            measHashType != SPDM_MEAS_SUMMARY_HASH_TCB &&
+            measHashType != SPDM_MEAS_SUMMARY_HASH_ALL)) {
         return WOLFSPDM_E_INVALID_ARG;
     }
     /* M1 covers the chain fetched for this slot */
@@ -420,7 +422,10 @@ int wolfSPDM_Challenge(WOLFSPDM_CTX* ctx, int slotId, byte measHashType)
             slotId != (int)ctx->currentSlotId) {
         return WOLFSPDM_E_BAD_STATE;
     }
-    if ((ctx->rspCaps & SPDM_CAP_CHAL_CAP) == 0) {
+    if ((ctx->rspCaps & SPDM_CAP_CHAL_CAP) == 0 ||
+            (measHashType != SPDM_MEAS_SUMMARY_HASH_NONE &&
+             (ctx->rspCaps & (SPDM_CAP_MEAS_CAP_NO_SIG |
+                             SPDM_CAP_MEAS_CAP_SIG)) == 0)) {
         return WOLFSPDM_E_CAPS_MISMATCH;
     }
 

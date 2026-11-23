@@ -6296,7 +6296,14 @@ static int test_challenge_loopback(void)
         WOLFSPDM_E_BAD_STATE, "M1 starts at NEGOTIATE_ALGORITHMS");
     ASSERT_SUCCESS(wolfSPDM_M1Start(ctx));
 
+    ctx->rspCaps &= ~(word32)(SPDM_CAP_MEAS_CAP_NO_SIG |
+        SPDM_CAP_MEAS_CAP_SIG);
+    ASSERT_EQ(wolfSPDM_Challenge(ctx, 0, SPDM_MEAS_SUMMARY_HASH_ALL),
+        WOLFSPDM_E_CAPS_MISMATCH, "Summary requires measurement capability");
     ASSERT_SUCCESS(wolfSPDM_Challenge(ctx, 0, SPDM_MEAS_SUMMARY_HASH_NONE));
+    ctx->rspCaps |= SPDM_CAP_MEAS_CAP_NO_SIG;
+    ASSERT_EQ(wolfSPDM_Challenge(ctx, 0, 0x02), WOLFSPDM_E_INVALID_ARG,
+        "Reserved measurement summary type");
     ASSERT_SUCCESS(wolfSPDM_Challenge(ctx, 0, SPDM_MEAS_SUMMARY_HASH_ALL));
     ASSERT_EQ(wolfSPDM_Challenge(ctx, 1, SPDM_MEAS_SUMMARY_HASH_NONE),
         WOLFSPDM_E_BAD_STATE, "No chain held for slot 1");
