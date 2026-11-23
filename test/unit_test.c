@@ -2061,6 +2061,7 @@ static int test_disconnect_states(void)
 static int test_build_tcg_clear_message(void)
 {
     byte outBuf[64];
+    const word32 frameSz = WOLFSPDM_TCG_HEADER_SIZE + 4;
     int rc;
     TEST_CTX_SETUP();
     printf("test_build_tcg_clear_message...\n");
@@ -2079,10 +2080,13 @@ static int test_build_tcg_clear_message(void)
     /* Buffer too small */
     TEST_ASSERT(wolfSPDM_BuildTcgClearMessage(ctx, (byte*)"AB", 2, outBuf,
         4) < 0, "small buffer");
+    ASSERT_EQ(wolfSPDM_BuildTcgClearMessage(ctx, (const byte*)"TEST", 4,
+        outBuf, frameSz - 1), WOLFSPDM_E_BUFFER_SMALL,
+        "Payload must fit after the header");
 
     /* Valid build: 16 header + 4 payload = 20 bytes */
-    rc = wolfSPDM_BuildTcgClearMessage(ctx, (byte*)"TEST", 4, outBuf,
-        sizeof(outBuf));
+    rc = wolfSPDM_BuildTcgClearMessage(ctx, (const byte*)"TEST", 4, outBuf,
+        frameSz);
     TEST_ASSERT(rc == 20, "expected 20 bytes");
     /* Tag at [0-1] should be 0x8101 big-endian */
     TEST_ASSERT(outBuf[0] == 0x81 && outBuf[1] == 0x01, "wrong tag");

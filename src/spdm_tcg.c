@@ -29,6 +29,7 @@
 
 #ifdef WOLFSPDM_TCG
 
+#include <limits.h>
 #include <wolfspdm/spdm_tcg.h>
 
 /* ----- Vendor Command Helpers ----- */
@@ -141,12 +142,13 @@ int wolfSPDM_BuildTcgClearMessage(
         return WOLFSPDM_E_INVALID_ARG;
     }
 
-    totalSz = WOLFSPDM_TCG_HEADER_SIZE + spdmPayloadSz;
-
-    if (outBufSz < totalSz) {
+    if (outBufSz < WOLFSPDM_TCG_HEADER_SIZE ||
+            spdmPayloadSz > outBufSz - WOLFSPDM_TCG_HEADER_SIZE ||
+            spdmPayloadSz > (word32)(INT_MAX - WOLFSPDM_TCG_HEADER_SIZE)) {
         return WOLFSPDM_E_BUFFER_SMALL;
     }
 
+    totalSz = WOLFSPDM_TCG_HEADER_SIZE + spdmPayloadSz;
     wolfSPDM_WriteTcgHeader(outBuf, WOLFSPDM_TCG_TAG_CLEAR, totalSz,
         ctx->connectionHandle, ctx->fipsIndicator);
     XMEMCPY(outBuf + WOLFSPDM_TCG_HEADER_SIZE, spdmPayload, spdmPayloadSz);
