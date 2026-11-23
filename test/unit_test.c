@@ -4270,25 +4270,29 @@ static int test_parse_capabilities(void)
 static int test_negotiate_algorithms_roundtrip(void)
 {
     byte req[WOLFSPDM_NEG_ALGO_SZ];
-    byte rsp[52];
+    byte rsp[48];
     word32 reqSz = sizeof(req);
     TEST_CTX_SETUP_V12();
     printf("test_negotiate_algorithms_roundtrip...\n");
 
     ASSERT_SUCCESS(wolfSPDM_BuildNegotiateAlgorithms(ctx, req, &reqSz));
-    ASSERT_EQ(reqSz, (word32)48, "NEGOTIATE_ALGORITHMS size");
+    ASSERT_EQ(req[2], 3, "Offer DHE, AEAD and key schedule");
+    ASSERT_EQ(req[40], SPDM_ALG_TYPE_KEY_SCHEDULE,
+        "No requester signature algorithm");
+    ASSERT_EQ(reqSz, (word32)44, "NEGOTIATE_ALGORITHMS size");
+    ASSERT_EQ(SPDM_Get16LE(&req[4]), reqSz, "Declared request length");
 
-    /* Algorithm Set B selection with DHE, AEAD, ReqBaseAsym, KeySchedule */
+    /* Algorithm Set B selection with DHE, AEAD and KeySchedule */
     XMEMSET(rsp, 0, sizeof(rsp));
     rsp[0] = SPDM_VERSION_12;
     rsp[1] = SPDM_ALGORITHMS;
-    rsp[2] = 4;
+    rsp[2] = 3;
     SPDM_Set16LE(&rsp[4], sizeof(rsp));
     rsp[6] = 0x01;
     rsp[7] = 0x02;
     SPDM_Set32LE(&rsp[12], SPDM_ASYM_ALGO_ECDSA_P384);
     SPDM_Set32LE(&rsp[16], SPDM_HASH_ALGO_SHA_384);
-    XMEMCPY(&rsp[36], &req[32], 16);
+    XMEMCPY(&rsp[36], &req[32], 12);
     ASSERT_SUCCESS(wolfSPDM_ParseAlgorithms(ctx, rsp, sizeof(rsp)));
 
     rsp[7] = 0xFE;
@@ -4320,7 +4324,7 @@ static int test_negotiate_algorithms_roundtrip(void)
     SPDM_Set16LE(&rsp[42], SPDM_AEAD_ALGO_AES_256_GCM);
 
     /* AlgStruct count past the end of the response */
-    rsp[2] = 5;
+    rsp[2] = 4;
     ASSERT_EQ(wolfSPDM_ParseAlgorithms(ctx, rsp, sizeof(rsp)),
         WOLFSPDM_E_ALGO_MISMATCH, "truncated AlgStructs must fail");
 
@@ -4738,20 +4742,20 @@ static int standard_connect_io(WOLFSPDM_CTX* ctx, const byte* txBuf,
             SPDM_Set32LE(&rxBuf[16], 1024);
             return 0;
         case SPDM_NEGOTIATE_ALGORITHMS:
-            if (*rxSz < 52 || txSz != 48) {
+            if (*rxSz < 48 || txSz != 44) {
                 return -1;
             }
-            *rxSz = 52;
+            *rxSz = 48;
             XMEMSET(rxBuf, 0, *rxSz);
             rxBuf[0] = txBuf[0];
             rxBuf[1] = SPDM_ALGORITHMS;
-            rxBuf[2] = 4;
-            SPDM_Set16LE(&rxBuf[4], 52);
+            rxBuf[2] = 3;
+            SPDM_Set16LE(&rxBuf[4], 48);
             rxBuf[6] = 1;
             rxBuf[7] = 2;
             SPDM_Set32LE(&rxBuf[12], SPDM_ASYM_ALGO_ECDSA_P384);
             SPDM_Set32LE(&rxBuf[16], SPDM_HASH_ALGO_SHA_384);
-            XMEMCPY(&rxBuf[36], &txBuf[32], 16);
+            XMEMCPY(&rxBuf[36], &txBuf[32], 12);
             return 0;
         case SPDM_GET_DIGESTS:
             if (*rxSz < 4 + WOLFSPDM_HASH_SIZE) {
@@ -4811,16 +4815,15 @@ static int test_standard_connect_releases_session(void)
 #endif /* !WOLFSPDM_NO_CERT */
 
 #if defined(WOLFSPDM_HAVE_MLDSA) || defined(WOLFSPDM_HAVE_MLKEM)
-/* ALGORITHMS response: fixed fields, then DHE, AEAD, ReqBaseAsym, KeySchedule
- * and KEMAlg structs */
+/* ALGORITHMS response with DHE, AEAD, KeySchedule and KEMAlg structs */
 static word32 test_algo_rsp(byte* rsp, byte ver, word32 baseAsym, word32 pqc,
     word16 dhe, word16 kem)
 {
-    XMEMSET(rsp, 0, 56);
+    XMEMSET(rsp, 0, 52);
     rsp[0] = ver;
     rsp[1] = SPDM_ALGORITHMS;
-    rsp[2] = 5;
-    SPDM_Set16LE(&rsp[4], 56);
+    rsp[2] = 4;
+    SPDM_Set16LE(&rsp[4], 52);
     rsp[6] = 0x01;
     rsp[7] = 0x02;
     SPDM_Set32LE(&rsp[12], baseAsym);
@@ -4832,21 +4835,19 @@ static word32 test_algo_rsp(byte* rsp, byte ver, word32 baseAsym, word32 pqc,
     rsp[40] = SPDM_ALG_TYPE_AEAD;
     rsp[41] = 0x20;
     SPDM_Set16LE(&rsp[42], SPDM_AEAD_ALGO_AES_256_GCM);
-    rsp[44] = SPDM_ALG_TYPE_REQ_BASE_ASYM;
+    rsp[44] = SPDM_ALG_TYPE_KEY_SCHEDULE;
     rsp[45] = 0x20;
-    rsp[48] = SPDM_ALG_TYPE_KEY_SCHEDULE;
+    SPDM_Set16LE(&rsp[46], SPDM_KEY_SCHEDULE_SPDM);
+    rsp[48] = SPDM_ALG_TYPE_KEM;
     rsp[49] = 0x20;
-    SPDM_Set16LE(&rsp[50], SPDM_KEY_SCHEDULE_SPDM);
-    rsp[52] = SPDM_ALG_TYPE_KEM;
-    rsp[53] = 0x20;
-    SPDM_Set16LE(&rsp[54], kem);
-    return 56;
+    SPDM_Set16LE(&rsp[50], kem);
+    return 52;
 }
 
 static int test_negotiate_algorithms_pqc(void)
 {
     byte req[WOLFSPDM_NEG_ALGO_SZ];
-    byte rsp[56];
+    byte rsp[52];
     word32 reqSz = sizeof(req);
     word32 rspSz;
 #ifdef WOLFSPDM_HAVE_MLKEM
@@ -4863,7 +4864,7 @@ static int test_negotiate_algorithms_pqc(void)
     /* Before 1.4 the request carries neither PqcAsymAlgo nor KEMAlg */
     ctx->spdmVersion = SPDM_VERSION_13;
     ASSERT_SUCCESS(wolfSPDM_BuildNegotiateAlgorithms(ctx, req, &reqSz));
-    ASSERT_EQ(reqSz, (word32)48, "classical request below 1.4");
+    ASSERT_EQ(reqSz, (word32)44, "classical request below 1.4");
     ASSERT_EQ(SPDM_Get32LE(&req[16]), 0, "PqcAsymAlgo reserved below 1.4");
 
     ctx->spdmVersion = SPDM_VERSION_14;
@@ -4876,11 +4877,11 @@ static int test_negotiate_algorithms_pqc(void)
         "ML-DSA sets offered at 1.4");
 #endif
 #ifdef WOLFSPDM_HAVE_MLKEM
-    ASSERT_EQ(reqSz, (word32)52, "KEMAlg appended at 1.4");
-    ASSERT_EQ(req[2], 5, "five AlgStructs");
+    ASSERT_EQ(reqSz, (word32)48, "KEMAlg appended at 1.4");
+    ASSERT_EQ(req[2], 4, "four AlgStructs");
     ASSERT_EQ(req[32], SPDM_ALG_TYPE_DHE, "DHE on offer");
-    ASSERT_EQ(req[48], SPDM_ALG_TYPE_KEM, "KEMAlg type");
-    ASSERT_EQ(SPDM_Get16LE(&req[50]), WOLFSPDM_MLKEM_SETS,
+    ASSERT_EQ(req[44], SPDM_ALG_TYPE_KEM, "KEMAlg type");
+    ASSERT_EQ(SPDM_Get16LE(&req[46]), WOLFSPDM_MLKEM_SETS,
         "every built ML-KEM set offered");
 #endif
 
@@ -4960,7 +4961,7 @@ static int test_negotiate_algorithms_pqc(void)
     ASSERT_SUCCESS(wolfSPDM_SetKeyExchangePref(ctx, 0, kem));
     reqSz = sizeof(req);
     ASSERT_SUCCESS(wolfSPDM_BuildNegotiateAlgorithms(ctx, req, &reqSz));
-    ASSERT_EQ(reqSz, (word32)48, "four AlgStructs");
+    ASSERT_EQ(reqSz, (word32)44, "three AlgStructs");
     ASSERT_EQ(req[32], SPDM_ALG_TYPE_AEAD, "no DHE struct");
     rspSz = test_algo_rsp(rsp, SPDM_VERSION_14, SPDM_ASYM_ALGO_ECDSA_P384, 0,
         SPDM_DHE_ALGO_SECP384R1, 0);

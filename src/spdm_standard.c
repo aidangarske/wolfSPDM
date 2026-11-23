@@ -136,10 +136,8 @@ int wolfSPDM_BuildNegotiateAlgorithms(WOLFSPDM_CTX* ctx, byte* buf,
     buf[off + 1] = 0x20;
     SPDM_Set16LE(&buf[off + 2], SPDM_AEAD_ALGO_AES_256_GCM);
     off += 4;
-    buf[off] = SPDM_ALG_TYPE_REQ_BASE_ASYM;
-    buf[off + 1] = 0x20;
-    SPDM_Set16LE(&buf[off + 2], (word16)SPDM_ASYM_ALGO_ECDSA_P384);
-    off += 4;
+    /* No ReqBaseAsymAlg: this binding sends no MUT_AUTH_CAP and refuses
+     * MutAuthRequested, so the requester never signs (DSP0274 10.4) */
     buf[off] = SPDM_ALG_TYPE_KEY_SCHEDULE;
     buf[off + 1] = 0x20;
     SPDM_Set16LE(&buf[off + 2], SPDM_KEY_SCHEDULE_SPDM);

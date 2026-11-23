@@ -355,11 +355,11 @@ extern "C" {
 #define SPDM_KEM_ALGO_ML_KEM_768    0x0002
 #define SPDM_KEM_ALGO_ML_KEM_1024   0x0004
 
-/* NEGOTIATE_ALGORITHMS: 32-byte header and up to five AlgStructs */
+/* NEGOTIATE_ALGORITHMS: 32-byte header and up to four AlgStructs */
 #ifdef WOLFSPDM_HAVE_MLKEM
-#define WOLFSPDM_NEG_ALGO_SZ        52
-#else
 #define WOLFSPDM_NEG_ALGO_SZ        48
+#else
+#define WOLFSPDM_NEG_ALGO_SZ        44
 #endif
 
 /* SPDM cert chain header: Length(2) + Reserved(2) + RootHash(48) */
