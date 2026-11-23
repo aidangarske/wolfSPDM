@@ -664,7 +664,10 @@ int wolfSPDM_ConnectTCG(WOLFSPDM_CTX* ctx)
     }
 
     if (!ctx->flags.hasRspPubKey ||
-        ctx->rspPubKeyLen != WOLFSPDM_ECC_POINT_SIZE) {
+#ifndef WOLFSPDM_NO_CERT
+            ctx->flags.rspKeyFromCert ||
+#endif
+            ctx->rspPubKeyLen != WOLFSPDM_ECC_POINT_SIZE) {
         wolfSPDM_DebugPrint(ctx,
             "TCG: Trusted responder public key is not configured\n");
         return WOLFSPDM_E_BAD_STATE;

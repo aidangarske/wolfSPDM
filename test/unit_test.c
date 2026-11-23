@@ -4268,6 +4268,39 @@ static int test_load_sample_chain(WOLFSPDM_CTX* ctx)
     return 0;
 }
 
+#ifdef WOLFSPDM_TCG
+static int test_tcg_requires_explicit_responder_pin(void)
+{
+    int keyExchangeRc;
+    int connectRc;
+    TEST_CTX_SETUP_V12();
+
+    printf("test_tcg_requires_explicit_responder_pin...\n");
+    ASSERT_SUCCESS(test_load_sample_chain(ctx));
+    ASSERT_SUCCESS(wolfSPDM_SetTrustedCAs(ctx, test_ca_cert_der,
+        sizeof(test_ca_cert_der)));
+    ASSERT_SUCCESS(wolfSPDM_ValidateCertChain(ctx));
+    ASSERT_SUCCESS(wolfSPDM_SetMode(ctx, WOLFSPDM_MODE_TCG));
+    ASSERT_SUCCESS(wolfSPDM_SetIO(ctx, dummy_io_cb, NULL));
+
+    keyExchangeRc = wolfSPDM_KeyExchange(ctx);
+    connectRc = wolfSPDM_ConnectTCG(ctx);
+    ASSERT_EQ(keyExchangeRc, WOLFSPDM_E_BAD_STATE,
+        "TCG key exchange must require a configured responder pin");
+    ASSERT_EQ(connectRc, WOLFSPDM_E_BAD_STATE,
+        "TCG connect must require a configured responder pin");
+
+    ASSERT_SUCCESS(wolfSPDM_SetResponderPubKey(ctx, test_rsp_leaf_pub,
+        sizeof(test_rsp_leaf_pub)));
+    ASSERT_EQ(wolfSPDM_KeyExchange(ctx), WOLFSPDM_E_IO_FAIL,
+        "Configured pin allows key exchange to reach the transport");
+    ASSERT_EQ(wolfSPDM_ConnectTCG(ctx), WOLFSPDM_E_IO_FAIL,
+        "Configured pin allows connect to reach the transport");
+    TEST_CTX_FREE();
+    TEST_PASS();
+}
+#endif /* WOLFSPDM_TCG */
+
 static int test_validate_cert_chain(void)
 {
     byte leafKey[WOLFSPDM_ECC_POINT_SIZE];
@@ -6587,6 +6620,9 @@ int main(void)
     test_mutual_auth_rejected_in_standard_mode();
     test_validate_cert_chain();
     test_get_certificate_portions();
+#ifdef WOLFSPDM_TCG
+    test_tcg_requires_explicit_responder_pin();
+#endif
 #ifndef WOLFSPDM_NO_MCTP
     test_standard_connect_releases_session();
 #endif

@@ -130,9 +130,13 @@ static int wolfSPDM_KeyExchangeEx(WOLFSPDM_CTX* ctx, int revalidate)
     else {
         rc = WOLFSPDM_SUCCESS;
     #ifndef WOLFSPDM_NO_CERT
-        if (revalidate && !wolfSPDM_IsTcgMode(ctx) &&
-                ctx->flags.rspKeyFromCert) {
-            rc = wolfSPDM_ValidateCertChain(ctx);
+        if (ctx->flags.rspKeyFromCert) {
+            if (wolfSPDM_IsTcgMode(ctx)) {
+                rc = WOLFSPDM_E_BAD_STATE;
+            }
+            else if (revalidate) {
+                rc = wolfSPDM_ValidateCertChain(ctx);
+            }
         }
     #else
         (void)revalidate;
