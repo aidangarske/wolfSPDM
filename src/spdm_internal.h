@@ -614,10 +614,11 @@ WOLFSPDM_LOCAL int wolfSPDM_KeyExchangeValidated(WOLFSPDM_CTX* ctx);
 #endif
 
 #if !defined(WOLFSPDM_NO_MEAS) || !defined(WOLFSPDM_NO_CHALLENGE)
-/* Running transcript hash states */
+/* Running transcript hash states. M1 can still append in RUN_LIVE.
+ * L1/L2 continues across GET_MEASUREMENTS exchanges only in RUN_OPEN. */
 #define WOLFSPDM_RUN_NONE   0
-#define WOLFSPDM_RUN_LIVE   1   /* initialized, not extendable */
-#define WOLFSPDM_RUN_OPEN   2   /* extendable by the next message */
+#define WOLFSPDM_RUN_LIVE   1   /* hash initialized */
+#define WOLFSPDM_RUN_OPEN   2   /* L1/L2 measurement run open */
 WOLFSPDM_LOCAL void wolfSPDM_AttestFree(WOLFSPDM_CTX* ctx);
 #endif
 #ifndef WOLFSPDM_NO_MEAS
