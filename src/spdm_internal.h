@@ -40,6 +40,12 @@
     /* cppcheck-suppress preprocessorErrorDirective */
     #error "wolfSPDM requires SHA-384 (--enable-sha384 in wolfSSL)"
 #endif
+/* A peer can make these builds sign with a long-term identity key */
+#if (defined(WOLFSPDM_RESPONDER) || defined(WOLFSPDM_MUTUAL_AUTH)) && \
+    !defined(ECC_TIMING_RESISTANT)
+    /* cppcheck-suppress preprocessorErrorDirective */
+    #error "wolfSPDM signing requires ECC_TIMING_RESISTANT (--enable-harden in wolfSSL)"
+#endif
 #include <wolfssl/wolfcrypt/ecc.h>
 #include <wolfssl/wolfcrypt/random.h>
 #include <wolfssl/wolfcrypt/sha512.h>
