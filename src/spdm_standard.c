@@ -28,6 +28,7 @@
 #ifndef WOLFSPDM_NO_CERT
 
 #include <wolfssl/wolfcrypt/asn.h>
+#include <wolfssl/wolfcrypt/error-crypt.h>
 
 /* Largest certificate portion requested per GET_CERTIFICATE; the response
  * fills our DataTransferSize so certificates are never chunked */
@@ -539,7 +540,14 @@ typedef struct {
     word32 oid;
     word32 len;
     byte   der[WOLFSPDM_CERT_KEY_SZ];
+    int    canIssue;
 } WOLFSPDM_CERT_KEY;
+
+typedef enum {
+    WOLFSPDM_CERT_ANCHOR,
+    WOLFSPDM_CERT_INTERMEDIATE,
+    WOLFSPDM_CERT_LEAF
+} WOLFSPDM_CERT_ROLE;
 
 #ifdef WOLFSPDM_HAVE_MLDSA
 static byte wolfSPDM_KeyOidMlDsaLevel(word32 oid)
@@ -571,35 +579,73 @@ static byte wolfSPDM_SigOidMlDsaLevel(word32 oid)
 }
 #endif /* WOLFSPDM_HAVE_MLDSA */
 
-/* Read the subject key and CA flag of a certificate */
-static int wolfSPDM_CertKey(const byte* der, word32 derSz,
-    WOLFSPDM_CERT_KEY* key, int* isCA)
+static int wolfSPDM_CheckCertUsage(const DecodedCert* cert,
+    WOLFSPDM_CERT_ROLE role, word32* pathLen)
 {
+    if (role == WOLFSPDM_CERT_LEAF) {
+        if (cert->isCA || (cert->extKeyUsageSet &&
+                (cert->extKeyUsage & KEYUSE_DIGITAL_SIG) == 0)) {
+            return WOLFSPDM_E_CERT_FAIL;
+        }
+    }
+    else {
+        /* RFC 5280 counts non-self-issued intermediate CAs. */
+        if (role == WOLFSPDM_CERT_INTERMEDIATE && !cert->selfSigned) {
+            if (*pathLen == 0) {
+                return WOLFSPDM_E_CERT_FAIL;
+            }
+            (*pathLen)--;
+        }
+        if (cert->pathLengthSet && cert->pathLength < *pathLen) {
+            *pathLen = cert->pathLength;
+        }
+    }
+    return WOLFSPDM_SUCCESS;
+}
+
+/* Read the subject key and its authorization for use in this chain. */
+static int wolfSPDM_CertKey(const byte* der, word32 derSz,
+    WOLFSPDM_CERT_KEY* key, WOLFSPDM_CERT_ROLE role, word32* pathLen)
+{
+#if defined(NO_ASN_TIME) || defined(NO_ASN_TIME_CHECK)
+    const int verify = NO_VERIFY;
+#else
+    const int verify = VERIFY;
+#endif
     DecodedCert cert;
     int rc;
 
     wc_InitDecodedCert(&cert, der, derSz, NULL);
-    rc = wc_ParseCert(&cert, CERT_TYPE, NO_VERIFY, NULL);
-    if (rc == 0 && cert.keyOID != ECDSAk
+    /* The parse checks dates. CertSignedBy verifies the issuer's signature. */
+    rc = wc_ParseCert(&cert, CA_TYPE, verify, NULL);
+    if (rc != 0) {
+        rc = (rc == ASN_BEFORE_DATE_E || rc == ASN_AFTER_DATE_E) ?
+            WOLFSPDM_E_CERT_FAIL : WOLFSPDM_E_CERT_PARSE;
+        goto cleanup;
+    }
+    if (cert.keyOID != ECDSAk
     #ifdef WOLFSPDM_HAVE_MLDSA
             && wolfSPDM_KeyOidMlDsaLevel(cert.keyOID) == 0
     #endif
             ) {
-        rc = -1;
+        rc = WOLFSPDM_E_CERT_PARSE;
+        goto cleanup;
     }
-    if (rc == 0 && (cert.publicKey == NULL ||
-            cert.pubKeySize > sizeof(key->der))) {
-        rc = -1;
+    if (cert.publicKey == NULL || cert.pubKeySize > sizeof(key->der)) {
+        rc = WOLFSPDM_E_CERT_PARSE;
+        goto cleanup;
     }
-    if (rc == 0) {
+    rc = wolfSPDM_CheckCertUsage(&cert, role, pathLen);
+    if (rc == WOLFSPDM_SUCCESS) {
         key->oid = cert.keyOID;
         key->len = cert.pubKeySize;
         XMEMCPY(key->der, cert.publicKey, cert.pubKeySize);
-        *isCA = cert.isCA;
+        key->canIssue = cert.isCA && (!cert.extKeyUsageSet ||
+            (cert.extKeyUsage & KEYUSE_KEY_CERT_SIGN) != 0);
     }
+cleanup:
     wc_FreeDecodedCert(&cert);
-
-    return (rc == 0) ? WOLFSPDM_SUCCESS : WOLFSPDM_E_CERT_PARSE;
+    return rc;
 }
 
 /* ECDSA verify of hash under an ECC SubjectPublicKeyInfo */
@@ -729,8 +775,8 @@ int wolfSPDM_ValidateCertChain(WOLFSPDM_CTX* ctx)
     WOLFSPDM_CERT_KEY key;
     word32 leafSz = WOLFSPDM_RSP_PUBKEY_SZ;
     word32 pos = WOLFSPDM_CERT_CHAIN_HDR_SZ;
+    word32 pathLen = WOLFSPDM_MAX_CERT_CHAIN;
     int haveKey = 0;
-    int isCA = 0;
     int anchored = 0;
     int rc = WOLFSPDM_SUCCESS;
 
@@ -760,7 +806,7 @@ int wolfSPDM_ValidateCertChain(WOLFSPDM_CTX* ctx)
         }
         if (rc == WOLFSPDM_SUCCESS) {
             rc = wolfSPDM_CertKey(ctx->trustedCA, ctx->trustedCASz, &key,
-                &isCA);
+                WOLFSPDM_CERT_ANCHOR, &pathLen);
             haveKey = (rc == WOLFSPDM_SUCCESS);
         }
         anchored = 1;
@@ -769,20 +815,30 @@ int wolfSPDM_ValidateCertChain(WOLFSPDM_CTX* ctx)
     while (rc == WOLFSPDM_SUCCESS && pos < ctx->certChainLen) {
         word32 certSz = wolfSPDM_DerSeqLen(ctx->certChain + pos,
             ctx->certChainLen - pos);
+        int anchorCopy = (anchored && pos == WOLFSPDM_CERT_CHAIN_HDR_SZ &&
+            certSz == ctx->trustedCASz &&
+            XMEMCMP(ctx->certChain + pos, ctx->trustedCA, certSz) == 0);
+
         if (certSz == 0) {
             rc = WOLFSPDM_E_CERT_PARSE;
         }
         /* The configured root is the anchor; its own signature adds nothing */
-        if (rc == WOLFSPDM_SUCCESS && haveKey &&
-                !(anchored && pos == WOLFSPDM_CERT_CHAIN_HDR_SZ &&
-                  certSz == ctx->trustedCASz &&
-                  XMEMCMP(ctx->certChain + pos, ctx->trustedCA,
-                      certSz) == 0)) {
-            rc = isCA ? wolfSPDM_CertSignedBy(ctx->certChain + pos, certSz,
-                &key) : WOLFSPDM_E_CERT_FAIL;
+        if (rc == WOLFSPDM_SUCCESS && haveKey && !anchorCopy) {
+            rc = key.canIssue ? wolfSPDM_CertSignedBy(ctx->certChain + pos,
+                certSz, &key) : WOLFSPDM_E_CERT_FAIL;
         }
         if (rc == WOLFSPDM_SUCCESS) {
-            rc = wolfSPDM_CertKey(ctx->certChain + pos, certSz, &key, &isCA);
+            WOLFSPDM_CERT_ROLE role;
+
+            if (certSz == ctx->certChainLen - pos) {
+                role = WOLFSPDM_CERT_LEAF;
+            }
+            else {
+                role = (anchorCopy || !haveKey) ? WOLFSPDM_CERT_ANCHOR :
+                    WOLFSPDM_CERT_INTERMEDIATE;
+            }
+            rc = wolfSPDM_CertKey(ctx->certChain + pos, certSz, &key, role,
+                &pathLen);
             haveKey = (rc == WOLFSPDM_SUCCESS);
         }
         pos += certSz;

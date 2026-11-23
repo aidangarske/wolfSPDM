@@ -29,6 +29,7 @@
 #endif
 #include "spdm_internal.h"
 #ifndef WOLFSPDM_NO_CERT
+    #include <wolfssl/wolfcrypt/asn_public.h>
     #include "test_certs.h"
 #endif
 #ifdef WOLFSPDM_HAVE_MLDSA
@@ -40,6 +41,20 @@
 
 static int g_testsPassed = 0;
 static int g_testsFailed = 0;
+
+#if !defined(WOLFSPDM_NO_CERT) && !defined(NO_ASN_TIME) && \
+    !defined(NO_ASN_TIME_CHECK)
+/* Keep the certificate fixtures inside their validity periods. */
+static time_t g_certificateTime = 1798761600; /* 2027-01-01 UTC */
+
+static time_t test_certificate_clock(time_t* now)
+{
+    if (now != NULL) {
+        *now = g_certificateTime;
+    }
+    return g_certificateTime;
+}
+#endif
 
 #define TEST_ASSERT(cond, msg) do { \
     if (!(cond)) { \
@@ -4809,6 +4824,37 @@ static int test_validate_cert_chain(void)
     TEST_CTX_FREE();
     TEST_PASS();
 }
+
+#if !defined(NO_ASN_TIME) && !defined(NO_ASN_TIME_CHECK)
+static int test_certificate_validity(void)
+{
+    const time_t original = g_certificateTime;
+    int rc;
+    TEST_CTX_SETUP_V12();
+
+    printf("test_certificate_validity...\n");
+    ASSERT_SUCCESS(test_load_sample_chain(ctx));
+    ASSERT_SUCCESS(wolfSPDM_SetTrustedCAs(ctx, test_ca_cert_der,
+        sizeof(test_ca_cert_der)));
+    ASSERT_SUCCESS(wolfSPDM_ValidateCertChain(ctx));
+
+    g_certificateTime = 1767225600; /* 2026-01-01 UTC */
+    rc = wolfSPDM_ValidateCertChain(ctx);
+    g_certificateTime = original;
+    ASSERT_EQ(rc, WOLFSPDM_E_CERT_FAIL, "Certificate is not yet valid");
+    ASSERT_EQ(ctx->flags.hasRspPubKey, 0, "Discard the cached leaf");
+
+    ASSERT_SUCCESS(wolfSPDM_ValidateCertChain(ctx));
+    g_certificateTime = 2114380800; /* 2037-01-01 UTC */
+    rc = wolfSPDM_ValidateCertChain(ctx);
+    g_certificateTime = original;
+    ASSERT_EQ(rc, WOLFSPDM_E_CERT_FAIL, "Certificate has expired");
+    ASSERT_EQ(ctx->flags.hasRspPubKey, 0, "Discard the cached leaf");
+
+    TEST_CTX_FREE();
+    TEST_PASS();
+}
+#endif
 /* Serves the sample chain in small CERTIFICATE portions and hashes the
  * exchanged bytes the way M1 must */
 typedef struct {
@@ -6939,6 +6985,10 @@ static int test_chunk_transfers(void)
 
 int main(void)
 {
+#if !defined(WOLFSPDM_NO_CERT) && !defined(NO_ASN_TIME) && \
+    !defined(NO_ASN_TIME_CHECK)
+    ASSERT_SUCCESS(wc_SetTimeCb(test_certificate_clock));
+#endif
     printf("===========================================\n");
     printf("wolfSPDM Unit Tests\n");
     printf("===========================================\n\n");
@@ -7109,6 +7159,9 @@ int main(void)
     test_parse_certificate();
     test_mutual_auth_rejected_in_standard_mode();
     test_validate_cert_chain();
+#if !defined(NO_ASN_TIME) && !defined(NO_ASN_TIME_CHECK)
+    test_certificate_validity();
+#endif
     test_get_certificate_portions();
 #ifdef WOLFSPDM_TCG
     test_tcg_requires_explicit_responder_pin();
