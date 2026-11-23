@@ -2352,6 +2352,55 @@ static int test_nuvoton_set_only_mode_null_args(void)
 
 #ifdef WOLFSPDM_NATIONS
 
+static int nations_status_io_cb(WOLFSPDM_CTX* ctx, const byte* txBuf,
+    word32 txSz, byte* rxBuf, word32* rxSz, void* userCtx)
+{
+    byte status[] = { 0x01, 0x00, 0x01, *(const byte*)userCtx };
+    byte msg[WOLFSPDM_VENDOR_BUF_SZ];
+    int sz;
+
+    (void)txBuf;
+    (void)txSz;
+    sz = wolfSPDM_BuildVendorDefined(SPDM_VERSION_13, WOLFSPDM_VDCODE_GET_STS,
+        status, sizeof(status), msg, sizeof(msg));
+    if (sz < 0) {
+        return sz;
+    }
+    msg[1] = SPDM_TEST_VENDOR_DEFINED_RSP;
+    sz = wolfSPDM_BuildTcgClearMessage(ctx, msg, (word32)sz, rxBuf, *rxSz);
+    if (sz < 0) {
+        return sz;
+    }
+    *rxSz = (word32)sz;
+    return 0;
+}
+
+static int test_nations_get_status_pending_disable(void)
+{
+    WOLFSPDM_NATIONS_STATUS status;
+    byte lockState = 0x81;
+    TEST_CTX_SETUP();
+
+    printf("test_nations_get_status_pending_disable...\n");
+    ASSERT_SUCCESS(wolfSPDM_SetMode(ctx, WOLFSPDM_MODE_NATIONS_PSK));
+    ASSERT_SUCCESS(wolfSPDM_SetIO(ctx, nations_status_io_cb, &lockState));
+    ASSERT_SUCCESS(wolfSPDM_Nations_GetStatus(ctx, &status));
+    ASSERT_EQ(status.spdmOnlyLocked, 1, "Pending disable stays locked");
+    ASSERT_EQ(status.spdmOnlyPending, 1, "Pending disable is reported");
+
+    lockState = 0x01;
+    ASSERT_SUCCESS(wolfSPDM_Nations_GetStatus(ctx, &status));
+    ASSERT_EQ(status.spdmOnlyLocked, 1, "Enabled stays locked");
+    ASSERT_EQ(status.spdmOnlyPending, 0, "Enabled is not pending disable");
+
+    lockState = 0x00;
+    ASSERT_SUCCESS(wolfSPDM_Nations_GetStatus(ctx, &status));
+    ASSERT_EQ(status.spdmOnlyLocked, 0, "Disabled is unlocked");
+    ASSERT_EQ(status.spdmOnlyPending, 0, "Disabled is not pending disable");
+    TEST_CTX_FREE();
+    TEST_PASS();
+}
+
 static int test_nations_get_status_null_args(void)
 {
     WOLFSPDM_NATIONS_STATUS status;
@@ -6862,6 +6911,7 @@ int main(void)
 #endif
 #ifdef WOLFSPDM_NATIONS
     test_nations_get_status_null_args();
+    test_nations_get_status_pending_disable();
     test_nations_set_only_mode_null_args();
     test_nations_psk_set_null_args();
     test_nations_psk_clear_null_args();
