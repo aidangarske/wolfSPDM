@@ -90,6 +90,18 @@ int wolfSPDM_ParseCapabilities(WOLFSPDM_CTX* ctx, const byte* buf,
     return WOLFSPDM_SUCCESS;
 }
 
+#ifdef WOLFSPDM_HAVE_MLDSA
+static word32 wolfSPDM_OfferedPqcAsym(const WOLFSPDM_CTX* ctx)
+{
+    /* Provisioned P-384 pins can authenticate only P-384 peers. */
+    if (ctx->spdmVersion < SPDM_VERSION_14 ||
+            (ctx->flags.hasRspPubKey && !ctx->flags.rspKeyFromCert)) {
+        return 0;
+    }
+    return WOLFSPDM_MLDSA_SETS;
+}
+#endif
+
 int wolfSPDM_BuildNegotiateAlgorithms(WOLFSPDM_CTX* ctx, byte* buf,
     word32* bufSz)
 {
@@ -120,10 +132,7 @@ int wolfSPDM_BuildNegotiateAlgorithms(WOLFSPDM_CTX* ctx, byte* buf,
     SPDM_Set32LE(&buf[8], SPDM_ASYM_ALGO_ECDSA_P384);
     SPDM_Set32LE(&buf[12], SPDM_HASH_ALGO_SHA_384);
 #ifdef WOLFSPDM_HAVE_MLDSA
-    /* PqcAsymAlgo, reserved before 1.4 */
-    if (ctx->spdmVersion >= SPDM_VERSION_14) {
-        SPDM_Set32LE(&buf[16], WOLFSPDM_MLDSA_SETS);
-    }
+    SPDM_Set32LE(&buf[16], wolfSPDM_OfferedPqcAsym(ctx));
 #endif
 
     if (advDhe) {
@@ -207,7 +216,8 @@ int wolfSPDM_ParseAlgorithms(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufSz)
     }
     if (pqcAsymSel != 0) {
 #ifdef WOLFSPDM_HAVE_MLDSA
-        if (baseAsymSel != 0 || wolfSPDM_MlDsaLevel(pqcAsymSel) == 0) {
+        if (baseAsymSel != 0 || wolfSPDM_MlDsaLevel(pqcAsymSel) == 0 ||
+                (pqcAsymSel & wolfSPDM_OfferedPqcAsym(ctx)) == 0) {
             return WOLFSPDM_E_ALGO_MISMATCH;
         }
 #else

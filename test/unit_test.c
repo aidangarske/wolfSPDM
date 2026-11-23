@@ -5002,6 +5002,28 @@ static int test_negotiate_algorithms_pqc(void)
     ASSERT_SUCCESS(wolfSPDM_ParseAlgorithms(ctx, rsp, rspSz));
     ASSERT_EQ(ctx->pqcAsymSel, 0, "PqcAsymSel ignored below 1.4");
     ctx->spdmVersion = SPDM_VERSION_14;
+
+    ASSERT_SUCCESS(test_load_sample_chain(ctx));
+    ASSERT_SUCCESS(wolfSPDM_SetTrustedCAs(ctx, test_ca_cert_der,
+        sizeof(test_ca_cert_der)));
+    ASSERT_SUCCESS(wolfSPDM_ValidateCertChain(ctx));
+    ASSERT_EQ(ctx->flags.rspKeyFromCert, 1, "Certificate-derived leaf");
+    reqSz = sizeof(req);
+    ASSERT_SUCCESS(wolfSPDM_BuildNegotiateAlgorithms(ctx, req, &reqSz));
+    ASSERT_EQ(SPDM_Get32LE(&req[16]), WOLFSPDM_MLDSA_SETS,
+        "An earlier certificate leaf does not restrict the offer");
+
+    ASSERT_SUCCESS(wolfSPDM_SetResponderPubKey(ctx, test_rsp_leaf_pub,
+        sizeof(test_rsp_leaf_pub)));
+    reqSz = sizeof(req);
+    ASSERT_SUCCESS(wolfSPDM_BuildNegotiateAlgorithms(ctx, req, &reqSz));
+    ASSERT_EQ(SPDM_Get32LE(&req[8]), SPDM_ASYM_ALGO_ECDSA_P384,
+        "Offer the pinned signature algorithm");
+    ASSERT_EQ(SPDM_Get32LE(&req[16]), 0, "A P-384 pin limits the offer");
+    rspSz = test_algo_rsp(rsp, SPDM_VERSION_14, 0, pqc,
+        SPDM_DHE_ALGO_SECP384R1, 0);
+    ASSERT_EQ(wolfSPDM_ParseAlgorithms(ctx, rsp, rspSz),
+        WOLFSPDM_E_ALGO_MISMATCH, "Reject an incompatible selection");
 #endif
 
 #ifdef WOLFSPDM_HAVE_MLKEM
