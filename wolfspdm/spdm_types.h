@@ -248,6 +248,9 @@ extern "C" {
 #define WOLFSPDM_MAX_SIG_SIZE       WOLFSPDM_ECC_SIG_SIZE
 #define WOLFSPDM_RSP_PUBKEY_SZ      (WOLFSPDM_PUBKEY_BUF_SZ / 2)
 #endif
+#if WOLFSPDM_RSP_PUBKEY_SZ < WOLFSPDM_ECC_POINT_SIZE
+    #error "WOLFSPDM_RSP_PUBKEY_SZ must hold a raw P-384 public key"
+#endif
 #ifdef WOLFSPDM_HAVE_MLKEM
 /* ExchangeData: the ML-KEM-1024 encapsulation key and ciphertext are largest */
 #define WOLFSPDM_MAX_KEX_DATA       1568

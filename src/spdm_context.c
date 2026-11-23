@@ -168,6 +168,9 @@ int wolfSPDM_SetResponderPubKey(WOLFSPDM_CTX* ctx,
     if (pubKeySz != WOLFSPDM_ECC_POINT_SIZE) {
         return WOLFSPDM_E_INVALID_ARG;
     }
+    if (pubKeySz > sizeof(ctx->rspPubKey)) {
+        return WOLFSPDM_E_BUFFER_SMALL;
+    }
 
     XMEMCPY(ctx->rspPubKey, pubKey, pubKeySz);
     ctx->rspPubKeyLen = pubKeySz;
