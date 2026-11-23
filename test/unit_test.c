@@ -7397,6 +7397,16 @@ static int test_measurements_loopback(void)
     byte type = 0;
     byte val[16];
     word32 valSz = sizeof(val);
+#ifndef WOLFSPDM_NO_APP_DATA
+    byte vdReq[8] = { SPDM_VERSION_12, SPDM_VENDOR_DEFINED_REQUEST, 0, 0,
+        0, 0, 0, 0 };
+    byte enc[256];
+    byte rx[256];
+    byte plain[64];
+    word32 encSz;
+    word32 rxSz;
+    word32 plainSz;
+#endif
     TEST_CTX_SETUP();
 
     printf("test_measurements_loopback...\n");
@@ -7432,6 +7442,27 @@ static int test_measurements_loopback(void)
     /* Any other request restarts L1/L2 on both sides */
     ASSERT_SUCCESS(wolfSPDM_GetMeasurements(ctx, SPDM_MEAS_OPERATION_ALL, 0));
     ASSERT_SUCCESS(wolfSPDM_Heartbeat(ctx));
+    ASSERT_SUCCESS(wolfSPDM_GetMeasurements(ctx, SPDM_MEAS_OPERATION_ALL, 1));
+#endif
+#ifndef WOLFSPDM_NO_KEY_UPDATE
+    /* A rejected KEY_UPDATE still reached the responder */
+    ASSERT_SUCCESS(wolfSPDM_GetMeasurements(ctx, SPDM_MEAS_OPERATION_ALL, 0));
+    g_peerRejects = 1;
+    TEST_ASSERT(wolfSPDM_KeyUpdate(ctx, 0) != WOLFSPDM_SUCCESS,
+        "Rejected KEY_UPDATE");
+    g_peerRejects = 0;
+    ASSERT_SUCCESS(wolfSPDM_GetMeasurements(ctx, SPDM_MEAS_OPERATION_ALL, 1));
+#endif
+#ifndef WOLFSPDM_NO_APP_DATA
+    /* So does a request the caller seals and carries itself */
+    ASSERT_SUCCESS(wolfSPDM_GetMeasurements(ctx, SPDM_MEAS_OPERATION_ALL, 0));
+    encSz = sizeof(enc);
+    ASSERT_SUCCESS(wolfSPDM_EncryptMessage(ctx, vdReq, sizeof(vdReq), enc,
+        &encSz));
+    rxSz = sizeof(rx);
+    ASSERT_SUCCESS(test_peer_io_cb(ctx, enc, encSz, rx, &rxSz, &g_peer));
+    plainSz = sizeof(plain);
+    ASSERT_SUCCESS(wolfSPDM_DecryptMessage(ctx, rx, rxSz, plain, &plainSz));
     ASSERT_SUCCESS(wolfSPDM_GetMeasurements(ctx, SPDM_MEAS_OPERATION_ALL, 1));
 #endif
 

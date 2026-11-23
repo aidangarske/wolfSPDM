@@ -180,6 +180,12 @@ static int wolfSPDM_EncryptRecord(WOLFSPDM_CTX* ctx, int appMsg,
         XMEMCPY(&enc[hdrSz + plainBufSz], tag, WOLFSPDM_AEAD_TAG_SIZE);
         *encSz = hdrSz + plainBufSz + WOLFSPDM_AEAD_TAG_SIZE;
         ctx->reqSeqNum++;
+#ifndef WOLFSPDM_NO_MEAS
+        /* Only back-to-back GET_MEASUREMENTS extend L1/L2 */
+        if (!appMsg && ctx->l1l2State == WOLFSPDM_RUN_OPEN) {
+            ctx->l1l2State = WOLFSPDM_RUN_LIVE;
+        }
+#endif
         wolfSPDM_DebugPrint(ctx, "Encrypted %u bytes -> %u bytes (seq=%llu)\n",
             plainSz, *encSz, (unsigned long long)(ctx->reqSeqNum - 1));
     }
@@ -474,12 +480,6 @@ int wolfSPDM_SecuredExchange(WOLFSPDM_CTX* ctx,
              !wolfSPDM_IsTcgMode(ctx))) {
         return WOLFSPDM_E_NOT_CONNECTED;
     }
-#ifndef WOLFSPDM_NO_MEAS
-    /* Only back-to-back GET_MEASUREMENTS extend L1/L2 */
-    if (ctx->l1l2State == WOLFSPDM_RUN_OPEN) {
-        ctx->l1l2State = WOLFSPDM_RUN_LIVE;
-    }
-#endif
 #ifndef WOLFSPDM_NO_CHUNK
     if (wolfSPDM_ChunkOn(ctx)) {
         return wolfSPDM_ChunkExchange(ctx, 1, cmdPlain, cmdSz, rspPlain,
