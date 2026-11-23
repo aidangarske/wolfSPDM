@@ -214,14 +214,19 @@ int wolfSPDM_BuildPskFinish(WOLFSPDM_CTX* ctx, byte* buf, word32* bufSz)
     byte th2Hash[WOLFSPDM_HASH_SIZE];
     byte verifyData[WOLFSPDM_HASH_SIZE];
     word32 offset = 0;
+    word32 minSz;
     int rc;
 
     if (ctx == NULL || buf == NULL || bufSz == NULL) {
         return WOLFSPDM_E_INVALID_ARG;
     }
 
-    /* PSK_FINISH = header(4) + VerifyData(48) = 52 bytes */
-    if (*bufSz < 4 + WOLFSPDM_HASH_SIZE) {
+    /* header(4) + [OpaqueDataLength(2) for 1.4+] + VerifyData(48) */
+    minSz = 4 + WOLFSPDM_HASH_SIZE;
+    if (ctx->spdmVersion >= SPDM_VERSION_14) {
+        minSz += 2;
+    }
+    if (*bufSz < minSz) {
         return WOLFSPDM_E_BUFFER_SMALL;
     }
 
@@ -230,8 +235,12 @@ int wolfSPDM_BuildPskFinish(WOLFSPDM_CTX* ctx, byte* buf, word32* bufSz)
     buf[offset++] = SPDM_PSK_FINISH;
     buf[offset++] = 0x00;  /* Param1 */
     buf[offset++] = 0x00;  /* Param2 */
+    if (ctx->spdmVersion >= SPDM_VERSION_14) {
+        buf[offset++] = 0x00;  /* OpaqueDataLength = 0 (LE) */
+        buf[offset++] = 0x00;
+    }
 
-    /* Add PSK_FINISH header to transcript, compute TH2 */
+    /* Add PSK_FINISH up to VerifyData to transcript, compute TH2 */
     rc = wolfSPDM_TranscriptAdd(ctx, buf, offset);
     if (rc == WOLFSPDM_SUCCESS) {
         rc = wolfSPDM_TranscriptHash(ctx, th2Hash);
@@ -265,7 +274,26 @@ int wolfSPDM_ParsePskFinishRsp(WOLFSPDM_CTX* ctx, const byte* buf,
     SPDM_CHECK_PARSE_ARGS(ctx, buf, bufSz, 4);
 
     if (buf[1] == SPDM_PSK_FINISH_RSP) {
-        int addRc = wolfSPDM_TranscriptAdd(ctx, buf, 4);
+        int addRc;
+        word32 rspMsgLen = 4;
+
+        /* SPDM 1.4 adds OpaqueDataLength(2) + OpaqueData(var) */
+        if (ctx->spdmVersion >= SPDM_VERSION_14) {
+            word16 opaqueLen;
+            if (bufSz < 6) {
+                return WOLFSPDM_E_BUFFER_SMALL;
+            }
+            opaqueLen = SPDM_Get16LE(&buf[4]);
+            if (opaqueLen > WOLFSPDM_FINISH_OPAQUE_MAX) {
+                return WOLFSPDM_E_INVALID_ARG;
+            }
+            rspMsgLen = 4 + 2 + opaqueLen;
+            if (bufSz < rspMsgLen) {
+                return WOLFSPDM_E_BUFFER_SMALL;
+            }
+        }
+
+        addRc = wolfSPDM_TranscriptAdd(ctx, buf, rspMsgLen);
         if (addRc != WOLFSPDM_SUCCESS) {
             return addRc;
         }
@@ -331,7 +359,7 @@ int wolfSPDM_ConnectPsk(WOLFSPDM_CTX* ctx)
     byte rxBuf[WOLFSPDM_MAX_MSG_SIZE + WOLFSPDM_AEAD_OVERHEAD];
     byte finBuf[64];
     byte encBuf[WOLFSPDM_MAX_MSG_SIZE + WOLFSPDM_AEAD_OVERHEAD];
-    byte decBuf[64];
+    byte decBuf[WOLFSPDM_FINISH_RSP_MAX];
     word32 txSz;
     word32 rxSz;
     word32 finSz;

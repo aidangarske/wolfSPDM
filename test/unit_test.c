@@ -2779,6 +2779,58 @@ static int test_parse_psk_finish_rsp(void)
     TEST_PASS();
 }
 
+/* SPDM 1.4 PSK_FINISH and PSK_FINISH_RSP carry OpaqueDataLength into TH2 */
+static int test_psk_finish_v14_opaque(void)
+{
+    byte buf[WOLFSPDM_FINISH_RSP_MAX + 1];
+    word32 bufSz = sizeof(buf);
+    word32 start;
+    TEST_CTX_SETUP();
+
+    printf("test_psk_finish_v14_opaque...\n");
+    ctx->spdmVersion = SPDM_VERSION_14;
+    XMEMSET(ctx->reqFinishedKey, 0x5A, WOLFSPDM_HASH_SIZE);
+    start = ctx->transcriptLen;
+    ASSERT_SUCCESS(wolfSPDM_BuildPskFinish(ctx, buf, &bufSz));
+    ASSERT_EQ(bufSz, 6 + WOLFSPDM_HASH_SIZE,
+        "1.4 PSK_FINISH includes OpaqueDataLength");
+    ASSERT_EQ(SPDM_Get16LE(&buf[4]), 0, "no requester OpaqueData");
+    ASSERT_EQ(ctx->transcriptLen - start, bufSz, "request transcript size");
+    ASSERT_EQ(memcmp(ctx->transcript + start, buf, bufSz), 0,
+        "request transcript contents");
+
+    bufSz = 6 + WOLFSPDM_HASH_SIZE - 1;
+    ASSERT_EQ(wolfSPDM_BuildPskFinish(ctx, buf, &bufSz),
+        WOLFSPDM_E_BUFFER_SMALL, "1.4 PSK_FINISH output capacity");
+
+    XMEMSET(buf, 0, sizeof(buf));
+    buf[0] = SPDM_VERSION_14;
+    buf[1] = SPDM_PSK_FINISH_RSP;
+    SPDM_Set16LE(&buf[4], 3);
+    buf[6] = 0xA1;
+    buf[7] = 0xA2;
+    buf[8] = 0xA3;
+    start = ctx->transcriptLen;
+    ASSERT_EQ(wolfSPDM_ParsePskFinishRsp(ctx, buf, 5),
+        WOLFSPDM_E_BUFFER_SMALL, "response needs OpaqueDataLength");
+    ASSERT_EQ(wolfSPDM_ParsePskFinishRsp(ctx, buf, 8),
+        WOLFSPDM_E_BUFFER_SMALL, "response needs all OpaqueData");
+    ASSERT_EQ(ctx->transcriptLen, start, "rejected response not added");
+    ASSERT_SUCCESS(wolfSPDM_ParsePskFinishRsp(ctx, buf, 9));
+    ASSERT_EQ(ctx->transcriptLen - start, 9, "response transcript size");
+    ASSERT_EQ(memcmp(ctx->transcript + start, buf, 9), 0,
+        "response transcript contents");
+
+    SPDM_Set16LE(&buf[4], WOLFSPDM_FINISH_OPAQUE_MAX + 1);
+    start = ctx->transcriptLen;
+    TEST_ASSERT(wolfSPDM_ParsePskFinishRsp(ctx, buf, sizeof(buf))
+        != WOLFSPDM_SUCCESS, "response OpaqueData limit");
+    ASSERT_EQ(ctx->transcriptLen, start, "oversized response not added");
+
+    TEST_CTX_FREE();
+    TEST_PASS();
+}
+
 static int test_connect_psk_null_args(void)
 {
     TEST_CTX_SETUP();
@@ -7114,6 +7166,7 @@ int main(void)
     test_build_psk_finish_null_args();
     test_build_psk_finish_format();
     test_parse_psk_finish_rsp();
+    test_psk_finish_v14_opaque();
     test_connect_psk_null_args();
 #endif
 
