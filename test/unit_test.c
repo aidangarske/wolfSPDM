@@ -6240,6 +6240,7 @@ static int test_key_update_loopback(void)
 #ifndef WOLFSPDM_NO_MEAS
 static int test_measurements_msgs(void)
 {
+    static const byte zeroContext[8];
     byte req[64];
     byte rsp[256];
     byte err[] = {0x12, SPDM_ERROR, SPDM_ERROR_BUSY, 0, 0, 0, 0, 0};
@@ -6258,12 +6259,23 @@ static int test_measurements_msgs(void)
     ASSERT_SUCCESS(wolfSPDM_BuildGetMeasurements(ctx, req, &reqSz,
         SPDM_MEAS_OPERATION_ALL, 0));
     ASSERT_EQ(reqSz, 12, "1.3 unsigned request carries RequesterContext");
+    ASSERT_EQ(XMEMCMP(&req[4], zeroContext, sizeof(zeroContext)), 0,
+        "Unsigned request has no application context");
     reqSz = 44;
     ASSERT_EQ(wolfSPDM_BuildGetMeasurements(ctx, req, &reqSz,
         SPDM_MEAS_OPERATION_ALL, 1), WOLFSPDM_E_BUFFER_SMALL,
         "1.3 signed request needs 45 bytes");
 
+    ctx->spdmVersion = SPDM_VERSION_14;
+    reqSz = sizeof(req);
+    ASSERT_SUCCESS(wolfSPDM_BuildGetMeasurements(ctx, req, &reqSz,
+        SPDM_MEAS_OPERATION_ALL, 1));
+    ASSERT_EQ(reqSz, 45, "1.4 signed request carries RequesterContext");
+    ASSERT_EQ(XMEMCMP(&req[37], zeroContext, sizeof(zeroContext)), 0,
+        "Signed request has no application context");
+
     /* 1.3 unsigned response echoing the RequesterContext */
+    ctx->spdmVersion = SPDM_VERSION_13;
     reqSz = sizeof(req);
     ASSERT_SUCCESS(wolfSPDM_BuildGetMeasurements(ctx, req, &reqSz,
         SPDM_MEAS_OPERATION_ALL, 0));
@@ -6363,6 +6375,7 @@ static int test_measurements_loopback(void)
 #ifndef WOLFSPDM_NO_CHALLENGE
 static int test_challenge_msgs(void)
 {
+    static const byte zeroContext[8];
     byte req[64];
     byte rsp[256];
     word32 reqSz = sizeof(req);
@@ -6386,6 +6399,8 @@ static int test_challenge_msgs(void)
     reqSz = sizeof(req);
     ASSERT_SUCCESS(wolfSPDM_BuildChallenge(ctx, req, &reqSz, 0,
         SPDM_MEAS_SUMMARY_HASH_TCB));
+    ASSERT_EQ(XMEMCMP(&req[36], zeroContext, sizeof(zeroContext)), 0,
+        "Challenge has no application context");
     XMEMSET(ctx->certChainHash, 0xC7, WOLFSPDM_HASH_SIZE);
     n = test_chal_rsp(ctx, req, reqSz, rsp);
     XMEMSET(rsp + n, 0, WOLFSPDM_ECC_SIG_SIZE);
