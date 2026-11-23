@@ -4432,6 +4432,121 @@ static int test_psk_finish_clear_error_io(WOLFSPDM_CTX* ctx, const byte* txBuf,
     return requester_to_responder_iocb(ctx, txBuf, txSz, rxBuf, rxSz, userCtx);
 }
 
+typedef struct {
+    WOLFSPDM_CTX peer;
+    WOLFSPDM_RESP_CTX* rctx;
+    const byte* psk;
+    word32 pskSz;
+    int securedSent;
+} TEST_PSK_NO_CONTEXT;
+
+/* Answers PSK_EXCHANGE with no ResponderContext; peer tracks its keys. */
+static int test_psk_no_context_io(WOLFSPDM_CTX* ctx, const byte* txBuf,
+    word32 txSz, byte* rxBuf, word32* rxSz, void* userCtx)
+{
+    TEST_PSK_NO_CONTEXT* t = (TEST_PSK_NO_CONTEXT*)userCtx;
+    byte rsp[12 + WOLFSPDM_HASH_SIZE];
+    byte th1[WOLFSPDM_HASH_SIZE];
+    int rc;
+
+    if (txSz >= WOLFSPDM_TCG_HEADER_SIZE &&
+            SPDM_Get16BE(txBuf) == WOLFSPDM_TCG_TAG_SECURED) {
+        t->securedSent++;
+        return WOLFSPDM_E_IO_FAIL;
+    }
+    if (txSz < WOLFSPDM_TCG_HEADER_SIZE + 2 ||
+            txBuf[WOLFSPDM_TCG_HEADER_SIZE + 1] != SPDM_PSK_EXCHANGE) {
+        return requester_to_responder_iocb(ctx, txBuf, txSz, rxBuf, rxSz,
+            t->rctx);
+    }
+
+    XMEMSET(rsp, 0, sizeof(rsp));
+    rsp[0] = ctx->spdmVersion;
+    rsp[1] = SPDM_PSK_EXCHANGE_RSP;
+    SPDM_Set16LE(&rsp[4], 0x0102);
+    XMEMCPY(t->peer.transcript, ctx->transcript, ctx->transcriptLen);
+    t->peer.transcriptLen = ctx->transcriptLen;
+    t->peer.spdmVersion = ctx->spdmVersion;
+    t->peer.mode = ctx->mode;
+    rc = wolfSPDM_SetPSK(&t->peer, t->psk, t->pskSz, NULL, 0);
+    if (rc == WOLFSPDM_SUCCESS) {
+        rc = wolfSPDM_TranscriptAdd(&t->peer, rsp, 12);
+    }
+    if (rc == WOLFSPDM_SUCCESS) {
+        rc = wolfSPDM_TranscriptHash(&t->peer, th1);
+    }
+    if (rc == WOLFSPDM_SUCCESS) {
+        rc = wolfSPDM_DeriveHandshakeKeysPsk(&t->peer, th1);
+    }
+    if (rc == WOLFSPDM_SUCCESS) {
+        rc = wolfSPDM_ComputeVerifyData(t->peer.rspFinishedKey, th1,
+            rsp + 12);
+    }
+    if (rc == WOLFSPDM_SUCCESS) {
+        rc = wolfSPDM_TranscriptAdd(&t->peer, rsp + 12, WOLFSPDM_HASH_SIZE);
+    }
+    if (rc == WOLFSPDM_SUCCESS) {
+        rc = wolfSPDM_DeriveAppDataKeys(&t->peer);
+    }
+    if (rc == WOLFSPDM_SUCCESS) {
+        rc = wolfSPDM_BuildTcgClearMessage(ctx, rsp, sizeof(rsp), rxBuf,
+            *rxSz);
+        if (rc >= 0) {
+            *rxSz = (word32)rc;
+            rc = WOLFSPDM_SUCCESS;
+        }
+    }
+    wc_ForceZero(th1, sizeof(th1));
+    return rc;
+}
+
+/* Without a ResponderContext the PSK session is established by
+ * PSK_EXCHANGE_RSP alone, and the application keys cover that transcript. */
+static int test_psk_exchange_without_responder_context(void)
+{
+    static const byte testPsk[48] = {
+        0x11,0x22,0x33,0x44,0x55,0x66,0x77,0x88,
+        0x99,0xaa,0xbb,0xcc,0xdd,0xee,0xf0,0x01,
+        0x12,0x23,0x34,0x45,0x56,0x67,0x78,0x89,
+        0x9a,0xab,0xbc,0xcd,0xde,0xef,0xf1,0x02,
+        0x13,0x24,0x35,0x46,0x57,0x68,0x79,0x8a,
+        0x9b,0xac,0xbd,0xce,0xdf,0xe0,0xf2,0x03
+    };
+    WOLFSPDM_CTX req;
+    byte rctxBuf[WOLFSPDM_RESP_CTX_STATIC_SIZE];
+    WOLFSPDM_RESP_CTX* rctx = (WOLFSPDM_RESP_CTX*)rctxBuf;
+    TEST_PSK_NO_CONTEXT t;
+
+    printf("test_psk_exchange_without_responder_context...\n");
+
+    XMEMSET(&t, 0, sizeof(t));
+    ASSERT_SUCCESS(wolfSPDM_Init(&req));
+    ASSERT_SUCCESS(wolfSPDM_Init(&t.peer));
+    ASSERT_SUCCESS(wolfSPDM_RespInit(rctx));
+    req.mode = WOLFSPDM_MODE_NATIONS_PSK;
+    ASSERT_SUCCESS(wolfSPDM_RespSetMode(rctx, 0, 1));
+    ASSERT_SUCCESS(wolfSPDM_SetPSK(&req, testPsk, sizeof(testPsk), NULL, 0));
+    t.rctx = rctx;
+    t.psk = testPsk;
+    t.pskSz = sizeof(testPsk);
+    ASSERT_SUCCESS(wolfSPDM_SetIO(&req, test_psk_no_context_io, &t));
+
+    ASSERT_SUCCESS(wolfSPDM_ConnectPsk(&req));
+    ASSERT_EQ(t.securedSent, 0, "No PSK_FINISH without ResponderContext");
+    ASSERT_EQ(wolfSPDM_IsConnected(&req), 1, "Requester connected");
+    ASSERT_EQ(XMEMCMP(req.reqDataKey, t.peer.reqDataKey,
+        sizeof(req.reqDataKey)), 0, "Request key matches the peer");
+    ASSERT_EQ(XMEMCMP(req.rspDataKey, t.peer.rspDataKey,
+        sizeof(req.rspDataKey)), 0, "Response key matches the peer");
+    TEST_ASSERT(test_handshake_secrets_cleared(&req),
+        "Established PSK session must retire handshake material");
+
+    wolfSPDM_Free(&t.peer);
+    wolfSPDM_RespFree(rctx);
+    wolfSPDM_Free(&req);
+    TEST_PASS();
+}
+
 /* PSK handshake + tunneled TPM2_CMD round-trip + END_SESSION, end-to-end. */
 static int test_responder_psk_roundtrip(void)
 {
@@ -7307,6 +7422,7 @@ int main(void)
     test_responder_psk_clear_retires_session();
 #endif
     test_responder_psk_roundtrip();
+    test_psk_exchange_without_responder_context();
 #endif
 #endif
 

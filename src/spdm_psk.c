@@ -350,7 +350,7 @@ int wolfSPDM_DeriveHandshakeKeysPsk(WOLFSPDM_CTX* ctx, const byte* th1Hash)
 
 /* ----- Shared PSK Connection Flow ----- */
 
-/* GET_VERSION -> PSK_EXCHANGE -> PSK_FINISH -> application key derivation.
+/* GET_VERSION -> PSK_EXCHANGE -> [PSK_FINISH] -> application key derivation.
  * This PSK flow skips GET_CAPABILITIES and NEGOTIATE_ALGORITHMS. */
 int wolfSPDM_ConnectPsk(WOLFSPDM_CTX* ctx)
 {
@@ -365,6 +365,7 @@ int wolfSPDM_ConnectPsk(WOLFSPDM_CTX* ctx)
     word32 finSz;
     word32 encSz;
     word32 decSz;
+    int finish = 0;
 
     if (ctx == NULL) {
         return WOLFSPDM_E_INVALID_ARG;
@@ -410,9 +411,14 @@ int wolfSPDM_ConnectPsk(WOLFSPDM_CTX* ctx)
     if (rc == WOLFSPDM_SUCCESS) {
         rc = wolfSPDM_ParsePskExchangeRsp(ctx, rxBuf, rxSz);
     }
+    /* DSP0274 10.20: PSK_FINISH follows only when ResponderContext is present;
+     * otherwise PSK_EXCHANGE_RSP completes the handshake. */
+    if (rc == WOLFSPDM_SUCCESS) {
+        finish = (SPDM_Get16LE(&rxBuf[8]) != 0);
+    }
 
     /* Step 5: PSK_FINISH / PSK_FINISH_RSP (encrypted) */
-    if (rc == WOLFSPDM_SUCCESS) {
+    if (rc == WOLFSPDM_SUCCESS && finish) {
         finSz = sizeof(finBuf);
         encSz = sizeof(encBuf);
         rxSz = sizeof(rxBuf);
@@ -421,21 +427,21 @@ int wolfSPDM_ConnectPsk(WOLFSPDM_CTX* ctx)
         wolfSPDM_DebugPrint(ctx, "PSK Step 5: PSK_FINISH\n");
         rc = wolfSPDM_BuildPskFinish(ctx, finBuf, &finSz);
     }
-    if (rc == WOLFSPDM_SUCCESS) {
+    if (rc == WOLFSPDM_SUCCESS && finish) {
         rc = wolfSPDM_EncryptInternal(ctx, finBuf, finSz, encBuf, &encSz);
     }
-    if (rc == WOLFSPDM_SUCCESS) {
+    if (rc == WOLFSPDM_SUCCESS && finish) {
         rc = wolfSPDM_SendReceive(ctx, encBuf, encSz, rxBuf, &rxSz);
     }
-    if (rc == WOLFSPDM_SUCCESS && rxSz >= 4 &&
+    if (rc == WOLFSPDM_SUCCESS && finish && rxSz >= 4 &&
             rxBuf[0] == ctx->spdmVersion && rxBuf[1] == SPDM_ERROR) {
         ctx->lastPeerErrorCode = rxBuf[2];
         rc = WOLFSPDM_E_PEER_ERROR;
     }
-    if (rc == WOLFSPDM_SUCCESS) {
+    if (rc == WOLFSPDM_SUCCESS && finish) {
         rc = wolfSPDM_DecryptInternal(ctx, rxBuf, rxSz, decBuf, &decSz);
     }
-    if (rc == WOLFSPDM_SUCCESS) {
+    if (rc == WOLFSPDM_SUCCESS && finish) {
         rc = wolfSPDM_ParsePskFinishRsp(ctx, decBuf, decSz);
     }
 
