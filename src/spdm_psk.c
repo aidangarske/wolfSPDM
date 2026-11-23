@@ -179,8 +179,6 @@ int wolfSPDM_ParsePskExchangeRsp(WOLFSPDM_CTX* ctx, const byte* buf,
             expectedHmac);
     }
     if (rc == WOLFSPDM_SUCCESS) {
-        wolfSPDM_DebugHex(ctx, "Expected HMAC", expectedHmac,
-            WOLFSPDM_HASH_SIZE);
         wolfSPDM_DebugHex(ctx, "Received HMAC", rspVerifyData,
             WOLFSPDM_HASH_SIZE);
         if (wolfSPDM_ConstCompare(expectedHmac, rspVerifyData,
