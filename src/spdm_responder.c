@@ -582,6 +582,7 @@ static int RespDispatchClear(WOLFSPDM_RESP_CTX* rctx,
     byte* out, word32* outSz)
 {
     WOLFSPDM_CTX* ctx = &rctx->ctx;
+    word32 transcriptMark;
     byte code;
     int rc;
     int handlerManagesTranscript = 0;
@@ -633,6 +634,7 @@ static int RespDispatchClear(WOLFSPDM_RESP_CTX* rctx,
      * requester's wolfSPDM_TCG_VendorCmdClear doesn't add them, so the
      * responder mustn't either. GET_PUBK contributes via Ct = SHA-384
      * of its response payload, added separately below. */
+    transcriptMark = ctx->transcriptLen;
     if (code != SPDM_VENDOR_DEFINED_REQUEST) {
         rc = wolfSPDM_TranscriptAdd(ctx, in, inSz);
         if (rc != WOLFSPDM_SUCCESS) {
@@ -690,6 +692,9 @@ static int RespDispatchClear(WOLFSPDM_RESP_CTX* rctx,
 
     if (rc == WOLFSPDM_SUCCESS && !handlerManagesTranscript) {
         rc = wolfSPDM_TranscriptAdd(ctx, out, *outSz);
+    }
+    if (rc != WOLFSPDM_SUCCESS && ctx->transcriptLen > transcriptMark) {
+        ctx->transcriptLen = transcriptMark;
     }
     return rc;
 }

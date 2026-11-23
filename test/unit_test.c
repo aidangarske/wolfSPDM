@@ -3855,16 +3855,25 @@ static int requester_to_responder_iocb(WOLFSPDM_CTX* spdmCtx,
     return wolfSPDM_RespHandleMessage(rctx, txBuf, txSz, rxBuf, rxSz);
 }
 
+static int test_responder_limited_reply_io(WOLFSPDM_CTX* ctx,
+    const byte* txBuf, word32 txSz, byte* rxBuf, word32* rxSz, void* userCtx)
+{
+    word32 limitedSz = WOLFSPDM_TCG_HEADER_SIZE;
+    int rc = requester_to_responder_iocb(ctx, txBuf, txSz, rxBuf,
+        &limitedSz, userCtx);
+
+    (void)rxSz;
+    ASSERT_EQ(rc, WOLFSPDM_E_BUFFER_SMALL, "Reply needs more space");
+    return rc;
+}
+
 static int test_responder_reply_capacity_io(WOLFSPDM_CTX* ctx,
     const byte* txBuf, word32 txSz, byte* rxBuf, word32* rxSz, void* userCtx)
 {
     if (txSz >= WOLFSPDM_TCG_HEADER_SIZE &&
             SPDM_Get16BE(txBuf) == WOLFSPDM_TCG_TAG_SECURED) {
-        word32 limitedSz = WOLFSPDM_TCG_HEADER_SIZE;
-        int rc = requester_to_responder_iocb(ctx, txBuf, txSz, rxBuf,
-            &limitedSz, userCtx);
-        ASSERT_EQ(rc, WOLFSPDM_E_BUFFER_SMALL, "Reply needs more space");
-        return rc;
+        return test_responder_limited_reply_io(ctx, txBuf, txSz, rxBuf,
+            rxSz, userCtx);
     }
     return requester_to_responder_iocb(ctx, txBuf, txSz, rxBuf, rxSz, userCtx);
 }
@@ -3972,6 +3981,12 @@ static int test_responder_identity_roundtrip(int fineGrained)
             wireKeySz, NULL, 0, NULL, 0));
         ASSERT_SUCCESS(wolfSPDM_TranscriptAdd(&req, req.certChainHash,
             WOLFSPDM_HASH_SIZE));
+        ASSERT_SUCCESS(wolfSPDM_SetIO(&req, test_responder_limited_reply_io,
+            rctx));
+        ASSERT_EQ(wolfSPDM_KeyExchange(&req), WOLFSPDM_E_IO_FAIL,
+            "The first key exchange reply did not fit");
+        ASSERT_SUCCESS(wolfSPDM_SetIO(&req, requester_to_responder_iocb,
+            rctx));
         ASSERT_SUCCESS(wolfSPDM_KeyExchange(&req));
         ASSERT_EQ(wolfSPDM_IsConnected(&req), 0, "Connected before FINISH");
         ASSERT_SUCCESS(wolfSPDM_Finish(&req));
