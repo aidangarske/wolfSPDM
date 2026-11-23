@@ -415,6 +415,7 @@ int wolfSPDM_ConnectPsk(WOLFSPDM_CTX* ctx)
             "SessionID=0x%08x\n", ctx->sessionId);
     }
     else {
+        wolfSPDM_ResetSession(ctx);
         ctx->state = WOLFSPDM_STATE_ERROR;
     }
 

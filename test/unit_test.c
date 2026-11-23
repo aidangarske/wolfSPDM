@@ -3911,6 +3911,7 @@ static int test_psk_finish_clear_error_io(WOLFSPDM_CTX* ctx, const byte* txBuf,
 /* PSK handshake + tunneled TPM2_CMD round-trip + END_SESSION, end-to-end. */
 static int test_responder_psk_roundtrip(void)
 {
+    static const byte zero[WOLFSPDM_AEAD_KEY_SIZE];
     static const byte testPsk[64] = {
         0xdb,0xc2,0x19,0x22,0x91,0xd8,0x07,0x74,
         0x24,0x41,0xb9,0x63,0xf6,0x71,0x28,0x41,
@@ -3990,6 +3991,18 @@ static int test_responder_psk_roundtrip(void)
         "Clear PSK_FINISH rejection should be reported as a peer error");
     ASSERT_EQ(wolfSPDM_GetLastPeerError(&req), SPDM_ERROR_DECRYPT_ERROR,
         "PSK_FINISH should record the clear peer error code");
+    ASSERT_EQ(req.state, WOLFSPDM_STATE_ERROR, "PSK handshake failed");
+    ASSERT_EQ(req.sessionId, 0, "The provisional session must be retired");
+    TEST_ASSERT(test_handshake_secrets_cleared(&req),
+        "Failed PSK handshake must clear its secrets");
+    ASSERT_EQ(XMEMCMP(req.reqDataKey, zero, sizeof(req.reqDataKey)), 0,
+        "Failed PSK handshake must clear its request key");
+    ASSERT_EQ(XMEMCMP(req.rspDataKey, zero, sizeof(req.rspDataKey)), 0,
+        "Failed PSK handshake must clear its response key");
+    ASSERT_EQ(XMEMCMP(req.reqDataIv, zero, sizeof(req.reqDataIv)), 0,
+        "Failed PSK handshake must clear its request IV");
+    ASSERT_EQ(XMEMCMP(req.rspDataIv, zero, sizeof(req.rspDataIv)), 0,
+        "Failed PSK handshake must clear its response IV");
 
     wolfSPDM_RespFree(rctx);
     wolfSPDM_Free(&req);
