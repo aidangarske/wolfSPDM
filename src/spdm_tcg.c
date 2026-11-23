@@ -611,7 +611,8 @@ int wolfSPDM_TCG_NegotiateAlgorithms(WOLFSPDM_CTX* ctx)
     algReq[off++] = 0x04; /* Param1: NumAlgStructs = 4 */
     algReq[off++] = 0x00;
     algReq[off++] = 0x30; algReq[off++] = 0x00; /* Length = 48 */
-    algReq[off++] = 0x00; algReq[off++] = 0x02; /* MeasurementSpec + Reserved */
+    algReq[off++] = 0x00; /* MeasurementSpecification */
+    algReq[off++] = 0x02; /* OtherParamsSupport advertises OpaqueDataFmt1 */
     /* BaseAsymAlgo: ECDSA_ECC_NIST_P384 */
     algReq[off++] = 0x80; algReq[off++] = 0x00;
     algReq[off++] = 0x00; algReq[off++] = 0x00;
