@@ -4213,6 +4213,22 @@ static int test_negotiate_algorithms_roundtrip(void)
     XMEMCPY(&rsp[36], &req[32], 16);
     ASSERT_SUCCESS(wolfSPDM_ParseAlgorithms(ctx, rsp, sizeof(rsp)));
 
+    rsp[7] = 0xFE;
+    ASSERT_SUCCESS(wolfSPDM_ParseAlgorithms(ctx, rsp, sizeof(rsp)));
+    ctx->spdmVersion = SPDM_VERSION_13;
+    rsp[0] = SPDM_VERSION_13;
+    rsp[7] = 0xEE;
+    ASSERT_SUCCESS(wolfSPDM_ParseAlgorithms(ctx, rsp, sizeof(rsp)));
+    rsp[7] = 0xFE;
+    ASSERT_EQ(wolfSPDM_ParseAlgorithms(ctx, rsp, sizeof(rsp)),
+        WOLFSPDM_E_ALGO_MISMATCH, "Multi-key selection requires an offer");
+    rsp[7] = 0x03;
+    ASSERT_EQ(wolfSPDM_ParseAlgorithms(ctx, rsp, sizeof(rsp)),
+        WOLFSPDM_E_ALGO_MISMATCH, "The peer must select one opaque format");
+    ctx->spdmVersion = SPDM_VERSION_12;
+    rsp[0] = SPDM_VERSION_12;
+    rsp[7] = 0x02;
+
     /* Declared Length must equal the received size */
     SPDM_Set16LE(&rsp[4], sizeof(rsp) - 1);
     ASSERT_EQ(wolfSPDM_ParseAlgorithms(ctx, rsp, sizeof(rsp)),

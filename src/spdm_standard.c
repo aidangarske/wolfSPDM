@@ -37,6 +37,10 @@
 
 /* ----- VCA: GET_CAPABILITIES / NEGOTIATE_ALGORITHMS ----- */
 
+#define SPDM_OPAQUE_FORMAT_MASK   0x03
+#define SPDM_OPAQUE_FORMAT_1      0x02
+#define SPDM_REQUESTER_MULTI_KEY  0x10
+
 int wolfSPDM_BuildGetCapabilities(WOLFSPDM_CTX* ctx, byte* buf, word32* bufSz)
 {
     SPDM_CHECK_BUILD_ARGS(ctx, buf, bufSz, 20);
@@ -112,7 +116,7 @@ int wolfSPDM_BuildNegotiateAlgorithms(WOLFSPDM_CTX* ctx, byte* buf,
     buf[0] = ctx->spdmVersion;
     buf[1] = SPDM_NEGOTIATE_ALGORITHMS;
     buf[6] = 0x01;                  /* MeasurementSpecification = DMTF */
-    buf[7] = 0x02;                  /* OtherParams = OpaqueDataFmt1 */
+    buf[7] = SPDM_OPAQUE_FORMAT_1;
     SPDM_Set32LE(&buf[8], SPDM_ASYM_ALGO_ECDSA_P384);
     SPDM_Set32LE(&buf[12], SPDM_HASH_ALGO_SHA_384);
 #ifdef WOLFSPDM_HAVE_MLDSA
@@ -168,6 +172,7 @@ int wolfSPDM_ParseAlgorithms(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufSz)
 #endif
     byte numAlgs;
     byte i;
+    byte otherParamsMask = SPDM_OPAQUE_FORMAT_MASK;
     int dheOk = 0;
     int kemOk = 0;
     int aeadOk = 0;
@@ -181,8 +186,11 @@ int wolfSPDM_ParseAlgorithms(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufSz)
             SPDM_Get16LE(&buf[4]) != bufSz) {
         return WOLFSPDM_E_ALGO_MISMATCH;
     }
-    /* MeasurementSpecificationSel (none or DMTF), OtherParamsSel */
-    if (buf[6] > 0x01 || buf[7] != 0x02) {
+    /* RequesterMultiKeyConnSel is defined since 1.3 and never offered. */
+    if (ctx->spdmVersion >= SPDM_VERSION_13) {
+        otherParamsMask |= SPDM_REQUESTER_MULTI_KEY;
+    }
+    if (buf[6] > 0x01 || (buf[7] & otherParamsMask) != SPDM_OPAQUE_FORMAT_1) {
         return WOLFSPDM_E_ALGO_MISMATCH;
     }
     if (SPDM_Get32LE(&buf[16]) != SPDM_HASH_ALGO_SHA_384) {
