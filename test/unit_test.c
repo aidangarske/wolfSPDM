@@ -5587,6 +5587,26 @@ static void test_session_loopback(WOLFSPDM_CTX* ctx)
     g_peerRejects = 0;
     wolfSPDM_SetIO(ctx, test_peer_io_cb, p);
 }
+static int test_disconnect_reports_peer_error(void)
+{
+    int rc;
+    TEST_CTX_SETUP();
+
+    printf("test_disconnect_reports_peer_error...\n");
+    test_session_loopback(ctx);
+    g_peerRejects = 1;
+    rc = wolfSPDM_Disconnect(ctx);
+    g_peerRejects = 0;
+
+    ASSERT_EQ(rc, WOLFSPDM_E_PEER_ERROR, "END_SESSION should report rejection");
+    ASSERT_EQ(wolfSPDM_IsConnected(ctx), 0, "Local session should be retired");
+    ASSERT_EQ(wolfSPDM_GetLastPeerError(ctx), SPDM_ERROR_BUSY,
+        "END_SESSION peer error should survive local teardown");
+
+    wolfSPDM_Free(&g_peer);
+    TEST_CTX_FREE();
+    TEST_PASS();
+}
 #endif /* loopback */
 
 #ifndef WOLFSPDM_NO_KEY_UPDATE
@@ -6217,6 +6237,11 @@ int main(void)
 #endif
 #ifndef WOLFSPDM_NO_HEARTBEAT
     test_heartbeat_msgs();
+#endif
+#if (!defined(WOLFSPDM_NO_KEY_UPDATE) || !defined(WOLFSPDM_NO_MEAS) || \
+    !defined(WOLFSPDM_NO_CHALLENGE) || !defined(WOLFSPDM_NO_CHUNK)) && \
+    !defined(WOLFSPDM_NO_MCTP)
+    test_disconnect_reports_peer_error();
 #endif
 #ifndef WOLFSPDM_NO_KEY_UPDATE
     test_key_update_msgs();

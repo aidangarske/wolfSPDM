@@ -471,6 +471,7 @@ int wolfSPDM_Disconnect(WOLFSPDM_CTX* ctx)
         byte rxBuf[16];   /* END_SESSION_ACK: 4 bytes */
         word32 txSz = sizeof(txBuf);
         word32 rxSz;
+        int peerError = 0;
 
         rc = wolfSPDM_BuildEndSession(ctx, txBuf, &txSz);
         if (rc == WOLFSPDM_SUCCESS) {
@@ -481,7 +482,8 @@ int wolfSPDM_Disconnect(WOLFSPDM_CTX* ctx)
             if (rxSz < 4) {
                 rc = WOLFSPDM_E_BUFFER_SMALL;
             }
-            else if (wolfSPDM_CheckError(rxBuf, rxSz, NULL)) {
+            else if (wolfSPDM_CheckError(rxBuf, rxSz, &peerError)) {
+                ctx->lastPeerErrorCode = (byte)peerError;
                 rc = WOLFSPDM_E_PEER_ERROR;
             }
             else if (rxSz != 4 || rxBuf[0] != ctx->spdmVersion ||
