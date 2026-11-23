@@ -400,6 +400,67 @@ static int test_check_error(void)
     TEST_PASS();
 }
 
+/* After negotiation every response must carry the negotiated SPDMVersion */
+static int test_response_version_matches(void)
+{
+    byte buf[160];
+    word32 start;
+#ifndef WOLFSPDM_NO_CERT
+    word16 portionLen;
+    word16 remainderLen;
+#endif
+    TEST_CTX_SETUP_V12();
+
+    printf("test_response_version_matches...\n");
+    XMEMSET(buf, 0, sizeof(buf));
+    buf[0] = SPDM_VERSION_13;
+
+    buf[1] = SPDM_FINISH_RSP;
+    start = ctx->transcriptLen;
+    TEST_ASSERT(wolfSPDM_ParseFinishRsp(ctx, buf, 4) != WOLFSPDM_SUCCESS,
+        "FINISH_RSP version");
+    ASSERT_EQ(ctx->transcriptLen, start, "FINISH_RSP not added");
+
+    buf[1] = SPDM_KEY_EXCHANGE_RSP;
+    ASSERT_EQ(wolfSPDM_ParseKeyExchangeRsp(ctx, buf, sizeof(buf)),
+        WOLFSPDM_E_KEY_EXCHANGE, "KEY_EXCHANGE_RSP version");
+    ASSERT_EQ(ctx->transcriptLen, start, "KEY_EXCHANGE_RSP not added");
+
+#ifdef WOLFSPDM_PSK
+    buf[1] = SPDM_PSK_EXCHANGE_RSP;
+    ASSERT_EQ(wolfSPDM_ParsePskExchangeRsp(ctx, buf, 12 + WOLFSPDM_HASH_SIZE),
+        WOLFSPDM_E_KEY_EXCHANGE, "PSK_EXCHANGE_RSP version");
+    ASSERT_EQ(ctx->transcriptLen, start, "PSK_EXCHANGE_RSP not added");
+
+    buf[1] = SPDM_PSK_FINISH_RSP;
+    TEST_ASSERT(wolfSPDM_ParsePskFinishRsp(ctx, buf, 4) != WOLFSPDM_SUCCESS,
+        "PSK_FINISH_RSP version");
+    ASSERT_EQ(ctx->transcriptLen, start, "PSK_FINISH_RSP not added");
+#endif
+
+#ifndef WOLFSPDM_NO_CERT
+    buf[1] = SPDM_DIGESTS;
+    ASSERT_EQ(wolfSPDM_ParseDigests(ctx, buf, 4), WOLFSPDM_E_CERT_FAIL,
+        "DIGESTS version");
+    buf[1] = SPDM_CERTIFICATE;
+    ASSERT_EQ(wolfSPDM_ParseCertificate(ctx, buf, 8, &portionLen,
+        &remainderLen), WOLFSPDM_E_CERT_FAIL, "CERTIFICATE version");
+
+    buf[0] = SPDM_VERSION_12;
+    buf[1] = SPDM_DIGESTS;
+    ASSERT_SUCCESS(wolfSPDM_ParseDigests(ctx, buf, 4));
+    buf[1] = SPDM_CERTIFICATE;
+    ASSERT_SUCCESS(wolfSPDM_ParseCertificate(ctx, buf, 8, &portionLen,
+        &remainderLen));
+#endif
+    buf[0] = SPDM_VERSION_12;
+    buf[1] = SPDM_FINISH_RSP;
+    ASSERT_SUCCESS(wolfSPDM_ParseFinishRsp(ctx, buf, 4));
+
+    TEST_CTX_FREE();
+    TEST_PASS();
+}
+
 static int test_error_strings(void)
 {
     printf("test_error_strings...\n");
@@ -7446,6 +7507,7 @@ int main(void)
 
     /* Error tests */
     test_check_error();
+    test_response_version_matches();
     test_error_strings();
 
     /* Multi-version tests */

@@ -647,6 +647,10 @@ int wolfSPDM_ParseFinishRsp(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufSz)
         int addRc;
         word32 rspMsgLen = 4;
 
+        if (ctx->spdmVersion != 0 && buf[0] != ctx->spdmVersion) {
+            return WOLFSPDM_E_BAD_STATE;
+        }
+
         /* SPDM 1.4 adds OpaqueLength(2) + OpaqueData(var) to FINISH_RSP */
         if (ctx->spdmVersion >= SPDM_VERSION_14) {
             word16 opaqueLen;

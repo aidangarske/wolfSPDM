@@ -495,6 +495,10 @@ static WC_INLINE void wolfSPDM_BuildIV(byte* iv, const byte* baseIv,
             } \
             return (fallbackErr); \
         } \
+        if ((expected) != SPDM_VERSION && (ctx)->spdmVersion != 0 && \
+                (buf)[0] != (ctx)->spdmVersion) { \
+            return (fallbackErr); \
+        } \
     } while (0)
 
 /* ----- Internal Function Declarations - Transcript ----- */
