@@ -273,6 +273,8 @@ void wolfSPDM_RespReset(WOLFSPDM_RESP_CTX* ctx)
     wc_ForceZero(ctx->ctx.rspAppSecret, sizeof(ctx->ctx.rspAppSecret));
 #endif
     wolfSPDM_TranscriptReset(&ctx->ctx);
+    /* The VCA left with the transcript; GET_VERSION must renegotiate. */
+    ctx->ctx.spdmVersion = 0;
     ctx->ctx.reqSeqNum = 0;
     ctx->ctx.rspSeqNum = 0;
     ctx->ctx.sessionId = 0;

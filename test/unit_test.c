@@ -893,6 +893,8 @@ static int test_extract_ecc_point(void)
 
 #ifdef WOLFSPDM_TCG
 #define SPDM_TEST_VENDOR_DEFINED_RSP 0x7E
+#define SPDM_TEST_GET_CAPABILITIES   0xE1
+#define SPDM_TEST_CAPABILITIES       0x61
 
 typedef struct TCG_GET_PUB_KEY_IO_CTX {
     const byte* pubKey;
@@ -3901,6 +3903,58 @@ static int test_responder_get_version_reserved(void)
         "VERSION reply includes its header");
     ASSERT_EQ(response[WOLFSPDM_TCG_HEADER_SIZE + 1], SPDM_VERSION,
         "GET_VERSION ignores reserved fields");
+    wolfSPDM_RespFree(rctx);
+    TEST_PASS();
+}
+
+/* Reset discards the negotiated version with the transcript, so the next
+ * connection starts again from GET_VERSION. */
+static int test_responder_reset_clears_version(void)
+{
+    byte rctxBuf[WOLFSPDM_RESP_CTX_STATIC_SIZE];
+    WOLFSPDM_RESP_CTX* rctx = (WOLFSPDM_RESP_CTX*)rctxBuf;
+    byte getVersion[4] = { SPDM_VERSION_10, SPDM_GET_VERSION, 0, 0 };
+    byte getCaps[4] = { SPDM_VERSION_13, SPDM_TEST_GET_CAPABILITIES, 0, 0 };
+    byte frame[WOLFSPDM_TCG_HEADER_SIZE + 4];
+    byte response[64];
+    word32 responseSz;
+    int i;
+
+    printf("test_responder_reset_clears_version...\n");
+    ASSERT_SUCCESS(wolfSPDM_RespInit(rctx));
+    ASSERT_SUCCESS(wolfSPDM_RespSetMode(rctx, 1, 0));
+    wolfSPDM_WriteTcgHeader(frame, WOLFSPDM_TCG_TAG_CLEAR,
+        sizeof(frame), 0, 0);
+
+    for (i = 0; i < 3; i++) {
+        if (i == 1) {
+            wolfSPDM_RespReset(rctx);
+        }
+        if (i != 1) {
+            XMEMCPY(frame + WOLFSPDM_TCG_HEADER_SIZE, getVersion,
+                sizeof(getVersion));
+            responseSz = sizeof(response);
+            ASSERT_SUCCESS(wolfSPDM_RespHandleMessage(rctx, frame,
+                sizeof(frame), response, &responseSz));
+        }
+        XMEMCPY(frame + WOLFSPDM_TCG_HEADER_SIZE, getCaps, sizeof(getCaps));
+        responseSz = sizeof(response);
+        ASSERT_SUCCESS(wolfSPDM_RespHandleMessage(rctx, frame, sizeof(frame),
+            response, &responseSz));
+        TEST_ASSERT(responseSz >= WOLFSPDM_TCG_HEADER_SIZE + 4,
+            "GET_CAPABILITIES reply includes its header");
+        if (i == 1) {
+            ASSERT_EQ(response[WOLFSPDM_TCG_HEADER_SIZE + 1], SPDM_ERROR,
+                "Reset requires a new GET_VERSION");
+            ASSERT_EQ(response[WOLFSPDM_TCG_HEADER_SIZE + 2],
+                SPDM_ERROR_UNEXPECTED_REQUEST, "Reset request is unexpected");
+        }
+        else {
+            ASSERT_EQ(response[WOLFSPDM_TCG_HEADER_SIZE + 1],
+                SPDM_TEST_CAPABILITIES, "Negotiated version is accepted");
+        }
+    }
+
     wolfSPDM_RespFree(rctx);
     TEST_PASS();
 }
@@ -7408,6 +7462,7 @@ int main(void)
     test_responder_no_clear_tpm2_cmd();
     test_responder_secured_requires_session();
     test_responder_get_version_reserved();
+    test_responder_reset_clears_version();
 #ifdef WOLFSPDM_NATIONS
     test_responder_pre_negotiation_status_version();
     test_responder_psk_replace_guard();
