@@ -413,6 +413,11 @@ int wolfSPDM_GetCertificate(WOLFSPDM_CTX* ctx, int slotId)
         return WOLFSPDM_E_BAD_STATE;
     }
 
+    /* TH uses one certificate hash. M1 includes each certificate exchange. */
+    if (ctx->transcriptLen > ctx->vcaLen) {
+        ctx->transcriptLen = ctx->vcaLen;
+    }
+
     /* The CERTIFICATE response (8-byte header + portion) must fit the
      * responder's DataTransferSize */
     if (ctx->dataTransferSize != 0 &&

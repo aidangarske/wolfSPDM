@@ -4779,6 +4779,7 @@ static int cert_portion_io_cb(WOLFSPDM_CTX* ctx, const byte* txBuf,
 
 static int test_get_certificate_portions(void)
 {
+    static const byte vca[] = { SPDM_VERSION_12, SPDM_ALGORITHMS, 0, 0 };
     static const int sessionStates[] = {
         WOLFSPDM_STATE_KEY_EX, WOLFSPDM_STATE_FINISH, WOLFSPDM_STATE_CONNECTED
     };
@@ -4789,7 +4790,6 @@ static int test_get_certificate_portions(void)
 #ifndef WOLFSPDM_NO_CHALLENGE
     byte want[WOLFSPDM_HASH_SIZE];
     byte got[WOLFSPDM_HASH_SIZE];
-    wc_Sha384 m1;
 #endif
     TEST_CTX_SETUP_V12();
     printf("test_get_certificate_portions...\n");
@@ -4802,7 +4802,10 @@ static int test_get_certificate_portions(void)
     XMEMCPY(r.chain + WOLFSPDM_CERT_CHAIN_HDR_SZ, test_rsp_chain_der,
         sizeof(test_rsp_chain_der));
     ASSERT_EQ(wc_InitSha384(&r.m1), 0, "init expected M1");
+    ASSERT_SUCCESS(wolfSPDM_TranscriptAdd(ctx, vca, sizeof(vca)));
+    ctx->vcaLen = ctx->transcriptLen;
 #ifndef WOLFSPDM_NO_CHALLENGE
+    ASSERT_EQ(wc_Sha384Update(&r.m1, vca, sizeof(vca)), 0, "VCA in M1");
     ASSERT_SUCCESS(wolfSPDM_M1Start(ctx));
 #endif
 
@@ -4815,10 +4818,8 @@ static int test_get_certificate_portions(void)
 
 #ifndef WOLFSPDM_NO_CHALLENGE
     /* M1 holds each GET_CERTIFICATE and its full CERTIFICATE response */
-    ASSERT_EQ(wc_Sha384Final(&r.m1, want), 0, "expected M1");
-    ASSERT_EQ(wc_Sha384Copy(&ctx->m1Hash, &m1), 0, "copy M1");
-    ASSERT_EQ(wc_Sha384Final(&m1, got), 0, "final M1");
-    wc_Sha384Free(&m1);
+    ASSERT_EQ(wc_Sha384GetHash(&r.m1, want), 0, "expected M1");
+    ASSERT_EQ(wc_Sha384GetHash(&ctx->m1Hash, got), 0, "requester M1");
     ASSERT_EQ(XMEMCMP(want, got, sizeof(want)), 0,
         "M1 matches the exchanged bytes");
 #endif
@@ -4835,6 +4836,26 @@ static int test_get_certificate_portions(void)
     ASSERT_EQ(ctx->certChainLen, r.chainSz, "Preserve the current chain");
     ASSERT_EQ(ctx->currentSlotId, 0, "Preserve the current certificate slot");
     ASSERT_EQ(r.exchanges, exchanges, "Reject before contacting the peer");
+
+    ctx->state = WOLFSPDM_STATE_CERT;
+    ASSERT_SUCCESS(wolfSPDM_GetCertificate(ctx, 1));
+    ASSERT_EQ(ctx->currentSlotId, 1, "Use the newly fetched certificate slot");
+    ASSERT_EQ(ctx->transcriptLen, sizeof(vca) + WOLFSPDM_HASH_SIZE,
+        "TH starts with VCA and one certificate hash");
+    ASSERT_EQ(XMEMCMP(ctx->transcript, vca, sizeof(vca)), 0, "Preserve VCA");
+    ASSERT_EQ(XMEMCMP(ctx->transcript + sizeof(vca), ctx->certChainHash,
+        WOLFSPDM_HASH_SIZE), 0, "TH includes the current certificate hash");
+#ifndef WOLFSPDM_NO_CHALLENGE
+    ASSERT_EQ(wc_Sha384GetHash(&r.m1, want), 0, "expected M1 after refetch");
+    ASSERT_EQ(wc_Sha384GetHash(&ctx->m1Hash, got), 0, "requester M1 after refetch");
+    ASSERT_EQ(XMEMCMP(want, got, sizeof(want)), 0,
+        "M1 covers certificate exchanges for both slots");
+#endif
+    wolfSPDM_SetIO(ctx, dummy_io_cb, NULL);
+    ASSERT_EQ(wolfSPDM_GetCertificate(ctx, 0), WOLFSPDM_E_IO_FAIL,
+        "Transport failure fetching another certificate");
+    ASSERT_EQ(ctx->transcriptLen, sizeof(vca),
+        "The failed fetch leaves only VCA in TH");
 
     wc_Sha384Free(&r.m1);
     TEST_CTX_FREE();
