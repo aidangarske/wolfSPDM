@@ -32,7 +32,90 @@
 #include <limits.h>
 #include <wolfspdm/spdm_tcg.h>
 
+/* VENDOR_DEFINED responses use the same payload layout as requests. */
+static int VendorDefinedPayload(const byte* buf, word32 bufSz,
+    word32* offset, word32* len)
+{
+    if (bufSz < 9 + WOLFSPDM_VDCODE_LEN) {
+        return WOLFSPDM_E_BUFFER_SMALL;
+    }
+
+    *offset = 7 + buf[6]; /* Skip StandardID and VendorID. */
+    if (*offset + 2 > bufSz) {
+        return WOLFSPDM_E_BUFFER_SMALL;
+    }
+    *len = SPDM_Get16LE(buf + *offset);
+    *offset += 2;
+    if (*len < WOLFSPDM_VDCODE_LEN || *len > bufSz - *offset) {
+        return WOLFSPDM_E_BUFFER_SMALL;
+    }
+
+    return WOLFSPDM_SUCCESS;
+}
+
 /* ----- Vendor Command Helpers ----- */
+
+/* Every locality-aware TPM2CMDn request is answered with TPM2_CMD. */
+static const char* TcgResponseVdCode(const char* vdCode)
+{
+    char locality = vdCode[WOLFSPDM_VDCODE_LEN - 1];
+
+    if (XMEMCMP(vdCode, WOLFSPDM_VDCODE_TPM2CMD0,
+            WOLFSPDM_VDCODE_LEN - 1) == 0 &&
+            locality >= '0' && locality <= '4') {
+        return WOLFSPDM_VDCODE_TPM2_CMD;
+    }
+    return vdCode;
+}
+
+static int TcgCheckVendorResponse(WOLFSPDM_CTX* ctx, byte ver,
+    const char* vdCode, const byte* buf, word32 bufSz, WOLFSPDM_VENDOR_RSP* rsp)
+{
+    word32 offset;
+    word32 len;
+    int rc;
+
+    if (bufSz >= 4 && buf[1] == SPDM_ERROR) {
+        wolfSPDM_DebugPrint(ctx, "%s: SPDM ERROR 0x%02x 0x%02x\n",
+            vdCode, buf[2], buf[3]);
+        ctx->lastPeerErrorCode = buf[2];
+        return WOLFSPDM_E_PEER_ERROR;
+    }
+    if (bufSz < 4) {
+        return WOLFSPDM_E_BUFFER_SMALL;
+    }
+    /* The requests use the 16-bit length form. */
+    if (buf[0] != ver || buf[1] != SPDM_VENDOR_DEFINED_RESPONSE ||
+            (buf[2] & 0x80) != 0) {
+        return WOLFSPDM_E_FRAMING;
+    }
+
+    rc = VendorDefinedPayload(buf, bufSz, &offset, &len);
+    if (rc != WOLFSPDM_SUCCESS) {
+        return rc;
+    }
+    if (len != bufSz - offset || SPDM_Get16LE(buf + 4) != 0x0001) {
+        return WOLFSPDM_E_FRAMING;
+    }
+    if (XMEMCMP(buf + offset, TcgResponseVdCode(vdCode),
+            WOLFSPDM_VDCODE_LEN) != 0) {
+        wolfSPDM_DebugPrint(ctx, "%s: unexpected VdCode '%.8s'\n",
+            vdCode, buf + offset);
+        return WOLFSPDM_E_PEER_ERROR;
+    }
+    if (rsp != NULL) {
+        len -= WOLFSPDM_VDCODE_LEN;
+        if (len > sizeof(rsp->payload)) {
+            return WOLFSPDM_E_BUFFER_SMALL;
+        }
+        XMEMCPY(rsp->vdCode, buf + offset, WOLFSPDM_VDCODE_LEN);
+        rsp->vdCode[WOLFSPDM_VDCODE_LEN] = '\0';
+        XMEMCPY(rsp->payload, buf + offset + WOLFSPDM_VDCODE_LEN, len);
+        rsp->payloadSz = len;
+    }
+
+    return WOLFSPDM_SUCCESS;
+}
 
 int wolfSPDM_TCG_VendorCmdClear(WOLFSPDM_CTX* ctx, const char* vdCode,
     const byte* payload, word32 payloadSz, WOLFSPDM_VENDOR_RSP* rsp)
@@ -59,28 +142,8 @@ int wolfSPDM_TCG_VendorCmdClear(WOLFSPDM_CTX* ctx, const char* vdCode,
             &rxSz);
     }
 
-    if (rc == WOLFSPDM_SUCCESS && rxSz >= 4 && rxBuf[1] == SPDM_ERROR) {
-        wolfSPDM_DebugPrint(ctx, "%s: SPDM ERROR 0x%02x 0x%02x\n",
-            vdCode, rxBuf[2], rxBuf[3]);
-        ctx->lastPeerErrorCode = rxBuf[2];
-        rc = WOLFSPDM_E_PEER_ERROR;
-    }
-
-    if (rc == WOLFSPDM_SUCCESS && rsp != NULL) {
-        rsp->payloadSz = sizeof(rsp->payload);
-        XMEMSET(rsp->vdCode, 0, sizeof(rsp->vdCode));
-        rc = wolfSPDM_ParseVendorDefined(rxBuf, rxSz,
-            rsp->vdCode, rsp->payload, &rsp->payloadSz);
-        if (rc >= 0) {
-            rc = WOLFSPDM_SUCCESS;
-        }
-        /* Validate response VdCode matches the request */
-        if (rc == WOLFSPDM_SUCCESS &&
-                XMEMCMP(rsp->vdCode, vdCode, WOLFSPDM_VDCODE_LEN) != 0) {
-            wolfSPDM_DebugPrint(ctx, "%s: unexpected VdCode '%.8s'\n",
-                vdCode, rsp->vdCode);
-            rc = WOLFSPDM_E_PEER_ERROR;
-        }
+    if (rc == WOLFSPDM_SUCCESS) {
+        rc = TcgCheckVendorResponse(ctx, ver, vdCode, rxBuf, rxSz, rsp);
     }
 
     /* PSK_SET_ and PSK_CLR_ carry secrets */
@@ -115,11 +178,8 @@ int wolfSPDM_TCG_VendorCmdSecured(WOLFSPDM_CTX* ctx, const char* vdCode,
             decBuf, &decSz);
     }
 
-    if (rc == WOLFSPDM_SUCCESS && decSz >= 4 && decBuf[1] == SPDM_ERROR) {
-        wolfSPDM_DebugPrint(ctx, "%s: SPDM ERROR 0x%02x 0x%02x\n",
-            vdCode, decBuf[2], decBuf[3]);
-        ctx->lastPeerErrorCode = decBuf[2];
-        rc = WOLFSPDM_E_PEER_ERROR;
+    if (rc == WOLFSPDM_SUCCESS) {
+        rc = TcgCheckVendorResponse(ctx, ver, vdCode, decBuf, decSz, NULL);
     }
 
     /* Always zero sensitive stack buffers */
@@ -271,41 +331,19 @@ int wolfSPDM_ParseVendorDefined(
     char* vdCode,
     byte* payload, word32* payloadSz)
 {
-    word32 offset = 0;
-    word16 reqLength;
+    word32 offset;
+    word32 reqLength;
     word32 dataLen;
-    byte vendorIdLen;
+    int rc;
 
     if (inBuf == NULL || vdCode == NULL || payload == NULL ||
         payloadSz == NULL) {
         return WOLFSPDM_E_INVALID_ARG;
     }
 
-    /* Minimum: version(1) + code(1) + param1(1) + param2(1) + stdId(2/LE) +
-     *          vidLen(1) + reqLen(2/LE) + vdCode(8) = 17 */
-    if (inBufSz < 17) {
-        return WOLFSPDM_E_BUFFER_SMALL;
-    }
-
-    offset += 1; /* SPDM version */
-    offset += 3; /* request/response code + params */
-    offset += 2; /* standard ID */
-    vendorIdLen = inBuf[offset];
-    offset += 1 + vendorIdLen;
-
-    if (offset + 2 > inBufSz) {
-        return WOLFSPDM_E_BUFFER_SMALL;
-    }
-
-    reqLength = SPDM_Get16LE(inBuf + offset);
-    offset += 2;
-
-    if (reqLength < WOLFSPDM_VDCODE_LEN) {
-        return WOLFSPDM_E_BUFFER_SMALL;
-    }
-
-    if (offset + reqLength > inBufSz) {
-        return WOLFSPDM_E_BUFFER_SMALL;
+    rc = VendorDefinedPayload(inBuf, inBufSz, &offset, &reqLength);
+    if (rc != WOLFSPDM_SUCCESS) {
+        return rc;
     }
 
     XMEMCPY(vdCode, inBuf + offset, WOLFSPDM_VDCODE_LEN);

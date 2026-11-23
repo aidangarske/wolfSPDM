@@ -1125,26 +1125,25 @@ static int test_tcg_get_pub_key_version_failure(void)
     TEST_PASS();
 }
 
-static int test_tcg_peer_error_io(WOLFSPDM_CTX* ctx, const byte* txBuf,
-    word32 txSz, byte* rxBuf, word32* rxSz, void* userCtx)
+static int test_tcg_reply(const byte* txBuf, word32 txSz, byte* rxBuf,
+    word32* rxSz, WOLFSPDM_CTX* peer, const byte* reply, word32 replySz)
 {
-    byte error[] = { ctx->spdmVersion, SPDM_ERROR, SPDM_ERROR_BUSY, 0 };
     word32 payloadSz;
     word16 tag;
 
     if (txSz < WOLFSPDM_TCG_HEADER_SIZE ||
-            *rxSz < WOLFSPDM_TCG_HEADER_SIZE + sizeof(error)) {
+            *rxSz < WOLFSPDM_TCG_HEADER_SIZE + replySz) {
         return -1;
     }
     tag = SPDM_Get16BE(txBuf);
     if (tag == WOLFSPDM_TCG_TAG_CLEAR) {
-        XMEMCPY(rxBuf + WOLFSPDM_TCG_HEADER_SIZE, error, sizeof(error));
-        payloadSz = sizeof(error);
+        XMEMCPY(rxBuf + WOLFSPDM_TCG_HEADER_SIZE, reply, replySz);
+        payloadSz = replySz;
     }
-    else if (tag == WOLFSPDM_TCG_TAG_SECURED && userCtx != NULL) {
+    else if (tag == WOLFSPDM_TCG_TAG_SECURED && peer != NULL) {
         payloadSz = *rxSz - WOLFSPDM_TCG_HEADER_SIZE;
-        if (wolfSPDM_EncryptInternal((WOLFSPDM_CTX*)userCtx, error,
-                sizeof(error), rxBuf + WOLFSPDM_TCG_HEADER_SIZE,
+        if (wolfSPDM_EncryptInternal(peer, reply,
+                replySz, rxBuf + WOLFSPDM_TCG_HEADER_SIZE,
                 &payloadSz) != WOLFSPDM_SUCCESS) {
             return -1;
         }
@@ -1155,6 +1154,15 @@ static int test_tcg_peer_error_io(WOLFSPDM_CTX* ctx, const byte* txBuf,
     *rxSz = WOLFSPDM_TCG_HEADER_SIZE + payloadSz;
     wolfSPDM_WriteTcgHeader(rxBuf, tag, *rxSz, 0, 0);
     return 0;
+}
+
+static int test_tcg_peer_error_io(WOLFSPDM_CTX* ctx, const byte* txBuf,
+    word32 txSz, byte* rxBuf, word32* rxSz, void* userCtx)
+{
+    byte error[] = { ctx->spdmVersion, SPDM_ERROR, SPDM_ERROR_BUSY, 0 };
+
+    return test_tcg_reply(txBuf, txSz, rxBuf, rxSz, (WOLFSPDM_CTX*)userCtx,
+        error, sizeof(error));
 }
 
 static int test_tcg_vca_reports_peer_error(void)
@@ -1178,23 +1186,29 @@ static int test_tcg_vca_reports_peer_error(void)
     TEST_PASS();
 }
 
+static int test_tcg_setup_session(WOLFSPDM_CTX* ctx, WOLFSPDM_CTX* peer)
+{
+    ASSERT_SUCCESS(wolfSPDM_Init(peer));
+    ASSERT_SUCCESS(wolfSPDM_SetMode(ctx, WOLFSPDM_MODE_TCG));
+    ASSERT_SUCCESS(wolfSPDM_SetMode(peer, WOLFSPDM_MODE_TCG));
+    ctx->state = WOLFSPDM_STATE_CONNECTED;
+    ctx->sessionId = 0x00020001;
+    peer->sessionId = ctx->sessionId;
+    XMEMSET(ctx->reqDataKey, 0x11, sizeof(ctx->reqDataKey));
+    XMEMSET(ctx->reqDataIv, 0x22, sizeof(ctx->reqDataIv));
+    XMEMSET(ctx->rspDataKey, 0x33, sizeof(ctx->rspDataKey));
+    XMEMSET(ctx->rspDataIv, 0x44, sizeof(ctx->rspDataIv));
+    XMEMCPY(peer->reqDataKey, ctx->rspDataKey, sizeof(peer->reqDataKey));
+    XMEMCPY(peer->reqDataIv, ctx->rspDataIv, sizeof(peer->reqDataIv));
+    return 0;
+}
+
 static int test_tcg_secured_vendor_reports_peer_error(void)
 {
     WOLFSPDM_CTX peer;
     TEST_CTX_SETUP_V12();
     printf("test_tcg_secured_vendor_reports_peer_error...\n");
-    ASSERT_SUCCESS(wolfSPDM_Init(&peer));
-    ASSERT_SUCCESS(wolfSPDM_SetMode(ctx, WOLFSPDM_MODE_TCG));
-    ASSERT_SUCCESS(wolfSPDM_SetMode(&peer, WOLFSPDM_MODE_TCG));
-    ctx->state = WOLFSPDM_STATE_CONNECTED;
-    ctx->sessionId = 0x00020001;
-    peer.sessionId = ctx->sessionId;
-    XMEMSET(ctx->reqDataKey, 0x11, sizeof(ctx->reqDataKey));
-    XMEMSET(ctx->reqDataIv, 0x22, sizeof(ctx->reqDataIv));
-    XMEMSET(ctx->rspDataKey, 0x33, sizeof(ctx->rspDataKey));
-    XMEMSET(ctx->rspDataIv, 0x44, sizeof(ctx->rspDataIv));
-    XMEMCPY(peer.reqDataKey, ctx->rspDataKey, sizeof(peer.reqDataKey));
-    XMEMCPY(peer.reqDataIv, ctx->rspDataIv, sizeof(peer.reqDataIv));
+    ASSERT_SUCCESS(test_tcg_setup_session(ctx, &peer));
     ASSERT_SUCCESS(wolfSPDM_SetIO(ctx, test_tcg_peer_error_io, &peer));
 
     ASSERT_EQ(wolfSPDM_TCG_VendorCmdSecured(ctx, WOLFSPDM_VDCODE_GET_STS,
@@ -1202,6 +1216,71 @@ static int test_tcg_secured_vendor_reports_peer_error(void)
     ASSERT_EQ(wolfSPDM_GetLastPeerError(ctx), SPDM_ERROR_BUSY,
         "Secured vendor command peer error code");
 
+    wolfSPDM_Free(&peer);
+    TEST_CTX_FREE();
+    TEST_PASS();
+}
+
+typedef struct TEST_TCG_VENDOR_REPLY {
+    WOLFSPDM_CTX* peer;
+    const char* vdCode;
+} TEST_TCG_VENDOR_REPLY;
+
+static int test_tcg_vendor_reply_io(WOLFSPDM_CTX* ctx, const byte* txBuf,
+    word32 txSz, byte* rxBuf, word32* rxSz, void* userCtx)
+{
+    const TEST_TCG_VENDOR_REPLY* reply = (const TEST_TCG_VENDOR_REPLY*)userCtx;
+    byte msg[WOLFSPDM_VENDOR_BUF_SZ];
+    int sz;
+
+    sz = wolfSPDM_BuildVendorDefined(ctx->spdmVersion, reply->vdCode,
+        NULL, 0, msg, sizeof(msg));
+    if (sz < 0) {
+        return sz;
+    }
+    msg[1] = SPDM_TEST_VENDOR_DEFINED_RSP;
+    return test_tcg_reply(txBuf, txSz, rxBuf, rxSz, reply->peer,
+        msg, (word32)sz);
+}
+
+static int test_tcg_clear_vendor_ack(void)
+{
+    TEST_TCG_VENDOR_REPLY reply = { NULL, WOLFSPDM_VDCODE_GET_STS };
+    TEST_CTX_SETUP_V12();
+
+    printf("test_tcg_clear_vendor_ack...\n");
+    ASSERT_SUCCESS(wolfSPDM_SetMode(ctx, WOLFSPDM_MODE_TCG));
+    ASSERT_SUCCESS(wolfSPDM_SetIO(ctx, test_tcg_vendor_reply_io, &reply));
+    ASSERT_SUCCESS(wolfSPDM_TCG_VendorCmdClear(ctx, reply.vdCode, NULL, 0,
+        NULL));
+    ASSERT_EQ(wolfSPDM_TCG_VendorCmdClear(ctx, WOLFSPDM_VDCODE_GET_PUBK,
+        NULL, 0, NULL), WOLFSPDM_E_PEER_ERROR, "Unrelated reply is rejected");
+    TEST_CTX_FREE();
+    TEST_PASS();
+}
+
+static int test_tcg_secured_vendor_ack(void)
+{
+    WOLFSPDM_CTX peer;
+    TEST_TCG_VENDOR_REPLY reply = { &peer, WOLFSPDM_VDCODE_GET_STS };
+    TEST_CTX_SETUP_V12();
+
+    printf("test_tcg_secured_vendor_ack...\n");
+    ASSERT_SUCCESS(test_tcg_setup_session(ctx, &peer));
+    ASSERT_SUCCESS(wolfSPDM_SetIO(ctx, test_tcg_vendor_reply_io, &reply));
+    ASSERT_SUCCESS(wolfSPDM_TCG_VendorCmdSecured(ctx, reply.vdCode, NULL, 0));
+    ASSERT_EQ(wolfSPDM_TCG_VendorCmdSecured(ctx, WOLFSPDM_VDCODE_GET_PUBK,
+        NULL, 0), WOLFSPDM_E_PEER_ERROR, "Unrelated reply is rejected");
+
+    reply.vdCode = WOLFSPDM_VDCODE_TPM2_CMD;
+    ASSERT_SUCCESS(wolfSPDM_TCG_VendorCmdSecured(ctx,
+        WOLFSPDM_VDCODE_TPM2_CMD, NULL, 0));
+    ASSERT_SUCCESS(wolfSPDM_TCG_VendorCmdSecured(ctx,
+        WOLFSPDM_VDCODE_TPM2CMD0, NULL, 0));
+    ASSERT_SUCCESS(wolfSPDM_TCG_VendorCmdSecured(ctx,
+        WOLFSPDM_VDCODE_TPM2CMD4, NULL, 0));
+    ASSERT_EQ(wolfSPDM_TCG_VendorCmdSecured(ctx, WOLFSPDM_VDCODE_GET_STS,
+        NULL, 0), WOLFSPDM_E_PEER_ERROR, "TPM reply only answers TPM codes");
     wolfSPDM_Free(&peer);
     TEST_CTX_FREE();
     TEST_PASS();
@@ -6913,6 +6992,8 @@ int main(void)
     test_tcg_get_pub_key_version_failure();
     test_tcg_vca_reports_peer_error();
     test_tcg_secured_vendor_reports_peer_error();
+    test_tcg_clear_vendor_ack();
+    test_tcg_secured_vendor_ack();
     test_tcg_connect_requires_responder_key();
     test_tcg_underflow();
 #endif
