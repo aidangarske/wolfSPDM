@@ -411,7 +411,15 @@ int wolfSPDM_KeyUpdate(WOLFSPDM_CTX* ctx, int updateAll)
     }
     if (rc == WOLFSPDM_SUCCESS && !updateAll) {
         rc = wolfSPDM_DeriveUpdatedKeys(ctx, 0);
-        ctx->reqSeqNum = 0;
+        if (rc == WOLFSPDM_SUCCESS) {
+            ctx->reqSeqNum = 0;
+        }
+        else {
+            /* The peer acknowledged the update. Retire the session when
+             * we cannot install the new keys. */
+            wolfSPDM_ResetSession(ctx);
+            ctx->state = WOLFSPDM_STATE_ERROR;
+        }
     }
 
     if (rc == WOLFSPDM_SUCCESS) {

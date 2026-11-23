@@ -5962,6 +5962,7 @@ static int test_disconnect_reports_peer_error(void)
 static int test_key_update_loopback(void)
 {
     byte reqKey[WOLFSPDM_AEAD_KEY_SIZE];
+    byte reqIv[WOLFSPDM_AEAD_IV_SIZE];
     byte rspKey[WOLFSPDM_AEAD_KEY_SIZE];
     word64 reqSeq;
     TEST_CTX_SETUP();
@@ -5973,10 +5974,14 @@ static int test_key_update_loopback(void)
 #endif
 
     XMEMCPY(reqKey, ctx->reqDataKey, sizeof(reqKey));
+    XMEMCPY(reqIv, ctx->reqDataIv, sizeof(reqIv));
     XMEMCPY(rspKey, ctx->rspDataKey, sizeof(rspKey));
     ASSERT_SUCCESS(wolfSPDM_KeyUpdate(ctx, 0));
     ASSERT_NE(memcmp(reqKey, ctx->reqDataKey, sizeof(reqKey)), 0,
         "UpdateKey should rotate the request key");
+    ASSERT_NE(XMEMCMP(reqIv, ctx->reqDataIv, sizeof(reqIv)), 0,
+        "UpdateKey should install the new request IV");
+    ASSERT_EQ(ctx->reqSeqNum, 1, "VerifyNewKey consumes the first sequence");
     ASSERT_EQ(memcmp(rspKey, ctx->rspDataKey, sizeof(rspKey)), 0,
         "UpdateKey should keep the response key");
 
