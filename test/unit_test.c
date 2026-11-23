@@ -2483,6 +2483,8 @@ static int test_parse_psk_exchange_rsp_hmac_check(void)
     ASSERT_EQ(rc, WOLFSPDM_E_BAD_HMAC,
         "flipped PSK rspVerifyData byte must return BAD_HMAC");
     ASSERT_EQ(ctx->sessionId, 0, "no session ID from an unverified reply");
+    TEST_ASSERT(test_handshake_secrets_cleared(ctx),
+        "Rejected PSK exchange must retire handshake material");
 
     TEST_CTX_FREE();
     TEST_PASS();
@@ -3952,6 +3954,8 @@ static int test_responder_psk_roundtrip(void)
     rc = wolfSPDM_Connect(&req);
     TEST_ASSERT(rc == WOLFSPDM_SUCCESS, "PSK Connect failed");
     ASSERT_EQ(wolfSPDM_IsConnected(&req), 1, "Requester not connected");
+    TEST_ASSERT(test_handshake_secrets_cleared(&req),
+        "Established PSK session must retire handshake material");
 
     /* Tunnel a fake TPM2_Startup command via the VENDOR_DEFINED "TPM2_CMD"
      * vendor message - same wrapping the real Nuvoton/Nations requester uses. */

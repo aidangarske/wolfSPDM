@@ -136,6 +136,7 @@ int wolfSPDM_ParsePskExchangeRsp(WOLFSPDM_CTX* ctx, const byte* buf,
     byte th1Hash[WOLFSPDM_HASH_SIZE];
     byte expectedHmac[WOLFSPDM_HASH_SIZE];
     const byte* rspVerifyData;
+    int usedPsk = 0;
     int rc;
 
     /* Minimum: header(4) + RspSessionID(2) + Reserved(1) + RspContextLen(2) +
@@ -168,6 +169,7 @@ int wolfSPDM_ParsePskExchangeRsp(WOLFSPDM_CTX* ctx, const byte* buf,
     }
     if (rc == WOLFSPDM_SUCCESS) {
         XMEMCPY(ctx->th1, th1Hash, WOLFSPDM_HASH_SIZE);
+        usedPsk = (ctx->pskSz != 0);
         rc = wolfSPDM_DeriveHandshakeKeysPsk(ctx, th1Hash);
     }
 
@@ -197,6 +199,10 @@ int wolfSPDM_ParsePskExchangeRsp(WOLFSPDM_CTX* ctx, const byte* buf,
         ctx->sessionId = (word32)ctx->reqSessionId |
                          ((word32)ctx->rspSessionId << 16);
         ctx->state = WOLFSPDM_STATE_KEY_EX;
+    }
+    else if (usedPsk) {
+        wolfSPDM_ResetSession(ctx);
+        ctx->state = WOLFSPDM_STATE_ERROR;
     }
 
     wc_ForceZero(expectedHmac, sizeof(expectedHmac));
@@ -298,13 +304,15 @@ int wolfSPDM_DeriveHandshakeKeysPsk(WOLFSPDM_CTX* ctx, const byte* th1Hash)
     /* HandshakeSecret = HKDF-Extract(0xFF-salt, PSK) */
     rc = wc_HKDF_Extract(WC_SHA384, salt, sizeof(salt),
         ctx->psk, ctx->pskSz, ctx->handshakeSecret);
-    if (rc != 0) {
-        wc_ForceZero(ctx->psk, sizeof(ctx->psk));
-        ctx->pskSz = 0;
-        return WOLFSPDM_E_CRYPTO_FAIL;
+    if (rc == 0) {
+        rc = wolfSPDM_DeriveFromHandshakeSecret(ctx, th1Hash);
     }
-
-    rc = wolfSPDM_DeriveFromHandshakeSecret(ctx, th1Hash);
+    else {
+        rc = WOLFSPDM_E_CRYPTO_FAIL;
+    }
+    if (rc != WOLFSPDM_SUCCESS) {
+        wc_ForceZero(ctx->handshakeSecret, sizeof(ctx->handshakeSecret));
+    }
 
     /* Zero PSK immediately after key derivation */
     wc_ForceZero(ctx->psk, sizeof(ctx->psk));
