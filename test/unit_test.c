@@ -1024,6 +1024,81 @@ static int tcg_get_pub_key_io_cb(WOLFSPDM_CTX* ctx, const byte* txBuf,
     return 0;
 }
 
+typedef struct TEST_FIPS_IO {
+    word32 sizeAdjust;
+    word16 indicator;
+} TEST_FIPS_IO;
+
+static int test_fips_io_cb(WOLFSPDM_CTX* ctx, const byte* txBuf,
+    word32 txSz, byte* rxBuf, word32* rxSz, void* userCtx)
+{
+    const TEST_FIPS_IO* io = (const TEST_FIPS_IO*)userCtx;
+    static const byte versionRsp[] = {
+        SPDM_VERSION_10, SPDM_VERSION, 0x00, 0x00, 0x00, 0x01,
+        0x00, SPDM_VERSION_13
+    };
+    word32 totalSz = WOLFSPDM_TCG_HEADER_SIZE + (word32)sizeof(versionRsp);
+
+    (void)txBuf;
+    (void)txSz;
+    if (*rxSz < totalSz) {
+        return -1;
+    }
+    wolfSPDM_WriteTcgHeader(rxBuf, WOLFSPDM_TCG_TAG_CLEAR,
+        totalSz + io->sizeAdjust, ctx->connectionHandle, io->indicator);
+    XMEMCPY(rxBuf + WOLFSPDM_TCG_HEADER_SIZE, versionRsp, sizeof(versionRsp));
+    *rxSz = totalSz;
+    return 0;
+}
+
+/* The cached FIPS indicator follows the last well-framed response */
+static int test_tcg_fips_indicator_tracks_response(void)
+{
+    byte getVersion[4] = { SPDM_VERSION_10, SPDM_GET_VERSION, 0, 0 };
+    byte rx[64];
+    word32 rxSz;
+    static TEST_FIPS_IO io;
+    TEST_CTX_SETUP();
+
+    printf("test_tcg_fips_indicator_tracks_response...\n");
+    XMEMSET(&io, 0, sizeof(io));
+    ASSERT_SUCCESS(wolfSPDM_SetMode(ctx, WOLFSPDM_MODE_TCG));
+    ASSERT_SUCCESS(wolfSPDM_SetIO(ctx, test_fips_io_cb, &io));
+
+    io.indicator = WOLFSPDM_FIPS_APPROVED;
+    rxSz = sizeof(rx);
+    ASSERT_SUCCESS(wolfSPDM_SendReceive(ctx, getVersion, sizeof(getVersion),
+        rx, &rxSz));
+    ASSERT_EQ(wolfSPDM_GetFipsIndicator(ctx), WOLFSPDM_FIPS_APPROVED,
+        "Approved response");
+
+    io.indicator = WOLFSPDM_FIPS_NON_FIPS;
+    rxSz = sizeof(rx);
+    ASSERT_SUCCESS(wolfSPDM_SendReceive(ctx, getVersion, sizeof(getVersion),
+        rx, &rxSz));
+    ASSERT_EQ(wolfSPDM_GetFipsIndicator(ctx), WOLFSPDM_FIPS_NON_FIPS,
+        "Zero replaces an earlier approval");
+
+    io.indicator = WOLFSPDM_FIPS_APPROVED;
+    io.sizeAdjust = 1;
+    rxSz = sizeof(rx);
+    TEST_ASSERT(wolfSPDM_SendReceive(ctx, getVersion, sizeof(getVersion),
+        rx, &rxSz) != WOLFSPDM_SUCCESS, "Oversized TCG length");
+    ASSERT_EQ(wolfSPDM_GetFipsIndicator(ctx), WOLFSPDM_FIPS_NON_FIPS,
+        "Malformed framing sets no approval");
+
+    io.indicator = 0x0003;
+    io.sizeAdjust = 0;
+    rxSz = sizeof(rx);
+    ASSERT_SUCCESS(wolfSPDM_SendReceive(ctx, getVersion, sizeof(getVersion),
+        rx, &rxSz));
+    ASSERT_EQ(wolfSPDM_GetFipsIndicator(ctx), WOLFSPDM_FIPS_NON_FIPS,
+        "Reserved bits are not an approval");
+
+    TEST_CTX_FREE();
+    TEST_PASS();
+}
+
 static int test_tcg_get_pub_key_preserves_pin(void)
 {
     byte trustedKey[WOLFSPDM_ECC_POINT_SIZE];
@@ -7525,6 +7600,7 @@ int main(void)
     test_invalid_curve_point();
     test_extract_ecc_point();
 #ifdef WOLFSPDM_TCG
+    test_tcg_fips_indicator_tracks_response();
     test_tcg_get_pub_key_preserves_pin();
     test_tcg_get_pub_key_discovery_is_not_trusted();
     test_tcg_get_pub_key_negotiates_version();

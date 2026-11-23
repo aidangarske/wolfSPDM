@@ -240,6 +240,7 @@ WOLFSPDM_API byte wolfSPDM_GetVersion_Negotiated(WOLFSPDM_CTX* ctx);
 WOLFSPDM_API byte wolfSPDM_GetLastPeerError(WOLFSPDM_CTX* ctx);
 #ifdef WOLFSPDM_TCG
 WOLFSPDM_API word32 wolfSPDM_GetConnectionHandle(WOLFSPDM_CTX* ctx);
+/* From the last response's TCG header, which no SPDM key authenticates */
 WOLFSPDM_API word16 wolfSPDM_GetFipsIndicator(WOLFSPDM_CTX* ctx);
 #endif
 

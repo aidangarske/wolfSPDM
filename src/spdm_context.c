@@ -570,12 +570,6 @@ static int wolfSPDM_TcgSendReceive(WOLFSPDM_CTX* ctx,
         }
     }
     if (rc == WOLFSPDM_SUCCESS) {
-        /* Capture FIPS indicator from response if non-zero */
-        tag = SPDM_Get16BE(tcgRx + 10);
-        if (tag != 0) {
-            ctx->fipsIndicator = tag;
-        }
-
         /* Extract payload (everything after 16-byte TCG header) */
         msgSize = SPDM_Get32BE(tcgRx + 2);
         if (msgSize < WOLFSPDM_TCG_HEADER_SIZE || msgSize > tcgRxSz) {
@@ -594,6 +588,12 @@ static int wolfSPDM_TcgSendReceive(WOLFSPDM_CTX* ctx,
             XMEMCPY(rxBuf, tcgRx + WOLFSPDM_TCG_HEADER_SIZE, payloadSz);
             *rxSz = payloadSz;
         }
+    }
+    /* Each exchange replaces the indicator; only an exact APPROVED counts */
+    ctx->fipsIndicator = WOLFSPDM_FIPS_NON_FIPS;
+    if (rc == WOLFSPDM_SUCCESS &&
+            SPDM_Get16BE(tcgRx + 10) == WOLFSPDM_FIPS_APPROVED) {
+        ctx->fipsIndicator = WOLFSPDM_FIPS_APPROVED;
     }
 
     /* Clear vendor messages carry PSK material */
