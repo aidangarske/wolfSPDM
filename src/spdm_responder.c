@@ -1275,6 +1275,9 @@ int wolfSPDM_RespHandleMessage(WOLFSPDM_RESP_CTX* ctx,
     word32 spdmOutSz;
     word32 totalSz;
     int rc;
+    #ifdef WOLFSPDM_NATIONS
+    int pskWasProvisioned;
+    #endif
 #endif
 
     if (ctx == NULL || inBuf == NULL || outBuf == NULL || outSz == NULL) {
@@ -1313,6 +1316,9 @@ int wolfSPDM_RespHandleMessage(WOLFSPDM_RESP_CTX* ctx,
         return WOLFSPDM_E_BUFFER_SMALL;
     }
     spdmOutSz = *outSz - WOLFSPDM_TCG_HEADER_SIZE;
+    #ifdef WOLFSPDM_NATIONS
+    pskWasProvisioned = ctx->flags.pskProvisioned;
+    #endif
 
     if (tag == WOLFSPDM_TCG_TAG_CLEAR) {
         rc = RespDispatchClear(ctx,
@@ -1324,6 +1330,17 @@ int wolfSPDM_RespHandleMessage(WOLFSPDM_RESP_CTX* ctx,
             inBuf + WOLFSPDM_TCG_HEADER_SIZE, payloadSz,
             outBuf + WOLFSPDM_TCG_HEADER_SIZE, &spdmOutSz);
     }
+
+    #ifdef WOLFSPDM_NATIONS
+    /* Keep the traffic keys until any secured clear reply has been sealed. */
+    if (pskWasProvisioned && !ctx->flags.pskProvisioned &&
+            ((ctx->ctx.state == WOLFSPDM_STATE_KEY_EX &&
+              !ctx->flags.pendingAsym) ||
+             (ctx->ctx.state == WOLFSPDM_STATE_CONNECTED &&
+              !ctx->flags.sessionAsym))) {
+        wolfSPDM_RespReset(ctx);
+    }
+    #endif
 
     if (rc != WOLFSPDM_SUCCESS) {
         return rc;

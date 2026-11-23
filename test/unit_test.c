@@ -4088,6 +4088,47 @@ static int test_tcg_mode_connect_roundtrip(void)
 }
 
 #ifdef WOLFSPDM_PSK
+#ifdef WOLFSPDM_NATIONS
+static int test_responder_psk_clear_retires_session(void)
+{
+    WOLFSPDM_CTX req;
+    byte rctxBuf[WOLFSPDM_RESP_CTX_STATIC_SIZE];
+    WOLFSPDM_RESP_CTX* rctx = (WOLFSPDM_RESP_CTX*)rctxBuf;
+    byte provision[WOLFSPDM_PSK_MAX_SIZE + WOLFSPDM_HASH_SIZE];
+    byte clearAuth[32];
+    WOLFSPDM_NATIONS_STATUS status;
+
+    printf("test_responder_psk_clear_retires_session...\n");
+    ASSERT_SUCCESS(wolfSPDM_Init(&req));
+    ASSERT_SUCCESS(wolfSPDM_RespInit(rctx));
+    ASSERT_SUCCESS(wolfSPDM_SetMode(&req, WOLFSPDM_MODE_NATIONS_PSK));
+    ASSERT_SUCCESS(wolfSPDM_RespSetMode(rctx, 0, 1));
+    ASSERT_SUCCESS(wolfSPDM_SetIO(&req, requester_to_responder_iocb, rctx));
+    ASSERT_SUCCESS(wolfSPDM_GetRandom(&req, provision, WOLFSPDM_PSK_MAX_SIZE));
+    ASSERT_SUCCESS(wolfSPDM_GetRandom(&req, clearAuth, sizeof(clearAuth)));
+    ASSERT_SUCCESS(wolfSPDM_Sha384Hash(provision + WOLFSPDM_PSK_MAX_SIZE,
+        clearAuth, sizeof(clearAuth), NULL, 0, NULL, 0));
+    ASSERT_SUCCESS(wolfSPDM_Nations_PskSet(&req, provision, sizeof(provision)));
+    ASSERT_SUCCESS(wolfSPDM_SetPSK(&req, provision, WOLFSPDM_PSK_MAX_SIZE,
+        NULL, 0));
+    ASSERT_SUCCESS(wolfSPDM_ConnectPsk(&req));
+    ASSERT_EQ(wolfSPDM_RespIsSessionActive(rctx), 1, "PSK session active");
+
+    ASSERT_SUCCESS(wolfSPDM_Nations_PskClear(&req, clearAuth,
+        sizeof(clearAuth)));
+    ASSERT_EQ(wolfSPDM_RespIsSessionActive(rctx), 0,
+        "Clearing the PSK ends its session");
+    ASSERT_SUCCESS(wolfSPDM_Nations_GetStatus(&req, &status));
+    ASSERT_EQ(status.pskProvisioned, 0, "PSK was cleared");
+
+    wc_ForceZero(provision, sizeof(provision));
+    wc_ForceZero(clearAuth, sizeof(clearAuth));
+    wolfSPDM_RespFree(rctx);
+    wolfSPDM_Free(&req);
+    TEST_PASS();
+}
+#endif /* WOLFSPDM_NATIONS */
+
 static int test_psk_finish_clear_error_io(WOLFSPDM_CTX* ctx, const byte* txBuf,
     word32 txSz, byte* rxBuf, word32* rxSz, void* userCtx)
 {
@@ -6891,6 +6932,9 @@ int main(void)
     test_tcg_mode_connect_roundtrip();
 #endif
 #if defined(WOLFSPDM_PSK) && defined(WOLFSPDM_TCG)
+#ifdef WOLFSPDM_NATIONS
+    test_responder_psk_clear_retires_session();
+#endif
     test_responder_psk_roundtrip();
 #endif
 #endif
