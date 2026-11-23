@@ -3558,6 +3558,31 @@ static int test_responder_secured_requires_session(void)
     TEST_PASS();
 }
 
+static int test_responder_get_version_reserved(void)
+{
+    byte rctxBuf[WOLFSPDM_RESP_CTX_STATIC_SIZE];
+    WOLFSPDM_RESP_CTX* rctx = (WOLFSPDM_RESP_CTX*)rctxBuf;
+    byte request[] = { SPDM_VERSION_10, SPDM_GET_VERSION, 0x42, 0xA5 };
+    byte response[64];
+    byte frame[WOLFSPDM_TCG_HEADER_SIZE + sizeof(request)];
+    word32 responseSz = sizeof(response);
+
+    printf("test_responder_get_version_reserved...\n");
+    ASSERT_SUCCESS(wolfSPDM_RespInit(rctx));
+    ASSERT_SUCCESS(wolfSPDM_RespSetMode(rctx, 1, 0));
+    wolfSPDM_WriteTcgHeader(frame, WOLFSPDM_TCG_TAG_CLEAR,
+        sizeof(frame), 0, 0);
+    XMEMCPY(frame + WOLFSPDM_TCG_HEADER_SIZE, request, sizeof(request));
+    ASSERT_SUCCESS(wolfSPDM_RespHandleMessage(rctx, frame, sizeof(frame),
+        response, &responseSz));
+    TEST_ASSERT(responseSz >= WOLFSPDM_TCG_HEADER_SIZE + 4,
+        "VERSION reply includes its header");
+    ASSERT_EQ(response[WOLFSPDM_TCG_HEADER_SIZE + 1], SPDM_VERSION,
+        "GET_VERSION ignores reserved fields");
+    wolfSPDM_RespFree(rctx);
+    TEST_PASS();
+}
+
 #ifdef WOLFSPDM_NATIONS
 /* Send one vendor-defined command in a TCG clear frame. */
 static int resp_send_clear_vd(WOLFSPDM_RESP_CTX* rctx, const char* vdCode,
@@ -3867,7 +3892,22 @@ static int test_responder_identity_roundtrip(int fineGrained)
     TEST_ASSERT(rc == WOLFSPDM_SUCCESS, "TPM2_CMD passthrough failed");
     ASSERT_EQ(g_tpmCbInvocations, 1, "TPM stub must have run once");
 
-    ASSERT_SUCCESS(wolfSPDM_Disconnect(&req));
+    if (fineGrained) {
+        byte end[] = { req.spdmVersion, SPDM_END_SESSION, 0x80, 0x42 };
+        byte ack[4];
+        word32 ackSz = sizeof(ack);
+
+        ASSERT_SUCCESS(wolfSPDM_SecuredExchange(&req, end, sizeof(end),
+            ack, &ackSz));
+        ASSERT_EQ(ackSz, sizeof(ack), "END_SESSION_ACK header size");
+        ASSERT_EQ(ack[1], SPDM_END_SESSION_ACK,
+            "END_SESSION ignores reserved fields");
+        ASSERT_EQ(wolfSPDM_RespIsSessionActive(rctx), 0,
+            "The acknowledged session is closed");
+    }
+    else {
+        ASSERT_SUCCESS(wolfSPDM_Disconnect(&req));
+    }
 
     wc_ForceZero(idPriv, sizeof(idPriv));
     wolfSPDM_RespFree(rctx);
@@ -6701,6 +6741,7 @@ int main(void)
 #ifdef WOLFSPDM_TCG
     test_responder_no_clear_tpm2_cmd();
     test_responder_secured_requires_session();
+    test_responder_get_version_reserved();
 #ifdef WOLFSPDM_NATIONS
     test_responder_psk_replace_guard();
     test_responder_configured_psk();

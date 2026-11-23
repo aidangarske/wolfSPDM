@@ -370,15 +370,11 @@ static int RespDecrypt(WOLFSPDM_CTX* ctx,
 #define WOLFSPDM_RESP_VERSION_COUNT \
     (WOLFSPDM_RESP_MAX_VERSION - WOLFSPDM_MIN_SPDM_VERSION + 1)
 
-static int RespBuildVersion(WOLFSPDM_CTX* ctx,
-    const byte* req, word32 reqSz,
-    byte* out, word32* outSz)
+static int RespBuildVersion(WOLFSPDM_CTX* ctx, byte* out, word32* outSz)
 {
     word32 off;
     byte ver;
 
-    (void)req;
-    (void)reqSz;
     if (*outSz < 6 + 2 * WOLFSPDM_RESP_VERSION_COUNT) {
         return WOLFSPDM_E_BUFFER_SMALL;
     }
@@ -598,7 +594,12 @@ static int RespDispatchClear(WOLFSPDM_RESP_CTX* rctx,
     XMEMSET(vdCode, 0, sizeof(vdCode));
 
     if (code == SPDM_GET_VERSION) {
-        wolfSPDM_TranscriptReset(ctx);
+        if (inSz != 4) {
+            return WOLFSPDM_E_FRAMING;
+        }
+        if (in[0] != SPDM_VERSION_10) {
+            return WOLFSPDM_E_VERSION_MISMATCH;
+        }
         wolfSPDM_RespReset(rctx);
     }
     else {
@@ -641,7 +642,7 @@ static int RespDispatchClear(WOLFSPDM_RESP_CTX* rctx,
 
     switch (code) {
         case SPDM_GET_VERSION:
-            rc = RespBuildVersion(ctx, in, inSz, out, outSz);
+            rc = RespBuildVersion(ctx, out, outSz);
             break;
         case WOLFSPDM_GET_CAPABILITIES:
             rc = RespBuildCapabilities(ctx, rctx->flags.usePsk,
@@ -928,8 +929,12 @@ static int RespHandlePskFinish(WOLFSPDM_RESP_CTX* rctx,
 static int RespBuildEndSessionAck(WOLFSPDM_CTX* ctx,
     const byte* in, word32 inSz, byte* out, word32* outSz)
 {
-    (void)in;
-    (void)inSz;
+    if (inSz != 4) {
+        return WOLFSPDM_E_FRAMING;
+    }
+    if (in[0] != ctx->spdmVersion) {
+        return WOLFSPDM_E_VERSION_MISMATCH;
+    }
     if (*outSz < 4) {
         return WOLFSPDM_E_BUFFER_SMALL;
     }
