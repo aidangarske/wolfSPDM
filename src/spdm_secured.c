@@ -167,6 +167,7 @@ static int wolfSPDM_EncryptRecord(WOLFSPDM_CTX* ctx, int appMsg,
         rc = wc_AesGcmEncrypt(&aes, &enc[hdrSz], plainBuf, plainBufSz,
             iv, WOLFSPDM_AEAD_IV_SIZE, tag, WOLFSPDM_AEAD_TAG_SIZE, aad, aadSz);
     }
+    wc_ForceZero(iv, sizeof(iv));
     if (aesInit) {
         wc_AesFree(&aes);
     }
@@ -320,6 +321,7 @@ static int wolfSPDM_DecryptRecord(WOLFSPDM_CTX* ctx, int appMsg,
             ctx->rspSeqNum++;
         }
     }
+    wc_ForceZero(iv, sizeof(iv));
     if (aesInit) {
         wc_AesFree(&aes);
     }
