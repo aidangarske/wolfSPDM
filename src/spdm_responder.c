@@ -360,7 +360,7 @@ static int RespDecrypt(WOLFSPDM_CTX* ctx,
 {
     int rc;
     RespSwapDataDir(ctx);
-    rc = wolfSPDM_DecryptInternal(ctx, enc, encSz, plain, plainSz);
+    rc = wolfSPDM_DecryptRequest(ctx, enc, encSz, plain, plainSz);
     RespSwapDataDir(ctx);
     return rc;
 }

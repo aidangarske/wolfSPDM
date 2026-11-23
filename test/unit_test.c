@@ -6541,6 +6541,7 @@ static int test_derive_updated_keys(void)
 static WOLFSPDM_CTX g_peer;
 static int g_peerRejects;
 static int g_peerGarble;     /* corrupt the next secured response */
+static byte g_peerRejectCode; /* ErrorCode when rejecting, else Busy */
 
 #ifndef WOLFSPDM_NO_KEY_UPDATE
 static void test_swap(byte* a, byte* b, word32 sz)
@@ -6726,7 +6727,8 @@ static int test_peer_dispatch(WOLFSPDM_CTX* ctx, WOLFSPDM_CTX* p,
     rsp[3] = 0;
     *rspSz = 4;
     if (g_peerRejects) {
-        rsp[2] = SPDM_ERROR_BUSY;
+        rsp[2] = (g_peerRejectCode != 0) ? g_peerRejectCode :
+            SPDM_ERROR_BUSY;
     }
     else if (req[1] == SPDM_END_SESSION) {
         rsp[1] = SPDM_END_SESSION_ACK;
@@ -7120,6 +7122,82 @@ static int test_disconnect_ignores_reserved_parameters(void)
 
     wolfSPDM_Free(&g_peer);
     TEST_CTX_FREE();
+    TEST_PASS();
+}
+
+#ifndef WOLFSPDM_NO_APP_DATA
+static int test_unsolicited_decrypt_error_io(WOLFSPDM_CTX* ctx,
+    const byte* txBuf, word32 txSz, byte* rxBuf, word32* rxSz, void* userCtx)
+{
+    static const byte err[4] = {
+        SPDM_VERSION_12, SPDM_ERROR, SPDM_ERROR_DECRYPT_ERROR, 0
+    };
+
+    (void)ctx;
+    (void)txBuf;
+    (void)txSz;
+    (void)userCtx;
+    return wolfSPDM_EncryptInternal(&g_peer, err, sizeof(err), rxBuf, rxSz);
+}
+#endif
+
+static int test_session_retired(const WOLFSPDM_CTX* ctx)
+{
+    static const byte zero[WOLFSPDM_AEAD_KEY_SIZE];
+
+    return ctx->state == WOLFSPDM_STATE_ERROR && ctx->sessionId == 0 &&
+        XMEMCMP(ctx->reqDataKey, zero, sizeof(zero)) == 0 &&
+        XMEMCMP(ctx->rspDataKey, zero, sizeof(zero)) == 0;
+}
+
+/* An authenticated DecryptError ends the session and destroys its keys */
+static int test_peer_decrypt_error_ends_session(void)
+{
+    byte req[8] = { SPDM_VERSION_12, SPDM_VENDOR_DEFINED_REQUEST, 0, 0,
+        0, 0, 0, 0 };
+    byte rsp[64];
+    word32 rspSz;
+#ifndef WOLFSPDM_NO_APP_DATA
+    byte data[64];
+    word32 dataSz = sizeof(data);
+#endif
+    TEST_CTX_SETUP();
+
+    printf("test_peer_decrypt_error_ends_session...\n");
+    test_session_loopback(ctx);
+    g_peerRejects = 1;
+    rspSz = sizeof(rsp);
+    ASSERT_SUCCESS(wolfSPDM_SecuredExchange(ctx, req, sizeof(req), rsp,
+        &rspSz));
+    ASSERT_EQ(wolfSPDM_IsConnected(ctx), 1, "Busy keeps the session");
+
+    g_peerRejects = 1;
+    g_peerRejectCode = SPDM_ERROR_DECRYPT_ERROR;
+    rspSz = sizeof(rsp);
+    (void)wolfSPDM_SecuredExchange(ctx, req, sizeof(req), rsp, &rspSz);
+    g_peerRejects = 0;
+    g_peerRejectCode = 0;
+    ASSERT_EQ(wolfSPDM_IsConnected(ctx), 0, "DecryptError ends the session");
+    TEST_ASSERT(test_session_retired(ctx), "Session keys must be destroyed");
+    rspSz = sizeof(rsp);
+    ASSERT_EQ(wolfSPDM_SecuredExchange(ctx, req, sizeof(req), rsp, &rspSz),
+        WOLFSPDM_E_NOT_CONNECTED, "No exchange after DecryptError");
+    wolfSPDM_Free(&g_peer);
+    TEST_CTX_FREE();
+
+#ifndef WOLFSPDM_NO_APP_DATA
+    ASSERT_SUCCESS(wolfSPDM_Init(ctx));
+    test_session_loopback(ctx);
+    ASSERT_SUCCESS(wolfSPDM_SetIO(ctx, test_unsolicited_decrypt_error_io,
+        NULL));
+    ASSERT_EQ(wolfSPDM_ReceiveData(ctx, data, &dataSz), WOLFSPDM_E_PEER_ERROR,
+        "Unsolicited ERROR");
+    ASSERT_EQ(wolfSPDM_IsConnected(ctx), 0,
+        "Unsolicited DecryptError ends the session");
+    TEST_ASSERT(test_session_retired(ctx), "Session keys must be destroyed");
+    wolfSPDM_Free(&g_peer);
+    TEST_CTX_FREE();
+#endif
     TEST_PASS();
 }
 #endif /* loopback */
@@ -7811,6 +7889,7 @@ int main(void)
     !defined(WOLFSPDM_NO_MCTP)
     test_disconnect_reports_peer_error();
     test_disconnect_ignores_reserved_parameters();
+    test_peer_decrypt_error_ends_session();
 #endif
 #ifndef WOLFSPDM_NO_KEY_UPDATE
     test_key_update_msgs();

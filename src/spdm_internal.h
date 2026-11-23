@@ -589,6 +589,11 @@ WOLFSPDM_API int wolfSPDM_EncryptInternal(WOLFSPDM_CTX* ctx,
 WOLFSPDM_API int wolfSPDM_DecryptInternal(WOLFSPDM_CTX* ctx,
     const byte* enc, word32 encSz,
     byte* plain, word32* plainSz);
+#ifdef WOLFSPDM_RESPONDER
+WOLFSPDM_LOCAL int wolfSPDM_DecryptRequest(WOLFSPDM_CTX* ctx,
+    const byte* enc, word32 encSz,
+    byte* plain, word32* plainSz);
+#endif
 
 /* ----- Internal Utility Functions ----- */
 

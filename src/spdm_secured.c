@@ -384,12 +384,40 @@ static int wolfSPDM_DecryptRecord(WOLFSPDM_CTX* ctx, int appMsg,
     return ret;
 }
 
+/* DSP0274 section 11: an authenticated DecryptError ends the session */
+static void wolfSPDM_CheckSessionEnd(WOLFSPDM_CTX* ctx, const byte* msg,
+    word32 msgSz)
+{
+    int errorCode = 0;
+
+    if (wolfSPDM_CheckError(msg, msgSz, &errorCode) &&
+            errorCode == SPDM_ERROR_DECRYPT_ERROR) {
+        wolfSPDM_ResetSession(ctx);
+        ctx->state = WOLFSPDM_STATE_ERROR;
+    }
+}
+
 int wolfSPDM_DecryptInternal(WOLFSPDM_CTX* ctx,
+    const byte* enc, word32 encSz,
+    byte* plain, word32* plainSz)
+{
+    int rc = wolfSPDM_DecryptRecord(ctx, 0, enc, encSz, plain, plainSz);
+
+    if (rc == WOLFSPDM_SUCCESS) {
+        wolfSPDM_CheckSessionEnd(ctx, plain, *plainSz);
+    }
+    return rc;
+}
+
+#ifdef WOLFSPDM_RESPONDER
+/* The responder retires its sessions through its own reset */
+int wolfSPDM_DecryptRequest(WOLFSPDM_CTX* ctx,
     const byte* enc, word32 encSz,
     byte* plain, word32* plainSz)
 {
     return wolfSPDM_DecryptRecord(ctx, 0, enc, encSz, plain, plainSz);
 }
+#endif
 
 int wolfSPDM_SecuredXfer(WOLFSPDM_CTX* ctx,
     const byte* cmdPlain, word32 cmdSz,
@@ -537,6 +565,7 @@ int wolfSPDM_ReceiveData(WOLFSPDM_CTX* ctx, byte* data, word32* dataSz)
         if (*dataSz >= 4 && data[2] == SPDM_ERROR) {
             ctx->lastPeerErrorCode = data[3];
         }
+        wolfSPDM_CheckSessionEnd(ctx, data + 1, *dataSz - 1);
         rc = WOLFSPDM_E_PEER_ERROR;
     }
 
