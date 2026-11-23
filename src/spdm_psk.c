@@ -321,8 +321,8 @@ int wolfSPDM_DeriveHandshakeKeysPsk(WOLFSPDM_CTX* ctx, const byte* th1Hash)
 
 /* ----- Shared PSK Connection Flow ----- */
 
-/* GET_VERSION -> GET_CAPABILITIES -> NEGOTIATE_ALGORITHMS ->
- * PSK_EXCHANGE -> PSK_FINISH -> app key derivation */
+/* GET_VERSION -> PSK_EXCHANGE -> PSK_FINISH -> application key derivation.
+ * This PSK flow skips GET_CAPABILITIES and NEGOTIATE_ALGORITHMS. */
 int wolfSPDM_ConnectPsk(WOLFSPDM_CTX* ctx)
 {
     int rc;
