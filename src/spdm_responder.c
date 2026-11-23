@@ -1214,7 +1214,7 @@ static int RespDispatchSecuredInner(WOLFSPDM_RESP_CTX* rctx,
         case SPDM_END_SESSION:
             rc = RespBuildEndSessionAck(ctx, plain, plainSz,
                 respPlain, &respPlainSz);
-            sessionEnded = 1;
+            sessionEnded = (rc == WOLFSPDM_SUCCESS) ? 1 : 0;
             break;
         case SPDM_VENDOR_DEFINED_REQUEST:
             rc = RespHandleVendorDefined(rctx, plain, plainSz,
@@ -1244,7 +1244,7 @@ static int RespDispatchSecuredInner(WOLFSPDM_RESP_CTX* rctx,
         }
     }
 
-    if (sessionEnded && rc == WOLFSPDM_SUCCESS) {
+    if (sessionEnded) {
         wolfSPDM_RespReset(rctx);
     }
     return rc;

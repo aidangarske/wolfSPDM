@@ -4061,7 +4061,12 @@ static int test_tcg_mode_connect_roundtrip(void)
     ASSERT_EQ(req.reqSeqNum, 0, "New session must use a new request sequence");
     ASSERT_EQ(req.rspSeqNum, 0, "New session must use a new response sequence");
 
-    ASSERT_SUCCESS(wolfSPDM_Disconnect(&req));
+    ASSERT_SUCCESS(wolfSPDM_SetIO(&req, test_responder_reply_capacity_io,
+        rctx));
+    ASSERT_EQ(wolfSPDM_Disconnect(&req), WOLFSPDM_E_IO_FAIL,
+        "END_SESSION acknowledgment did not fit");
+    ASSERT_EQ(wolfSPDM_RespIsSessionActive(rctx), 0,
+        "Accepted END_SESSION is final even without an acknowledgment");
 
     ASSERT_SUCCESS(wolfSPDM_SetIO(&req, test_tcg_handshake_io_failure, rctx));
     ASSERT_SUCCESS(test_tcg_connect_releases_session(&req));
