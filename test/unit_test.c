@@ -1976,6 +1976,9 @@ static int test_disconnect_states(void)
     byte cmd[4] = { SPDM_VERSION_12, 0xE8, 0x00, 0x00 };
     byte rsp[16];
     byte err[4] = { SPDM_VERSION_12, SPDM_ERROR, SPDM_ERROR_BUSY, 0x00 };
+#ifndef WOLFSPDM_NO_MEAS
+    static const byte zeroRecord[WOLFSPDM_MAX_MEAS_RECORD];
+#endif
     byte zero[WOLFSPDM_AEAD_KEY_SIZE];
     word32 rspSz = sizeof(rsp);
     TEST_CTX_SETUP();
@@ -2001,6 +2004,8 @@ static int test_disconnect_states(void)
 #endif
 #ifndef WOLFSPDM_NO_MEAS
     ctx->measBlockCount = 2;
+    ctx->measRecordLen = sizeof(ctx->measRecord);
+    XMEMSET(ctx->measRecord, 0x33, sizeof(ctx->measRecord));
 #endif
     ASSERT_EQ(wolfSPDM_SecuredExchange(ctx, cmd, sizeof(cmd), rsp, &rspSz),
         WOLFSPDM_E_NOT_CONNECTED, "secured message after a failure");
@@ -2022,6 +2027,8 @@ static int test_disconnect_states(void)
 #ifndef WOLFSPDM_NO_MEAS
     ASSERT_EQ(wolfSPDM_GetMeasurementCount(ctx), 0,
         "previous session's measurements dropped");
+    ASSERT_EQ(XMEMCMP(ctx->measRecord, zeroRecord, sizeof(zeroRecord)), 0,
+        "Previous session's measurement record must be wiped");
 #endif
 
     /* A retry starts from sequence number 0 even if it fails early */

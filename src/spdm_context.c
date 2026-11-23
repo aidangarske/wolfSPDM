@@ -451,6 +451,7 @@ void wolfSPDM_ResetSession(WOLFSPDM_CTX* ctx)
 #ifndef WOLFSPDM_NO_MEAS
     ctx->measBlockCount = 0;
     ctx->measRecordLen = 0;
+    wc_ForceZero(ctx->measRecord, sizeof(ctx->measRecord));
 #endif
 #if !defined(WOLFSPDM_NO_MEAS) || !defined(WOLFSPDM_NO_CHALLENGE)
     wolfSPDM_AttestFree(ctx);
