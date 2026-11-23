@@ -6542,6 +6542,7 @@ static WOLFSPDM_CTX g_peer;
 static int g_peerRejects;
 static int g_peerGarble;     /* corrupt the next secured response */
 static byte g_peerRejectCode; /* ErrorCode when rejecting, else Busy */
+static int g_peerClearReply; /* answer the next secured request in clear */
 
 #ifndef WOLFSPDM_NO_KEY_UPDATE
 static void test_swap(byte* a, byte* b, word32 sz)
@@ -7018,7 +7019,8 @@ static int test_peer_io_cb(WOLFSPDM_CTX* ctx, const byte* txBuf, word32 txSz,
     if (rc != 0) {
         return -1;
     }
-    if (clear) {
+    if (clear || g_peerClearReply) {
+        g_peerClearReply = 0;
         if (rspSz > *rxSz) {
             return -1;
         }
@@ -7198,6 +7200,41 @@ static int test_peer_decrypt_error_ends_session(void)
     wolfSPDM_Free(&g_peer);
     TEST_CTX_FREE();
 #endif
+    TEST_PASS();
+}
+
+/* A cleartext ERROR to a secured request is the responder's rejection */
+static int test_secured_clear_error_reply(void)
+{
+    byte req[8] = { SPDM_VERSION_12, SPDM_VENDOR_DEFINED_REQUEST, 0, 0,
+        0, 0, 0, 0 };
+    byte rsp[64];
+    word32 rspSz = sizeof(rsp);
+    int rc;
+    TEST_CTX_SETUP();
+
+    printf("test_secured_clear_error_reply...\n");
+    test_session_loopback(ctx);
+    g_peerRejects = 1;
+    g_peerClearReply = 1;
+    rc = wolfSPDM_SecuredExchange(ctx, req, sizeof(req), rsp, &rspSz);
+    ASSERT_EQ(rc, WOLFSPDM_E_PEER_ERROR, "Secured exchange rejection");
+    ASSERT_EQ(wolfSPDM_GetLastPeerError(ctx), SPDM_ERROR_BUSY,
+        "Secured exchange rejection code");
+
+    ctx->lastPeerErrorCode = 0;
+    ctx->state = WOLFSPDM_STATE_KEY_EX;
+    g_peerRejects = 1;
+    g_peerClearReply = 1;
+    rc = wolfSPDM_Finish(ctx);
+    g_peerRejects = 0;
+    g_peerClearReply = 0;
+    ASSERT_EQ(rc, WOLFSPDM_E_PEER_ERROR, "FINISH rejection");
+    ASSERT_EQ(wolfSPDM_GetLastPeerError(ctx), SPDM_ERROR_BUSY,
+        "FINISH rejection code");
+
+    wolfSPDM_Free(&g_peer);
+    TEST_CTX_FREE();
     TEST_PASS();
 }
 #endif /* loopback */
@@ -7890,6 +7927,7 @@ int main(void)
     test_disconnect_reports_peer_error();
     test_disconnect_ignores_reserved_parameters();
     test_peer_decrypt_error_ends_session();
+    test_secured_clear_error_reply();
 #endif
 #ifndef WOLFSPDM_NO_KEY_UPDATE
     test_key_update_msgs();

@@ -206,13 +206,7 @@ static int wolfSPDM_FinishXfer(WOLFSPDM_CTX* ctx, const byte* finishBuf,
         rc = wolfSPDM_SendReceive(ctx, encBuf, encSz, rxBuf, &rxSz);
     }
 
-    /* Check for unencrypted SPDM error response */
-    if (rc == WOLFSPDM_SUCCESS &&
-        rxSz >= 2 && rxBuf[0] >= 0x10 && rxBuf[0] <= 0x1F) {
-        if (rxSz >= 4 && rxBuf[1] == SPDM_ERROR) {
-            ctx->lastPeerErrorCode = rxBuf[2];
-            wolfSPDM_DebugPrint(ctx, "FINISH: SPDM ERROR 0x%02x\n", rxBuf[2]);
-        }
+    if (rc == WOLFSPDM_SUCCESS && wolfSPDM_ClearPeerError(ctx, rxBuf, rxSz)) {
         rc = WOLFSPDM_E_PEER_ERROR;
     }
 

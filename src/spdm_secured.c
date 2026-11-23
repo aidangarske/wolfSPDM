@@ -419,6 +419,22 @@ int wolfSPDM_DecryptRequest(WOLFSPDM_CTX* ctx,
 }
 #endif
 
+/* Returns 1 for a cleartext SPDM reply, which only an ERROR should be.
+ * A record starts with our session ID, whose requester half keeps its first
+ * byte out of 0x10-0x1F (wolfSPDM_SetRequesterSessionId). */
+int wolfSPDM_ClearPeerError(WOLFSPDM_CTX* ctx, const byte* rx, word32 rxSz)
+{
+    if (rxSz < 2 || rx[0] < 0x10 || rx[0] > 0x1F ||
+            (rxSz >= 4 && SPDM_Get32LE(rx) == ctx->sessionId)) {
+        return 0;
+    }
+    if (rxSz >= 4 && rx[1] == SPDM_ERROR) {
+        ctx->lastPeerErrorCode = rx[2];
+        wolfSPDM_DebugPrint(ctx, "SPDM ERROR 0x%02x in the clear\n", rx[2]);
+    }
+    return 1;
+}
+
 int wolfSPDM_SecuredXfer(WOLFSPDM_CTX* ctx,
     const byte* cmdPlain, word32 cmdSz,
     byte* rspPlain, word32* rspSz)
@@ -432,6 +448,9 @@ int wolfSPDM_SecuredXfer(WOLFSPDM_CTX* ctx,
     rc = wolfSPDM_EncryptInternal(ctx, cmdPlain, cmdSz, encBuf, &encSz);
     if (rc == WOLFSPDM_SUCCESS) {
         rc = wolfSPDM_SendReceive(ctx, encBuf, encSz, rxBuf, &rxSz);
+    }
+    if (rc == WOLFSPDM_SUCCESS && wolfSPDM_ClearPeerError(ctx, rxBuf, rxSz)) {
+        rc = WOLFSPDM_E_PEER_ERROR;
     }
     if (rc == WOLFSPDM_SUCCESS) {
         rc = wolfSPDM_DecryptInternal(ctx, rxBuf, rxSz, rspPlain, rspSz);
