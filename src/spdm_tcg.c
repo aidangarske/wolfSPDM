@@ -729,8 +729,6 @@ int wolfSPDM_ConnectTCG(WOLFSPDM_CTX* ctx)
             ctx->reqPubKeyTPMTLen);
         if (rc != WOLFSPDM_SUCCESS) {
             wolfSPDM_DebugPrint(ctx, "GIVE_PUB failed: %d\n", rc);
-            ctx->state = WOLFSPDM_STATE_ERROR;
-            return rc;
         }
     } else {
         wolfSPDM_DebugPrint(ctx,
@@ -738,8 +736,15 @@ int wolfSPDM_ConnectTCG(WOLFSPDM_CTX* ctx)
     }
 
     /* Step 7: FINISH */
-    SPDM_CONNECT_STEP(ctx, "TCG Step 7: FINISH\n",
-        wolfSPDM_Finish(ctx));
+    if (rc == WOLFSPDM_SUCCESS) {
+        wolfSPDM_DebugPrint(ctx, "TCG Step 7: FINISH\n");
+        rc = wolfSPDM_Finish(ctx);
+    }
+    if (rc != WOLFSPDM_SUCCESS) {
+        wolfSPDM_ResetSession(ctx);
+        ctx->state = WOLFSPDM_STATE_ERROR;
+        return rc;
+    }
 
     wolfSPDM_DebugPrint(ctx, "TCG: SPDM Session Established! "
         "SessionID=0x%08x\n", ctx->sessionId);

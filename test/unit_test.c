@@ -3731,6 +3731,37 @@ static int requester_to_responder_iocb(WOLFSPDM_CTX* spdmCtx,
     return wolfSPDM_RespHandleMessage(rctx, txBuf, txSz, rxBuf, rxSz);
 }
 
+static int test_tcg_handshake_io_failure(WOLFSPDM_CTX* ctx,
+    const byte* txBuf, word32 txSz, byte* rxBuf, word32* rxSz, void* userCtx)
+{
+    if (txSz >= WOLFSPDM_TCG_HEADER_SIZE &&
+            SPDM_Get16BE(txBuf) == WOLFSPDM_TCG_TAG_SECURED) {
+        return -1;
+    }
+    return requester_to_responder_iocb(ctx, txBuf, txSz, rxBuf, rxSz, userCtx);
+}
+
+static int test_tcg_connect_releases_session(WOLFSPDM_CTX* ctx)
+{
+    static const byte zero[WOLFSPDM_HASH_SIZE];
+
+    printf("test_tcg_connect_releases_session (%s requester key)...\n",
+        ctx->flags.hasReqKeyPair ? "with" : "without");
+    ASSERT_EQ(wolfSPDM_ConnectTCG(ctx), WOLFSPDM_E_IO_FAIL,
+        "Secured handshake I/O failure");
+    ASSERT_EQ(ctx->state, WOLFSPDM_STATE_ERROR, "Aborted TCG session state");
+    TEST_ASSERT(test_handshake_secrets_cleared(ctx),
+        "Aborted TCG session must retire handshake material");
+    TEST_ASSERT(XMEMCMP(ctx->reqDataKey, zero, sizeof(ctx->reqDataKey)) == 0 &&
+        XMEMCMP(ctx->rspDataKey, zero, sizeof(ctx->rspDataKey)) == 0 &&
+        XMEMCMP(ctx->reqDataIv, zero, sizeof(ctx->reqDataIv)) == 0 &&
+        XMEMCMP(ctx->rspDataIv, zero, sizeof(ctx->rspDataIv)) == 0,
+        "Aborted TCG session must retire traffic material");
+    ASSERT_EQ(ctx->sessionId, 0, "Aborted TCG session ID");
+    ASSERT_EQ(ctx->flags.hasRspPubKey, 1, "Responder pin remains configured");
+    return 0;
+}
+
 /* Pinned identity handshake + tunneled TPM2_CMD + END_SESSION, end-to-end. */
 static int test_responder_identity_roundtrip(int fineGrained)
 {
@@ -3833,6 +3864,7 @@ static int test_tcg_mode_connect_roundtrip(void)
     byte idPubX[WOLFSPDM_ECC_KEY_SIZE];
     byte idPubY[WOLFSPDM_ECC_KEY_SIZE];
     byte idPub[WOLFSPDM_ECC_POINT_SIZE];
+    byte requesterTpmt[120] = { 0 };
     byte cmd[10];
     word32 idPrivSz = sizeof(idPriv);
     word32 idPubXSz = sizeof(idPubX);
@@ -3884,6 +3916,19 @@ static int test_tcg_mode_connect_roundtrip(void)
     ASSERT_EQ(req.rspSeqNum, 0, "New session must use a new response sequence");
 
     ASSERT_SUCCESS(wolfSPDM_Disconnect(&req));
+
+    ASSERT_SUCCESS(wolfSPDM_SetIO(&req, test_tcg_handshake_io_failure, rctx));
+    ASSERT_SUCCESS(test_tcg_connect_releases_session(&req));
+
+    SPDM_Set16BE(requesterTpmt + 20, WOLFSPDM_ECC_KEY_SIZE);
+    XMEMCPY(requesterTpmt + 22, idPubX, sizeof(idPubX));
+    SPDM_Set16BE(requesterTpmt + 70, WOLFSPDM_ECC_KEY_SIZE);
+    XMEMCPY(requesterTpmt + 72, idPubY, sizeof(idPubY));
+    ASSERT_SUCCESS(wolfSPDM_SetRequesterKeyPair(&req, idPriv, sizeof(idPriv),
+        idPub, sizeof(idPub)));
+    ASSERT_SUCCESS(wolfSPDM_SetRequesterKeyTPMT(&req, requesterTpmt,
+        sizeof(requesterTpmt)));
+    ASSERT_SUCCESS(test_tcg_connect_releases_session(&req));
 
     wc_ForceZero(idPriv, sizeof(idPriv));
     wolfSPDM_RespFree(rctx);
