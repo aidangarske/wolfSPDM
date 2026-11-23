@@ -4335,6 +4335,107 @@ static int test_responder_identity_roundtrip(int fineGrained)
     TEST_PASS();
 }
 
+typedef struct {
+    WOLFSPDM_RESP_CTX* rctx;
+    int resize;
+    byte rspCode;
+} TEST_KEX_ENVELOPE;
+
+/* Resizes the clear KEY_EXCHANGE: 1 ends it at ExchangeData, 2 appends a
+ * byte, 3 drops its last OpaqueData byte. */
+static int test_kex_envelope_io(WOLFSPDM_CTX* ctx, const byte* txBuf,
+    word32 txSz, byte* rxBuf, word32* rxSz, void* userCtx)
+{
+    TEST_KEX_ENVELOPE* t = (TEST_KEX_ENVELOPE*)userCtx;
+    byte frame[WOLFSPDM_TCG_HEADER_SIZE + WOLFSPDM_KEY_EX_TX_SZ + 1];
+    word32 frameSz = txSz;
+    int rc;
+
+    if (t->resize == 0 || txSz <= WOLFSPDM_TCG_HEADER_SIZE + 138 ||
+            txSz >= sizeof(frame) ||
+            SPDM_Get16BE(txBuf) != WOLFSPDM_TCG_TAG_CLEAR ||
+            txBuf[WOLFSPDM_TCG_HEADER_SIZE + 1] != SPDM_KEY_EXCHANGE) {
+        return requester_to_responder_iocb(ctx, txBuf, txSz, rxBuf, rxSz,
+            t->rctx);
+    }
+
+    XMEMCPY(frame, txBuf, txSz);
+    if (t->resize == 1) {
+        frameSz = WOLFSPDM_TCG_HEADER_SIZE + 136;
+    }
+    else if (t->resize == 2) {
+        frame[txSz] = 0;
+        frameSz = txSz + 1;
+    }
+    else {
+        frameSz = txSz - 1;
+    }
+    wolfSPDM_WriteTcgHeader(frame, WOLFSPDM_TCG_TAG_CLEAR, frameSz,
+        ctx->connectionHandle, ctx->fipsIndicator);
+    rc = wolfSPDM_RespHandleMessage(t->rctx, frame, frameSz, rxBuf, rxSz);
+    if (rc == WOLFSPDM_SUCCESS && *rxSz > WOLFSPDM_TCG_HEADER_SIZE + 1) {
+        t->rspCode = rxBuf[WOLFSPDM_TCG_HEADER_SIZE + 1];
+    }
+    return rc;
+}
+
+/* KEY_EXCHANGE must end with OpaqueDataLength and exactly that much data */
+static int test_responder_key_exchange_envelope(void)
+{
+    WOLFSPDM_CTX req;
+    byte rctxBuf[WOLFSPDM_RESP_CTX_STATIC_SIZE];
+    WOLFSPDM_RESP_CTX* rctx = (WOLFSPDM_RESP_CTX*)rctxBuf;
+    TEST_KEX_ENVELOPE t;
+    ecc_key idKey;
+    byte idPriv[WOLFSPDM_ECC_KEY_SIZE];
+    byte idPub[WOLFSPDM_ECC_POINT_SIZE];
+    word32 idPrivSz = sizeof(idPriv);
+    word32 idPubXSz = WOLFSPDM_ECC_KEY_SIZE;
+    word32 idPubYSz = WOLFSPDM_ECC_KEY_SIZE;
+
+    printf("test_responder_key_exchange_envelope...\n");
+    ASSERT_SUCCESS(wolfSPDM_Init(&req));
+    ASSERT_SUCCESS(wolfSPDM_RespInit(rctx));
+    ASSERT_SUCCESS(wc_ecc_init(&idKey));
+    ASSERT_SUCCESS(wc_ecc_make_key(&req.rng, WOLFSPDM_ECC_KEY_SIZE,
+        &idKey));
+    ASSERT_SUCCESS(wc_ecc_export_private_only(&idKey, idPriv, &idPrivSz));
+    ASSERT_SUCCESS(wc_ecc_export_public_raw(&idKey, idPub, &idPubXSz,
+        idPub + WOLFSPDM_ECC_KEY_SIZE, &idPubYSz));
+    wc_ecc_free(&idKey);
+    ASSERT_EQ(idPrivSz + idPubXSz + idPubYSz, 3 * WOLFSPDM_ECC_KEY_SIZE,
+        "identity key size mismatch");
+
+    req.mode = WOLFSPDM_MODE_NUVOTON;
+    ASSERT_SUCCESS(wolfSPDM_SetResponderPubKey(&req, idPub, sizeof(idPub)));
+    ASSERT_SUCCESS(wolfSPDM_RespSetMode(rctx, 1, 0));
+    ASSERT_SUCCESS(wolfSPDM_RespSetIdentityKey(rctx, idPriv, sizeof(idPriv),
+        idPub, sizeof(idPub)));
+    XMEMSET(&t, 0, sizeof(t));
+    t.rctx = rctx;
+    ASSERT_SUCCESS(wolfSPDM_SetIO(&req, test_kex_envelope_io, &t));
+
+    for (t.resize = 1; t.resize <= 3; t.resize++) {
+        t.rspCode = 0;
+        TEST_ASSERT(wolfSPDM_ConnectTCG(&req) != WOLFSPDM_SUCCESS,
+            "Resized KEY_EXCHANGE must not connect");
+        TEST_ASSERT(t.rspCode != SPDM_KEY_EXCHANGE_RSP,
+            "Responder rejects a resized KEY_EXCHANGE");
+        ASSERT_EQ(wolfSPDM_RespIsSessionActive(rctx), 0,
+            "Resized KEY_EXCHANGE leaves no session");
+    }
+
+    t.resize = 0;
+    ASSERT_SUCCESS(wolfSPDM_ConnectTCG(&req));
+    ASSERT_EQ(wolfSPDM_IsConnected(&req), 1, "Well-formed KEY_EXCHANGE");
+    ASSERT_SUCCESS(wolfSPDM_Disconnect(&req));
+
+    wc_ForceZero(idPriv, sizeof(idPriv));
+    wolfSPDM_RespFree(rctx);
+    wolfSPDM_Free(&req);
+    TEST_PASS();
+}
+
 /* The same handshake reached through wolfSPDM_Connect in WOLFSPDM_MODE_TCG,
  * which is the mode a part with no vendor adapter uses. The roundtrip above
  * names the Nuvoton mode and calls wolfSPDM_ConnectTCG directly, so neither
@@ -7470,6 +7571,7 @@ int main(void)
 #endif
     test_responder_identity_roundtrip(0);
     test_responder_identity_roundtrip(1);
+    test_responder_key_exchange_envelope();
     test_tcg_mode_connect_roundtrip();
 #endif
 #if defined(WOLFSPDM_PSK) && defined(WOLFSPDM_TCG)

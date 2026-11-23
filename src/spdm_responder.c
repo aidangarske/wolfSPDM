@@ -732,8 +732,12 @@ static int RespBuildKeyExchangeRsp(WOLFSPDM_RESP_CTX* rctx,
     word32 partialLen;
     int rc;
 
-    if (inSz < 136 || !rctx->flags.hasIdKey) {
+    if (inSz < 138 || !rctx->flags.hasIdKey) {
         return WOLFSPDM_E_BAD_STATE;
+    }
+    /* OpaqueDataLength follows the P-384 ExchangeData and ends the request */
+    if (SPDM_Get16LE(&in[136]) != inSz - 138) {
+        return WOLFSPDM_E_FRAMING;
     }
     if (*outSz < 138u + WOLFSPDM_ECC_SIG_SIZE + WOLFSPDM_HASH_SIZE) {
         return WOLFSPDM_E_BUFFER_SMALL;
