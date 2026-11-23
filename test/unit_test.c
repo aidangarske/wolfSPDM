@@ -3165,6 +3165,10 @@ static int test_encrypt_decrypt_roundtrip_tcg(void)
     TEST_ASSERT(encSz > 16, "encrypted should be larger");
 
     ctx->rspSeqNum = 0;
+    enc[encSz] = 0;
+    ASSERT_EQ(wolfSPDM_DecryptInternal(ctx, enc, encSz + 1, dec, &decSz),
+        WOLFSPDM_E_BUFFER_SMALL, "TCG record size must match its header");
+    ASSERT_EQ(ctx->rspSeqNum, 0, "Framing rejection keeps the sequence");
     ASSERT_SUCCESS(wolfSPDM_DecryptInternal(ctx, enc, encSz, dec, &decSz));
     ASSERT_EQ(decSz, 16, "decrypted size mismatch");
     TEST_ASSERT(memcmp(dec, plain, 16) == 0, "plaintext mismatch");

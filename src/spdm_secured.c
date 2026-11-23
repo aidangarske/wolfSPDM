@@ -243,7 +243,7 @@ static int wolfSPDM_DecryptRecord(WOLFSPDM_CTX* ctx, int appMsg,
                 (unsigned long long)ctx->rspSeqNum);
             return WOLFSPDM_E_SEQUENCE;
         }
-        if (rspLen < WOLFSPDM_AEAD_TAG_SIZE || encSz < hdrSz + rspLen)
+        if (rspLen < WOLFSPDM_AEAD_TAG_SIZE || encSz != hdrSz + rspLen)
             return WOLFSPDM_E_BUFFER_SMALL;
 
         cipherLen = (word32)(rspLen - WOLFSPDM_AEAD_TAG_SIZE);
