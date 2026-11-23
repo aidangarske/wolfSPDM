@@ -271,6 +271,7 @@ int wolfSPDM_GetMeasurements(WOLFSPDM_CTX* ctx, byte measOperation,
         ctx->measRecordLen = recLen;
         ctx->measBlockCount = rsp[4];
     }
+    wc_ForceZero(rsp, sizeof(rsp));
     return rc;
 }
 
