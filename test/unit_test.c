@@ -3628,6 +3628,50 @@ static int test_encrypt_decrypt_roundtrip_tcg(void)
 }
 #endif /* WOLFSPDM_TCG */
 
+#if WOLFSPDM_XFER_MSG_SIZE + 3 + WOLFSPDM_AEAD_TAG_SIZE > 0xFFFF
+/* A record too long for the 16-bit Length field is refused, not truncated */
+static int test_secured_record_length_limit(void)
+{
+    static byte plain[WOLFSPDM_XFER_MSG_SIZE];
+    static byte enc[WOLFSPDM_XFER_MSG_SIZE + WOLFSPDM_AEAD_OVERHEAD];
+    word32 encSz;
+    word32 maxSz;
+    TEST_CTX_SETUP_V12();
+
+    printf("test_secured_record_length_limit...\n");
+    ctx->sessionId = 0x00020001;
+    XMEMSET(ctx->reqDataKey, 0x33, WOLFSPDM_AEAD_KEY_SIZE);
+    XMEMSET(ctx->reqDataIv, 0x44, WOLFSPDM_AEAD_IV_SIZE);
+    XMEMSET(plain, 0x5A, sizeof(plain));
+#ifndef WOLFSPDM_NO_MCTP
+    /* AppDataLen(2) + MCTP type(1) + message + tag */
+    maxSz = 0xFFFFU - 3U - WOLFSPDM_AEAD_TAG_SIZE;
+    encSz = sizeof(enc);
+    ASSERT_EQ(wolfSPDM_EncryptInternal(ctx, plain, maxSz + 1, enc, &encSz),
+        WOLFSPDM_E_BUFFER_SMALL, "MCTP record one byte too long");
+    encSz = sizeof(enc);
+    ASSERT_SUCCESS(wolfSPDM_EncryptInternal(ctx, plain, maxSz, enc, &encSz));
+    ASSERT_EQ(SPDM_Get16LE(&enc[6]), 0xFFFF, "Longest MCTP record");
+    ASSERT_EQ(encSz, 8 + 0xFFFF, "MCTP record size");
+#endif
+#ifdef WOLFSPDM_TCG
+    /* AppDataLen(2) + message, padded to 16 bytes, + tag */
+    ctx->mode = WOLFSPDM_MODE_TCG;
+    maxSz = 0xFFF0U - WOLFSPDM_AEAD_TAG_SIZE - 2U;
+    encSz = sizeof(enc);
+    ASSERT_EQ(wolfSPDM_EncryptInternal(ctx, plain, maxSz + 1, enc, &encSz),
+        WOLFSPDM_E_BUFFER_SMALL, "TCG record one byte too long");
+    encSz = sizeof(enc);
+    ASSERT_SUCCESS(wolfSPDM_EncryptInternal(ctx, plain, maxSz, enc, &encSz));
+    ASSERT_EQ(SPDM_Get16LE(&enc[12]), 0xFFF0, "Longest TCG record");
+    ASSERT_EQ(encSz, 14 + 0xFFF0, "TCG record size");
+#endif
+
+    TEST_CTX_FREE();
+    TEST_PASS();
+}
+#endif
+
 #ifndef WOLFSPDM_NO_APP_DATA
 /* One-slot mailbox standing in for a message-oriented MCTP link */
 static byte g_mbox[WOLFSPDM_XFER_MSG_SIZE + WOLFSPDM_AEAD_OVERHEAD];
@@ -7944,6 +7988,9 @@ int main(void)
     test_version_and_finish_14();
 #ifdef WOLFSPDM_TCG
     test_encrypt_decrypt_roundtrip_tcg();
+#endif
+#if WOLFSPDM_XFER_MSG_SIZE + 3 + WOLFSPDM_AEAD_TAG_SIZE > 0xFFFF
+    test_secured_record_length_limit();
 #endif
 #ifndef WOLFSPDM_NO_APP_DATA
     test_app_data();

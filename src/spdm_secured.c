@@ -54,7 +54,7 @@ static int wolfSPDM_EncryptRecord(WOLFSPDM_CTX* ctx, int appMsg,
     byte plainBuf[WOLFSPDM_XFER_MSG_SIZE + 2 + 16]; /* AppDataLength, pad */
     byte tag[WOLFSPDM_AEAD_TAG_SIZE];
     word32 plainBufSz;
-    word16 recordLen;
+    word32 recordLen;
     word32 hdrSz;
     word32 aadSz;
     int aesInit = 0;
@@ -73,24 +73,23 @@ static int wolfSPDM_EncryptRecord(WOLFSPDM_CTX* ctx, int appMsg,
          * Header/AAD: SessionID(4 LE) + SeqNum(8 LE) + Length(2 LE) = 14 bytes
          * IV XOR: Leftmost 8 bytes (bytes 0-7) with 8-byte LE sequence number
          */
-        word16 appDataLen = (word16)plainSz;
-
-        word16 unpadded = (word16)(2 + appDataLen);
-        word16 padLen = (word16)((16 - (unpadded % 16)) % 16);
-        word16 encPayloadSz = (word16)(unpadded + padLen);
+        word32 unpadded = 2 + plainSz;
+        word32 padLen = (16 - (unpadded % 16)) % 16;
+        word32 encPayloadSz = unpadded + padLen;
 
         plainBufSz = encPayloadSz;
         /* Length field = ciphertext + MAC
          * (per Nuvoton spec page 25: Length=160=144+16) */
-        recordLen = (word16)(encPayloadSz + WOLFSPDM_AEAD_TAG_SIZE);
+        recordLen = encPayloadSz + WOLFSPDM_AEAD_TAG_SIZE;
         hdrSz = 14;  /* 4 + 8 + 2 (TCG binding format) */
 
-        if (*encSz < hdrSz + plainBufSz + WOLFSPDM_AEAD_TAG_SIZE) {
+        if (recordLen > 0xFFFF ||
+                *encSz < hdrSz + plainBufSz + WOLFSPDM_AEAD_TAG_SIZE) {
             return WOLFSPDM_E_BUFFER_SMALL;
         }
 
         /* Build plaintext: AppDataLength(2 LE) || SPDM message || RandomData */
-        SPDM_Set16LE(plainBuf, appDataLen);
+        SPDM_Set16LE(plainBuf, (word16)plainSz);
         XMEMCPY(&plainBuf[2], plain, plainSz);
         /* Fill RandomData with actual random bytes per Nuvoton spec */
         if (padLen > 0) {
@@ -105,7 +104,7 @@ static int wolfSPDM_EncryptRecord(WOLFSPDM_CTX* ctx, int appMsg,
          * Length(2 LE) = 14 bytes */
         SPDM_Set32LE(&enc[0], ctx->sessionId);
         SPDM_Set64LE(&enc[4], ctx->reqSeqNum);
-        SPDM_Set16LE(&enc[12], recordLen);
+        SPDM_Set16LE(&enc[12], (word16)recordLen);
 
         aadSz = 14;
         XMEMCPY(aad, enc, aadSz);
@@ -121,8 +120,8 @@ static int wolfSPDM_EncryptRecord(WOLFSPDM_CTX* ctx, int appMsg,
          * Header: SessionID(4 LE) + SeqNum(2 LE) + Length(2 LE) = 8 bytes
          * AAD = Header
          */
-        word16 appDataLen = (word16)(appMsg ? plainSz : 1 + plainSz);
-        word16 encDataLen = (word16)(2 + appDataLen);
+        word32 appDataLen = appMsg ? plainSz : 1 + plainSz;
+        word32 encDataLen = 2 + appDataLen;
 
         /* MCTP carries a 16-bit sequence number; fail rather than let the wire
          * value and the 64-bit IV counter diverge past 0xFFFF */
@@ -131,15 +130,16 @@ static int wolfSPDM_EncryptRecord(WOLFSPDM_CTX* ctx, int appMsg,
         }
 
         plainBufSz = encDataLen;
-        recordLen = (word16)(encDataLen + WOLFSPDM_AEAD_TAG_SIZE);
+        recordLen = encDataLen + WOLFSPDM_AEAD_TAG_SIZE;
         hdrSz = 8;  /* 4 + 2 + 2 */
 
-        if (*encSz < hdrSz + recordLen) {
+        /* The record Length is a 16-bit field */
+        if (recordLen > 0xFFFF || *encSz < hdrSz + recordLen) {
             return WOLFSPDM_E_BUFFER_SMALL;
         }
 
         /* Build plaintext: AppDataLen(2 LE) || MCTP header(0x05) || SPDM msg */
-        SPDM_Set16LE(plainBuf, appDataLen);
+        SPDM_Set16LE(plainBuf, (word16)appDataLen);
         if (appMsg) {
             XMEMCPY(&plainBuf[2], plain, plainSz);
         } else {
@@ -150,7 +150,7 @@ static int wolfSPDM_EncryptRecord(WOLFSPDM_CTX* ctx, int appMsg,
         /* Build header/AAD: SessionID(4 LE) + SeqNum(2 LE) + Length(2 LE) */
         SPDM_Set32LE(&enc[0], ctx->sessionId);
         SPDM_Set16LE(&enc[4], (word16)ctx->reqSeqNum);
-        SPDM_Set16LE(&enc[6], recordLen);
+        SPDM_Set16LE(&enc[6], (word16)recordLen);
 
         aadSz = 8;
         XMEMCPY(aad, enc, aadSz);
