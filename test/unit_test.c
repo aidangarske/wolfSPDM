@@ -2988,14 +2988,39 @@ static int test_decrypt_mctp_random_padding(void)
 #endif
 
 #ifndef WOLFSPDM_NO_MCTP
+static int test_build_mctp_record(const WOLFSPDM_CTX* ctx, const byte* inner,
+    word32 innerSz, byte* rec, word32 recSz)
+{
+    Aes aes;
+    byte iv[WOLFSPDM_AEAD_IV_SIZE];
+    int rc;
+
+    TEST_ASSERT(recSz >= 8 + WOLFSPDM_AEAD_TAG_SIZE &&
+        innerSz <= recSz - 8 - WOLFSPDM_AEAD_TAG_SIZE,
+        "Record fixture fits the output buffer");
+    SPDM_Set32LE(&rec[0], ctx->sessionId);
+    SPDM_Set16LE(&rec[4], (word16)ctx->rspSeqNum);
+    SPDM_Set16LE(&rec[6], (word16)(innerSz + WOLFSPDM_AEAD_TAG_SIZE));
+    wolfSPDM_BuildIV(iv, ctx->rspDataIv, ctx->rspSeqNum);
+
+    ASSERT_SUCCESS(wc_AesInit(&aes, NULL, INVALID_DEVID));
+    rc = wc_AesGcmSetKey(&aes, ctx->rspDataKey, WOLFSPDM_AEAD_KEY_SIZE);
+    if (rc == 0) {
+        rc = wc_AesGcmEncrypt(&aes, &rec[8], inner, innerSz, iv, sizeof(iv),
+            &rec[8 + innerSz], WOLFSPDM_AEAD_TAG_SIZE, rec, 8);
+    }
+    wc_AesFree(&aes);
+    wc_ForceZero(&aes, sizeof(aes));
+    wc_ForceZero(iv, sizeof(iv));
+    return rc;
+}
+
 static int test_decrypt_rejects_wrong_mctp_type(void)
 {
     /* An authenticated record whose inner MCTP type is not SPDM must be
      * rejected, and the sequence still advances past the verified tag */
-    Aes aes;
     byte inner[4];
     byte rec[8 + sizeof(inner) + WOLFSPDM_AEAD_TAG_SIZE];
-    byte iv[WOLFSPDM_AEAD_IV_SIZE];
     byte dec[64];
     word32 decSz = sizeof(dec);
     TEST_CTX_SETUP_V12();
@@ -3008,18 +3033,8 @@ static int test_decrypt_rejects_wrong_mctp_type(void)
     SPDM_Set16LE(inner, 2);
     inner[2] = 0x06;
     inner[3] = SPDM_VERSION_12;
-    SPDM_Set32LE(&rec[0], ctx->sessionId);
-    SPDM_Set16LE(&rec[4], 0);
-    SPDM_Set16LE(&rec[6], (word16)(sizeof(inner) + WOLFSPDM_AEAD_TAG_SIZE));
-    wolfSPDM_BuildIV(iv, ctx->rspDataIv, 0);
-
-    ASSERT_SUCCESS(wc_AesInit(&aes, NULL, INVALID_DEVID));
-    ASSERT_SUCCESS(wc_AesGcmSetKey(&aes, ctx->rspDataKey,
-        WOLFSPDM_AEAD_KEY_SIZE));
-    ASSERT_SUCCESS(wc_AesGcmEncrypt(&aes, &rec[8], inner, sizeof(inner),
-        iv, sizeof(iv), &rec[8 + sizeof(inner)], WOLFSPDM_AEAD_TAG_SIZE,
-        rec, 8));
-    wc_AesFree(&aes);
+    ASSERT_SUCCESS(test_build_mctp_record(ctx, inner, sizeof(inner), rec,
+        sizeof(rec)));
 
     ASSERT_EQ(wolfSPDM_DecryptInternal(ctx, rec, sizeof(rec), dec, &decSz),
         WOLFSPDM_E_DECRYPT_FAIL, "wrong inner MCTP type must fail");
@@ -3359,6 +3374,42 @@ static int test_app_data(void)
     ASSERT_EQ(wolfSPDM_SendData(ctx, getTid, sizeof(getTid)),
         WOLFSPDM_E_IO_FAIL, "No transport");
 
+    wolfSPDM_Free(&peer);
+    TEST_CTX_FREE();
+    TEST_PASS();
+}
+
+static int test_app_data_secured_type(void)
+{
+    static const byte types[] = { 0x06, 0x86 };
+    static WOLFSPDM_CTX peer;
+    byte inner[3] = { 1, 0, 0 };
+    byte buf[8];
+    word32 bufSz;
+    word32 i;
+    TEST_CTX_SETUP();
+
+    printf("test_app_data_secured_type...\n");
+    test_app_data_pair(ctx, &peer);
+    for (i = 0; i < sizeof(types); i++) {
+        int sent;
+        int received;
+
+        sent = wolfSPDM_SendData(ctx, &types[i], 1);
+        inner[2] = types[i];
+        ASSERT_SUCCESS(test_build_mctp_record(ctx, inner, sizeof(inner),
+            g_mbox, sizeof(g_mbox)));
+        g_mboxSz = 8 + sizeof(inner) + WOLFSPDM_AEAD_TAG_SIZE;
+        bufSz = sizeof(buf);
+        received = wolfSPDM_ReceiveData(ctx, buf, &bufSz);
+        ASSERT_EQ(sent, WOLFSPDM_E_INVALID_ARG,
+            "SendData rejects the secured MCTP type");
+        ASSERT_EQ(received, WOLFSPDM_E_DECRYPT_FAIL,
+            "ReceiveData rejects the secured MCTP type");
+        ASSERT_EQ(bufSz, sizeof(buf), "Rejected record delivers no payload");
+        ASSERT_EQ(ctx->reqSeqNum, 0, "Invalid send uses no sequence");
+        ASSERT_EQ(ctx->rspSeqNum, i + 1, "Authenticated record uses sequence");
+    }
     wolfSPDM_Free(&peer);
     TEST_CTX_FREE();
     TEST_PASS();
@@ -6730,6 +6781,7 @@ int main(void)
 #endif
 #ifndef WOLFSPDM_NO_APP_DATA
     test_app_data();
+    test_app_data_secured_type();
 #endif
 #ifndef WOLFSPDM_NO_HEARTBEAT
     test_heartbeat_msgs();

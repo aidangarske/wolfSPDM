@@ -25,6 +25,9 @@
 
 #include "spdm_internal.h"
 
+#define MCTP_MESSAGE_TYPE_SECURED_SPDM  0x06
+#define MCTP_MESSAGE_TYPE_MASK          0x7F
+
 /*
  * SPDM Secured Message Format (DSP0277):
  *
@@ -360,6 +363,9 @@ static int wolfSPDM_DecryptRecord(WOLFSPDM_CTX* ctx, int appMsg,
                 ret = WOLFSPDM_E_BUFFER_SMALL;
             } else if (!appMsg && decrypted[2] != MCTP_MESSAGE_TYPE_SPDM) {
                 ret = WOLFSPDM_E_DECRYPT_FAIL;
+            } else if (appMsg && (decrypted[2] & MCTP_MESSAGE_TYPE_MASK) ==
+                    MCTP_MESSAGE_TYPE_SECURED_SPDM) {
+                ret = WOLFSPDM_E_DECRYPT_FAIL;
             } else {
                 XMEMCPY(plain, &decrypted[2 + typeSz], appDataLen - typeSz);
                 *plainSz = appDataLen - typeSz;
@@ -488,8 +494,10 @@ int wolfSPDM_SendData(WOLFSPDM_CTX* ctx, const byte* data, word32 dataSz)
     if (ctx == NULL || data == NULL || dataSz == 0) {
         return WOLFSPDM_E_INVALID_ARG;
     }
-    /* Type 0x05 would reach the peer as an SPDM request */
-    if (data[0] == MCTP_MESSAGE_TYPE_SPDM) {
+    /* SPDM requests have a separate API. DSP0276 forbids nesting records. */
+    if (data[0] == MCTP_MESSAGE_TYPE_SPDM ||
+            (data[0] & MCTP_MESSAGE_TYPE_MASK) ==
+                MCTP_MESSAGE_TYPE_SECURED_SPDM) {
         return WOLFSPDM_E_INVALID_ARG;
     }
 
