@@ -420,8 +420,9 @@ int wolfSPDM_Connect(WOLFSPDM_CTX* ctx)
     return WOLFSPDM_E_INVALID_ARG;
 }
 
-/* Drop session state and wipe session-scoped secrets; configured identity
- * keys, PSK and trust anchors stay for a later connection */
+/* Drop session state and wipe session-scoped secrets. Configured identity
+ * keys, trust anchors and an unused PSK stay in the context. Set the PSK again
+ * with wolfSPDM_SetPSK when key derivation has consumed it. */
 void wolfSPDM_ResetSession(WOLFSPDM_CTX* ctx)
 {
     ctx->state = WOLFSPDM_STATE_INIT;
