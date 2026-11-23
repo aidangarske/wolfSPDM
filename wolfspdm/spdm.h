@@ -29,8 +29,10 @@
 extern "C" {
 #endif
 
-/* Protocol mode: TCG binding + vendor commands.
- * For standard SPDM (emulator, measurements, challenge), see wolfSPDM standalone. */
+/* Protocol modes depend on the enabled build features.
+ * AUTO selects the standard DMTF certificate requester over MCTP.
+ * TCG selects the TPM binding. NUVOTON and NATIONS select vendor profiles.
+ * PSK selects the pre-shared key handshake when PSK support is enabled. */
 typedef enum {
     WOLFSPDM_MODE_AUTO        = 0,
     WOLFSPDM_MODE_NUVOTON     = 1,
