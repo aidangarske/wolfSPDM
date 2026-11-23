@@ -470,16 +470,20 @@ int wolfSPDM_ParseVersion(WOLFSPDM_CTX* ctx, const byte* buf, word32 bufSz)
     word32 i;
     byte highestVersion = 0;  /* No version found yet */
     byte maxVer;
+    int legacyCount;
 
     SPDM_CHECK_PARSE_OR_ERROR_ARGS(ctx, buf, bufSz, 6);
     SPDM_CHECK_RESPONSE(ctx, buf, bufSz, SPDM_VERSION, WOLFSPDM_E_VERSION_MISMATCH);
 
-    /* VersionNumberEntryCount is the one-byte field at offset 5 (byte 4
-     * reserved) per DSP0274; older wolfTPM responders placed it at
-     * offset 4, so fall back to that when offset 5 is zero.
-     * Offset 6+: VersionNumberEntry array (2 bytes each, LE) */
+    /* DSP0274 puts the count at offset 5; older wolfTPM responders used 4.
+     * Allow that only for TCG, which is all the TPM profile speaks. */
+#ifdef WOLFSPDM_PROFILE_TPM
+    legacyCount = 1;
+#else
+    legacyCount = wolfSPDM_IsTcgMode(ctx);
+#endif
     entryCount = buf[5];
-    if (entryCount == 0) {
+    if (entryCount == 0 && legacyCount) {
         entryCount = buf[4];
     }
 

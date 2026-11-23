@@ -501,6 +501,24 @@ static int test_version_fallback(void)
 
     printf("test_version_fallback...\n");
 
+#ifdef WOLFSPDM_PROFILE_TPM
+    /* The TPM profile speaks only TCG, even before a mode is set */
+    ASSERT_SUCCESS(wolfSPDM_ParseVersion(ctx, rsp, sizeof(rsp)));
+    ASSERT_EQ(ctx->spdmVersion, SPDM_VERSION_13, "TPM profile legacy count");
+    ctx->state = WOLFSPDM_STATE_INIT;
+    ctx->spdmVersion = 0;
+#elif !defined(WOLFSPDM_NO_MCTP)
+    ASSERT_EQ(wolfSPDM_ParseVersion(ctx, rsp, sizeof(rsp)),
+        WOLFSPDM_E_VERSION_MISMATCH, "Standard VERSION needs its entry count");
+    ASSERT_EQ(ctx->state, WOLFSPDM_STATE_INIT, "No version was negotiated");
+#endif
+
+#ifdef WOLFSPDM_TCG
+    ASSERT_SUCCESS(wolfSPDM_SetMode(ctx, WOLFSPDM_MODE_TCG));
+#else
+    rsp[5] = 4;
+#endif
+
     /* With no maxVersion set, should select 1.3 (highest mutual) */
     ASSERT_SUCCESS(wolfSPDM_ParseVersion(ctx, rsp, sizeof(rsp)));
     ASSERT_EQ(ctx->spdmVersion, SPDM_VERSION_13,
